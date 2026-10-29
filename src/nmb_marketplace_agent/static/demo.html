@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>NMB Agent SDK — Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font: 14px/1.5 -apple-system, system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    header { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+    input, button, select { font: inherit; padding: 6px 10px; }
+    #log { border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px; height: 460px; overflow: auto; background: #fafafa; }
+    .ev  { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 2px 0; border-bottom: 1px dashed #eee; }
+    .tok { color: #2c7; font-weight: 600; }
+    .err { color: #c00; }
+    .meta { color: #888; }
+  </style>
+</head>
+<body>
+  <header>
+    <input id="agent" placeholder="agent id" size="36" />
+    <input id="key"   placeholder="pk_…" size="22" />
+    <select id="mode">
+      <option value="gateway">gateway (FastAPI)</option>
+      <option value="replay">replay (offline)</option>
+    </select>
+    <button id="manifest">manifest</button>
+    <button id="send">send</button>
+    <button id="stop" disabled>stop</button>
+  </header>
+
+  <div id="log"></div>
+
+  <script src="/static/nmb-sdk.js"></script>
+  <script>
+    const log = document.getElementById("log");
+    let agent = null;
+    let abort = null;
+
+    function print(cls, text) {
+      const el = document.createElement("div");
+      el.className = "ev " + cls;
+      el.textContent = text;
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function buildAgent() {
+      const agentId = document.getElementById("agent").value.trim();
+      const apiKey  = document.getElementById("key").value.trim();
+      const mode    = document.getElementById("mode").value;
+
+      if (mode === "replay") {
+        return new NmbSDK.NmbAgent({
+          agentId: "replay",
+          session: "memory",
+          transport: new NmbSDK.ReplayTransport([
+            { type: "thread", threadId: "t-demo" },
+            { type: "token", messageId: "m1", text: "Hello " },
+            { type: "token", messageId: "m1", text: "from " },
+            { type: "token", messageId: "m1", text: "ReplayTransport." },
+            { type: "done", output: "ok" },
+          ]),
+        });
+      }
+      return new NmbSDK.NmbAgent({
+        agentId,
+        tenantId: "default",
+        session: "memory",
+        transport: { mode: "gateway", baseUrl: location.origin, apiKey },
+      });
+    }
+
+    document.getElementById("manifest").onclick = async () => {
+      try {
+        agent = buildAgent();
+        const m = await agent.manifest();
+        print("meta", "manifest: " + JSON.stringify(m).slice(0, 240));
+      } catch (e) { print("err", "manifest error: " + e.message); }
+    };
+
+    document.getElementById("send").onclick = async () => {
+      if (!agent) agent = buildAgent();
+      const sendBtn = document.getElementById("send");
+      const stopBtn = document.getElementById("stop");
+      sendBtn.disabled = true; stopBtn.disabled = false;
+      abort = new AbortController();
+      let tokens = "";
+      try {
+        const th = await agent.thread();
+        print("meta", `thread: ${th.id}`);
+        for await (const ev of th.send("Say hi in three words.", { signal: abort.signal })) {
+          if (ev.type === "token") { tokens += ev.text; print("tok", "token: " + JSON.stringify(ev.text)); }
+          else print("meta", `${ev.type}: ${JSON.stringify(ev).slice(0, 200)}`);
+        }
+        print("meta", `done. full reply: ${JSON.stringify(tokens)}`);
+      } catch (e) {
+        print("err", "stream error: " + e.message);
+      } finally {
+        sendBtn.disabled = false; stopBtn.disabled = true;
+      }
+    };
+
+    document.getElementById("stop").onclick = () => abort?.abort();
+
+    // Prefill from URL: /demo?agent=<id>&key=<pk_…>
+    const qs = new URLSearchParams(location.search);
+    if (qs.get("agent")) document.getElementById("agent").value = qs.get("agent");
+    if (qs.get("key"))   document.getElementById("key").value   = qs.get("key");
+
+    print("meta", "ready — fill agent id + key, then click manifest → send.");
+  </script>
+</body>
+</html>

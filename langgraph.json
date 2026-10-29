@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "supervisor": "./src/nmb_marketplace_agent/graph_factory.py:make_graph",
+    "researcher": "./src/nmb_marketplace_agent/subagents/async_target.py:make_researcher_graph"
+  },
+  "env": ".env"
+}

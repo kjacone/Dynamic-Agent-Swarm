@@ -1,0 +1,94 @@
+# Default stack is Ollama only. Opt in to extras with --profile.
+#
+#   docker compose up -d                          # ollama only
+#   docker compose --profile litellm up -d        # + LiteLLM proxy
+#   docker compose --profile vllm up -d           # + vLLM OpenAI server (GPU)
+#   docker compose --profile training up -d       # + LLaMA-Factory trainer (GPU)
+#
+# The FastAPI app and the LangGraph server run on the host (see root README).
+# Containers expose their ports on localhost so the app can reach them via
+# the default URLs from integrations/connections.py.
+#
+# Shared data lives under ./data — the trainer's /data mount is what makes
+# settings.training_container_root = "/data/training" work.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nmb-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: nmb-litellm
+    profiles: ["litellm"]
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: nmb-vllm
+    profiles: ["vllm"]
+    ports:
+      - "8001:8000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    command: ["--model", "${VLLM_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  trainer:
+    image: hiyouga/llamafactory:latest
+    container_name: nmb-trainer
+    profiles: ["training"]
+    volumes:
+      # Same files the FastAPI app writes on the host.
+      - ./data:/data
+      # The runner is our code, not the image's.
+      - ./docker/trainer:/runner:ro
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      TRAINING_ROOT: /data/training
+      PYTHONUNBUFFERED: "1"
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    command: ["python", "/runner/runner.py"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
+  hf-cache:

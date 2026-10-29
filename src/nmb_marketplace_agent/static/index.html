@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NMB Marketplace Agent</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14171c;--mut:#667085;--line:#e3e6eb;--acc:#2f5cff;--acc-ink:#fff;--ok:#12805c;--err:#c0352b;--r:10px}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1116;--card:#171b22;--ink:#e8ebf0;--mut:#8b94a3;--line:#262c36;--acc:#6b8cff;--acc-ink:#0e1116;--ok:#4cc79b;--err:#ff7b72}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line)}
+h1{font-size:16px;margin:0}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:0;padding:7px 12px;border-radius:8px;color:var(--mut);cursor:pointer;font:inherit}
+nav button.on{background:var(--acc);color:var(--acc-ink)}
+main{max-width:1080px;margin:0 auto;padding:20px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:16px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px}
+.card h2{font-size:14px;margin:0 0 10px}
+.item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)}
+.item:last-child{border:0}
+.item small,.mut{color:var(--mut)}
+label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
+input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:90px;resize:vertical}
+.btn{background:var(--acc);color:var(--acc-ink);border:0;padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit}
+.btn.ghost{background:none;color:var(--ink);border:1px solid var(--line)}
+.btn.sm{padding:4px 10px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:wait}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.checks{display:flex;flex-direction:column;gap:4px;max-height:130px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.checks label{display:flex;gap:8px;align-items:center;margin:0;font-size:13px;color:var(--ink)}
+.checks input{width:auto}
+.pill{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.pill.ready{color:var(--ok);border-color:var(--ok)}.pill.error{color:var(--err);border-color:var(--err)}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:340px}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);padding:9px 16px;border-radius:8px;background:var(--ink);color:var(--bg);display:none;max-width:90vw}
+.empty{color:var(--mut);padding:8px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>NMB Marketplace Agent</h1>
+  <nav id="nav"></nav>
+  <div style="display:flex;gap:6px;align-items:center"><span id="obs" class="pill"></span><span class="mut">Tenant</span><input id="tenant" value="default" style="width:120px"></div>
+</header>
+<main id="view"></main>
+<div id="toast"></div>
+
+<script>
+const TABS=["Agents","Models","Tools","RAG","Subagents","Evals","Feedback","API Keys","Run"];
+const S={tab:"Agents",agents:[],tools:[],rags:[],subs:[],models:[],keys:[],newKey:null,datasets:[],feedback:[],versions:[],cases:[],runs:[],dsSel:null,editAgent:null,editSub:null};
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const tenant=()=>$("#tenant").value.trim()||"default";
+
+async function api(path,opts={}){
+  if(!/[?&]tenant_id=/.test(path))path+=(path.includes("?")?"&":"?")+"tenant_id="+encodeURIComponent(tenant());
+  const o={...opts,headers:{...(opts.headers||{}),Authorization:"Bearer "+(localStorage.getItem("nmb_token")||"")}};
+  const r=await fetch(path,o);
+  if(r.status===401){localStorage.removeItem("nmb_token");login();throw new Error("Unauthorized — enter the admin token")}
+  if(!r.ok) throw new Error(r.status+" "+(await r.text()).slice(0,300));
+  return r.json();
+}
+const send=(p,b,m="POST")=>api(p,{method:m,headers:{"content-type":"application/json"},body:JSON.stringify(b)});
+function toast(msg,bad){const t=$("#toast");t.textContent=msg;t.style.background=bad?"var(--err)":"var(--ink)";t.style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>t.style.display="none",3500)}
+const guard=fn=>async(...a)=>{try{await fn(...a)}catch(e){toast(e.message,true)}};
+
+const load=guard(async()=>{
+  const q="?tenant_id="+encodeURIComponent(tenant());
+  [S.agents,S.tools,S.rags,S.subs,S.models,S.keys]=await Promise.all(["/agents","/tools","/rag","/subagents","/models","/keys"].map(p=>api(p+q)));
+  [S.datasets,S.feedback]=await Promise.all(["/evals/datasets","/feedback"].map(p=>api(p+q).catch(()=>[])));
+  api("/observability/status").then(o=>{const e=$("#obs");e.textContent=o.langfuse?"Langfuse on":"Langfuse off";e.className="pill "+(o.langfuse?"ready":"")}).catch(()=>{});
+  render();
+});
+
+function checks(name,items,selected=[]){
+  if(!items.length) return '<div class="empty">None available yet.</div>';
+  return `<div class="checks" data-group="${name}">`+items.map(i=>
+    `<label><input type="checkbox" value="${esc(i.id)}" ${selected.includes(i.id)?"checked":""}>${esc(i.name)}</label>`).join("")+"</div>";
+}
+const picked=g=>[...document.querySelectorAll(`[data-group="${g}"] input:checked`)].map(i=>i.value);
+
+/* ---------- Agents ---------- */
+function viewAgents(){
+  const a=S.agents.find(x=>x.id===S.editAgent)||{};
+  return `<div class="grid"><div>
+    <div class="card"><h2>Agents</h2>${S.agents.map(x=>`
+      <div class="item"><div>${esc(x.name)}<br><small>${esc(x.model)}</small></div>
+      <div class="row" style="margin:0"><button class="btn ghost sm" onclick="pickAgent('${esc(x.id)}')">Edit</button><button class="btn ghost sm" onclick="delAgent('${esc(x.id)}')">Delete</button></div></div>`).join("")||'<div class="empty">No agents yet.</div>'}
+      <div class="row"><button class="btn ghost sm" onclick="S.editAgent=null;render()">+ New agent</button></div></div>
+  </div><div class="card"><h2>${a.id?"Edit agent":"New agent"}</h2>
+    <label>Name</label><input id="a_name" value="${esc(a.name)}">
+    <label>Model</label>${modelPicker("a_model",a.model||"anthropic:claude-sonnet-4-5-20250929")}
+    <label>System prompt</label><textarea id="a_prompt">${esc(a.system_prompt)}</textarea>
+    <label>Tools</label>${checks("a_tools",S.tools,a.tool_ids)}
+    <label>RAG collections</label>${checks("a_rags",S.rags,a.rag_collection_ids)}
+    <label>Subagents</label>${checks("a_subs",S.subs,a.subagent_ids)}
+    <div class="row"><button class="btn" onclick="saveAgent()">${a.id?"Save changes":"Create agent"}</button>
+    ${a.id?`<span class="mut" style="align-self:center">id: ${esc(a.id)}</span>`:""}</div></div></div>${versionsCard(a)}`;
+}
+const saveAgent=guard(async()=>{
+  const body={name:$("#a_name").value,model:getModel("a_model"),system_prompt:$("#a_prompt").value,
+    tool_ids:picked("a_tools"),rag_collection_ids:picked("a_rags"),subagent_ids:picked("a_subs")};
+  if(!body.name) throw new Error("Name is required");
+  if(S.editAgent) await send("/agents/"+S.editAgent,body,"PATCH");
+  else S.editAgent=(await send("/agents",{...body,tenant_id:tenant()})).id;
+  toast("Agent saved");await load();
+});
+
+/* ---------- Tools ---------- */
+function viewTools(){
+  return `<div class="grid"><div class="card"><h2>Tools</h2>${S.tools.map(t=>`
+    <div class="item"><div>${esc(t.name)} <span class="pill">${esc(t.type)}</span><br><small>${esc(t.description)}</small></div>
+    <button class="btn ghost sm" onclick="delTool('${esc(t.id)}')">Delete</button></div>`).join("")||'<div class="empty">No tools yet.</div>'}</div>
+  <div class="card"><h2>Register tool</h2>
+    <label>Name</label><input id="t_name">
+    <label>Type</label><select id="t_type"><option>builtin</option><option>http</option><option>python</option></select>
+    <label>Description</label><input id="t_desc">
+    <label>Config (JSON) — http: {"endpoint":"https://..."} · python: {"dotted_path":"pkg.mod.fn"}</label>
+    <textarea id="t_cfg">{}</textarea>
+    <div class="row"><button class="btn" onclick="addTool()">Register</button></div></div></div>`;
+}
+const addTool=guard(async()=>{
+  let config;try{config=JSON.parse($("#t_cfg").value||"{}")}catch{throw new Error("Config is not valid JSON")}
+  await send("/tools",{name:$("#t_name").value,type:$("#t_type").value,description:$("#t_desc").value,config,tenant_id:tenant()});
+  toast("Tool registered");await load();
+});
+const delTool=guard(async id=>{if(!confirm("Delete this tool?"))return;await api("/tools/"+id,{method:"DELETE"});await load()});
+
+/* ---------- RAG ---------- */
+function viewRag(){
+  return `<div class="grid"><div class="card"><h2>Collections</h2>${S.rags.map(c=>`
+    <div class="item"><div>${esc(c.name)} <span class="pill ${esc(c.status)}">${esc(c.status)}</span><br><small>${esc(c.embedding_model)} · top_k ${esc(c.top_k)}</small></div>
+    <div><input type="file" id="f_${esc(c.id)}" multiple accept=".txt,.md,.pdf" style="width:170px;font-size:12px">
+    <button class="btn sm" onclick="upload('${esc(c.id)}')">Upload</button> <button class="btn ghost sm" onclick="delRag('${esc(c.id)}')">Delete</button></div></div>`).join("")||'<div class="empty">No collections yet.</div>'}
+    <div class="row"><button class="btn ghost sm" onclick="load()">Refresh status</button></div></div>
+  <div class="card"><h2>New collection</h2>
+    <label>Name (no spaces — becomes tool name search_&lt;name&gt;)</label><input id="r_name">
+    <label>Embedding model</label><input id="r_emb" value="openai:text-embedding-3-small">
+    <label>Top K</label><input id="r_k" type="number" value="4" min="1">
+    <div class="row"><button class="btn" onclick="addRag()">Create</button></div>
+    <p class="mut">Upload .txt, .md or .pdf files. Status moves empty → ingesting → ready.</p></div></div>`;
+}
+const addRag=guard(async()=>{
+  await send("/rag",{name:$("#r_name").value,embedding_model:$("#r_emb").value,top_k:+$("#r_k").value,tenant_id:tenant()});
+  toast("Collection created");await load();
+});
+const upload=guard(async id=>{
+  const fs=$("#f_"+id).files;if(!fs.length)throw new Error("Choose files first");
+  const fd=new FormData();[...fs].forEach(f=>fd.append("files",f));
+  await api(`/rag/${id}/upload`,{method:"POST",body:fd});
+  toast("Ingesting…");await load();setTimeout(load,6000);
+});
+
+/* ---------- Subagents ---------- */
+function viewSubs(){
+  const s=S.subs.find(x=>x.id===S.editSub)||{};
+  return `<div class="grid"><div class="card"><h2>Subagents</h2>${S.subs.map(x=>`
+    <div class="item"><div>${esc(x.name)} <span class="pill">${esc(x.mode)}</span><br><small>${esc(x.description)}</small></div>
+    <div class="row" style="margin:0"><button class="btn ghost sm" onclick="toggleMode('${esc(x.id)}')">→ ${x.mode==="sync"?"async":"sync"}</button>
+    <button class="btn ghost sm" onclick="S.editSub='${esc(x.id)}';S.testOut=null;render()">Edit</button><button class="btn ghost sm" onclick="delSub('${esc(x.id)}')">Delete</button></div></div>`).join("")||'<div class="empty">No subagents yet.</div>'}
+    <div class="row"><button class="btn ghost sm" onclick="S.editSub=null;render()">+ New subagent</button></div></div>
+  <div><div class="card"><h2>${s.id?"Edit subagent":"New subagent"}</h2>
+    <label>Name</label><input id="s_name" value="${esc(s.name)}">
+    <label>Description</label><input id="s_desc" value="${esc(s.description)}">
+    <label>System prompt</label><textarea id="s_prompt">${esc(s.system_prompt)}</textarea>
+    <label>Mode</label><select id="s_mode"><option ${s.mode!=="async"?"selected":""}>sync</option><option ${s.mode==="async"?"selected":""}>async</option></select>
+    <label>Graph ID (async only, e.g. researcher)</label><input id="s_graph" value="${esc(s.graph_id)}">
+    <label>Remote URL (optional, async)</label><input id="s_url" value="${esc(s.url)}">
+    <label>Model override (optional)</label>${modelPicker("s_model",s.model)}
+    <label>Tools · <a href="#" onclick="S.tab='Tools';render();return false">create new</a></label>${checks("s_tools",S.tools,s.tool_ids)}
+    <label>RAG collections · <a href="#" onclick="S.tab='RAG';render();return false">create new</a></label>${checks("s_rags",S.rags,s.rag_collection_ids)}
+    <div class="row"><button class="btn" onclick="saveSub()">${s.id?"Save changes":"Create subagent"}</button></div></div>
+    ${s.id?`<div class="card"><h2>Test "${esc(s.name)}" on its own</h2>
+      <textarea id="s_test" placeholder="Send a test message…"></textarea>
+      <div class="row"><button class="btn" id="s_test_btn" onclick="testSub()">Run test</button></div>
+      ${S.testOut?`<pre>${esc(S.testOut)}</pre>`:""}</div>`:""}</div></div>`;
+}
+const saveSub=guard(async()=>{
+  const v=id=>$(id).value.trim()||null;
+  const body={name:$("#s_name").value,description:$("#s_desc").value,system_prompt:$("#s_prompt").value,
+    mode:$("#s_mode").value,graph_id:v("#s_graph"),url:v("#s_url"),model:getModel("s_model")||null,tool_ids:picked("s_tools"),rag_collection_ids:picked("s_rags")};
+  if(S.editSub) await send("/subagents/"+S.editSub,body,"PATCH");
+  else S.editSub=(await send("/subagents",{...body,tenant_id:tenant()})).id;
+  toast("Subagent saved");await load();
+});
+const toggleMode=guard(async id=>{
+  const s=S.subs.find(x=>x.id===id);
+  await send("/subagents/"+id,{mode:s.mode==="sync"?"async":"sync"},"PATCH");await load();
+});
+
+const testSub=guard(async()=>{
+  const message=$("#s_test").value.trim();if(!message)throw new Error("Type a test message");
+  const b=$("#s_test_btn");b.disabled=true;b.textContent="Running…";
+  try{
+    const r=await send(`/subagents/${S.editSub}/test`,{message,tenant_id:tenant()});
+    S.testOut=(r.output||"(no text response)")+"\n\n— trace —\n"+(r.trace||[]).map(m=>`[${m.type}] ${m.tool_calls.length?"calls: "+m.tool_calls.join(", ")+" · ":""}${(m.content||"").slice(0,300)}`).join("\n");
+  }finally{b.disabled=false;b.textContent="Run test";render()}
+});
+
+/* ---------- Run ---------- */
+function viewRun(){
+  return `<div class="card"><h2>Run an agent</h2>
+    <label>Agent</label><select id="run_agent">${S.agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select>
+    <label>Message</label><textarea id="run_msg" placeholder="Ask something…"></textarea>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="run_draft" style="width:auto"> Test the unpublished draft (otherwise the live version runs)</label>
+    <div class="row"><button class="btn" id="run_btn" onclick="run()">Send</button></div></div>
+    <div class="card" id="run_out" style="display:none"><h2>Response</h2><pre id="run_text"></pre>
+    <details><summary class="mut">Raw result</summary><pre id="run_raw"></pre></details></div>`;
+}
+function textOf(c){return typeof c==="string"?c:Array.isArray(c)?c.map(b=>b.text||"").join(""):JSON.stringify(c)}
+const run=guard(async()=>{
+  const agent_id=$("#run_agent").value,message=$("#run_msg").value.trim();
+  if(!agent_id||!message) throw new Error("Pick an agent and type a message");
+  const btn=$("#run_btn");btn.disabled=true;btn.textContent="Running…";
+  try{
+    const r=await send("/runs/invoke",{agent_id,tenant_id:tenant(),message,use_draft:$("#run_draft").checked});
+    const msgs=(r.result&&r.result.messages)||[];
+    const last=[...msgs].reverse().find(m=>m.type==="ai"&&textOf(m.content));
+    $("#run_out").style.display="block";
+    $("#run_text").textContent=last?textOf(last.content):"(no text response)";
+    $("#run_raw").textContent=JSON.stringify(r,null,2);
+  }finally{btn.disabled=false;btn.textContent="Send"}
+});
+
+function login(){const t=prompt("Admin token (ADMIN_TOKEN in the server's .env):");if(t){localStorage.setItem("nmb_token",t.trim());load()}}
+
+/* ---------- Models ---------- */
+function modelPicker(id,cur){
+  const reg=S.models.some(m=>m.id===cur);
+  return `<select id="${id}_sel"><option value="">Custom string ↓</option>${S.models.map(m=>`<option value="${esc(m.id)}" ${m.id===cur?"selected":""}>${esc(m.name)} (${esc(m.provider)})</option>`).join("")}</select>
+  <input id="${id}" style="margin-top:6px" placeholder="provider:model, e.g. anthropic:claude-sonnet-4-5-20250929" value="${reg?"":esc(cur)}">`;
+}
+const getModel=id=>$("#"+id+"_sel").value||$("#"+id).value.trim();
+function viewModels(){
+  return `<div class="grid"><div class="card"><h2>Models</h2>${S.models.map(m=>`
+    <div class="item"><div>${esc(m.name)} <span class="pill">${esc(m.provider)}</span><br><small>${esc(m.model_name)}${m.base_url?" · "+esc(m.base_url):""}</small></div>
+    <div class="row" style="margin:0"><button class="btn ghost sm" onclick="testModel('${esc(m.id)}')">Test</button><button class="btn ghost sm" onclick="delModel('${esc(m.id)}')">Delete</button></div></div>`).join("")||'<div class="empty">No registered models. Agents can still use a custom provider:model string.</div>'}</div>
+  <div class="card"><h2>Register model</h2>
+    <label>Display name</label><input id="m_name">
+    <label>Provider</label><select id="m_prov"><option>anthropic</option><option>openai</option><option>google_genai</option><option>ollama</option></select>
+    <label>Model name</label><input id="m_model" placeholder="e.g. llama3.1:8b or gpt-4o">
+    <label>Base URL (local / OpenAI-compatible servers)</label><input id="m_url" placeholder="http://localhost:11434 or http://localhost:8000/v1">
+    <label>API key env var name (optional)</label><input id="m_key" placeholder="e.g. OPENAI_API_KEY">
+    <label>Params (JSON)</label><textarea id="m_params" style="min-height:60px">{"temperature":0.2}</textarea>
+    <div class="row"><button class="btn" onclick="addModel()">Register</button></div>
+    <p class="mut">vLLM, LM Studio, LiteLLM: provider openai + a base URL. Keys are read from the server environment and never stored.</p></div></div>`;
+}
+const addModel=guard(async()=>{
+  let params;try{params=JSON.parse($("#m_params").value||"{}")}catch{throw new Error("Params is not valid JSON")}
+  await send("/models",{name:$("#m_name").value,provider:$("#m_prov").value,model_name:$("#m_model").value,
+    base_url:$("#m_url").value.trim()||null,api_key_env:$("#m_key").value.trim()||null,params,tenant_id:tenant()});
+  toast("Model registered");await load();
+});
+const testModel=guard(async id=>{toast("Testing…");const r=await api(`/models/${id}/test`,{method:"POST"});toast(`OK in ${r.latency_ms} ms: ${r.reply}`)});
+const delModel=guard(async id=>{if(!confirm("Delete this model?"))return;await api("/models/"+id,{method:"DELETE"});await load()});
+
+/* ---------- API keys ---------- */
+function viewKeys(){
+  const nk=S.newKey?`<div class="card" style="border-color:var(--ok)"><h2>Copy this key now — it will not be shown again</h2><pre>${esc(S.newKey)}</pre>${S.newKey.startsWith("pk_")?`<label>Embed on your site</label><pre>${esc(`<script src="${location.origin}/embed.js" data-key="${S.newKey}" data-title="Support"><\/script>`)}</pre>`:""}</div>`:"";
+  return nk+`<div class="grid"><div class="card"><h2>API keys</h2>${S.keys.map(k=>`
+    <div class="item"><div>${esc(k.name)} <span class="pill">${esc(k.kind)}</span> ${k.revoked?'<span class="pill error">revoked</span>':""}<br>
+    <small>${esc(k.prefix)}… · ${esc((S.agents.find(a=>a.id===k.agent_id)||{}).name||k.agent_id)} · ${esc((k.allowed_origins||[]).join(", ")||"no origins")} · ${esc(k.rate_limit_per_min)}/min</small></div>
+    ${k.revoked?"":`<button class="btn ghost sm" onclick="revokeKey('${esc(k.id)}')">Revoke</button>`}</div>`).join("")||'<div class="empty">No keys yet.</div>'}</div>
+  <div class="card"><h2>Create key</h2>
+    <label>Agent</label><select id="k_agent">${S.agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select>
+    <label>Name</label><input id="k_name" placeholder="e.g. Storefront widget">
+    <label>Type</label><select id="k_kind"><option value="publishable">publishable (browser, origin-locked)</option><option value="secret">secret (server-to-server)</option></select>
+    <label>Allowed origins (comma-separated; publishable only)</label><input id="k_orig" placeholder="https://shop.example.com">
+    <label>Rate limit per minute</label><input id="k_rate" type="number" value="60" min="1">
+    <div class="row"><button class="btn" onclick="addKey()">Create</button></div>
+    <p class="mut">Call <code>POST /v1/chat</code> with header <code>Authorization: Bearer &lt;key&gt;</code> and body <code>{"message":"hi"}</code>.</p></div></div>`;
+}
+const addKey=guard(async()=>{
+  const r=await send("/keys",{name:$("#k_name").value,agent_id:$("#k_agent").value,kind:$("#k_kind").value,tenant_id:tenant(),
+    allowed_origins:$("#k_orig").value.split(",").map(x=>x.trim()).filter(Boolean),rate_limit_per_min:+$("#k_rate").value||60});
+  S.newKey=r.key;await load();
+});
+const revokeKey=guard(async id=>{if(!confirm("Revoke this key? Apps using it will stop working."))return;await api("/keys/"+id,{method:"DELETE"});await load()});
+
+/* ---------- Versions ---------- */
+function versionsCard(a){
+  if(!a.id) return "";
+  return `<div class="card"><h2>Versions — live traffic uses the published version; edits stay in the draft until you publish</h2>
+   <div class="row" style="margin:0 0 8px"><input id="v_note" placeholder="Release note" style="max-width:320px"><button class="btn" onclick="publish()">Publish draft</button></div>
+   ${(S.versions||[]).map(v=>`<div class="item"><div>v${v.version} ${v.published?'<span class="pill ready">live</span>':""}<br><small>${esc(v.note)} · ${esc(String(v.created_at).slice(0,16))} · ${esc(v.snapshot.model)}</small></div>
+   ${v.published?"":`<button class="btn ghost sm" onclick="rollback(${v.version})">Make live</button>`}</div>`).join("")||'<div class="empty">Never published — live traffic currently uses the draft.</div>'}</div>`;
+}
+const pickAgent=guard(async id=>{S.editAgent=id;S.versions=await api(`/agents/${id}/versions`).catch(()=>[]);render()});
+const publish=guard(async()=>{await send(`/agents/${S.editAgent}/publish`,{note:$("#v_note").value});toast("Published — now live");await pickAgent(S.editAgent)});
+const rollback=guard(async v=>{await api(`/agents/${S.editAgent}/versions/${v}/rollback`,{method:"POST"});toast("v"+v+" is live");await pickAgent(S.editAgent)});
+const delAgent=guard(async id=>{if(!confirm("Delete this agent? API keys for it will stop working."))return;await api("/agents/"+id,{method:"DELETE"});S.editAgent=null;await load()});
+const delSub=guard(async id=>{if(!confirm("Delete this subagent?"))return;await api("/subagents/"+id,{method:"DELETE"});S.editSub=null;await load()});
+const delRag=guard(async id=>{if(!confirm("Delete this collection and its documents?"))return;await api("/rag/"+id,{method:"DELETE"});await load()});
+
+/* ---------- Evals ---------- */
+const agentName=id=>(S.agents.find(a=>a.id===id)||{}).name||id;
+function viewEvals(){
+  const ds=S.datasets.find(d=>d.id===S.dsSel);
+  return `<div class="grid"><div class="card"><h2>Datasets</h2>${S.datasets.map(d=>`
+    <div class="item"><div>${esc(d.name)}<br><small>${esc(agentName(d.agent_id))} · ${d.cases} cases</small></div>
+    <div class="row" style="margin:0"><button class="btn ghost sm" onclick="pickDs('${esc(d.id)}')">Open</button><button class="btn ghost sm" onclick="delDs('${esc(d.id)}')">Delete</button></div></div>`).join("")||'<div class="empty">No datasets yet.</div>'}
+    <label>New dataset</label><input id="d_name" placeholder="e.g. Refund questions">
+    <label>Agent</label><select id="d_agent">${S.agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select>
+    <div class="row"><button class="btn" onclick="addDs()">Create dataset</button></div></div>
+  <div>${ds?dsPanel(ds):'<div class="card"><div class="empty">Open a dataset to add cases and run evals.</div></div>'}</div></div>`;
+}
+function dsPanel(ds){
+  return `<div class="card"><h2>${esc(ds.name)} — cases</h2>${S.cases.map(c=>`
+   <div class="item"><div>${esc(c.input)}<br><small>${c.expected_contains?"must contain “"+esc(c.expected_contains)+"” ":""}${c.criteria?"· judge: "+esc(c.criteria):""}</small></div>
+   <button class="btn ghost sm" onclick="delCase('${esc(c.id)}')">✕</button></div>`).join("")||'<div class="empty">No cases yet.</div>'}
+   <label>Input</label><textarea id="c_in" style="min-height:60px"></textarea>
+   <label>Must contain (optional)</label><input id="c_exp">
+   <label>Judge criteria (optional) — an LLM grades the answer against this</label><input id="c_crit" placeholder="e.g. Politely declines and points to the returns policy">
+   <div class="row"><button class="btn" onclick="addCase()">Add case</button></div></div>
+  <div class="card"><h2>Runs</h2><div class="row" style="margin:0 0 8px">
+   <button class="btn" onclick="runDs('published')">Run on live version</button><button class="btn ghost" onclick="runDs('draft')">Run on draft</button><button class="btn ghost" onclick="pickDs('${esc(ds.id)}')">Refresh</button></div>
+   ${S.runs.map(r=>`<details class="item" style="display:block"><summary>${esc(r.target)}${r.agent_version?" v"+r.agent_version:""} · ${esc(r.status)} · ${r.summary&&r.summary.avg!=null?"avg "+r.summary.avg+" · pass "+Math.round(r.summary.pass_rate*100)+"%":(r.results||[]).length+" done"}${r.summary&&r.summary.errors?" · "+r.summary.errors+" errors":""}</summary>
+     ${(r.results||[]).map(x=>`<div style="padding:6px 0;border-top:1px solid var(--line)"><b>${x.score!=null?x.score.toFixed(2):"–"}</b> ${esc(x.input)}<br><small>${x.error?esc(x.error):esc((x.reply||"").slice(0,300))}${x.judge_reason?" — "+esc(x.judge_reason):""}</small></div>`).join("")}</details>`).join("")||'<div class="empty">No runs yet.</div>'}</div>`;
+}
+const pickDs=guard(async id=>{S.dsSel=id;[S.cases,S.runs]=await Promise.all([api(`/evals/datasets/${id}/cases`),api(`/evals/runs?dataset_id=${id}`)]);render()});
+const addDs=guard(async()=>{const d=await send("/evals/datasets",{name:$("#d_name").value,agent_id:$("#d_agent").value,tenant_id:tenant()});await load();await pickDs(d.id)});
+const delDs=guard(async id=>{if(!confirm("Delete this dataset, its cases and runs?"))return;await api("/evals/datasets/"+id,{method:"DELETE"});if(S.dsSel===id)S.dsSel=null;await load()});
+const addCase=guard(async()=>{const input=$("#c_in").value.trim();if(!input)throw new Error("Input is required");
+  await send(`/evals/datasets/${S.dsSel}/cases`,{input,expected_contains:$("#c_exp").value.trim()||null,criteria:$("#c_crit").value.trim()||null});await pickDs(S.dsSel);await load()});
+const delCase=guard(async id=>{await api("/evals/cases/"+id,{method:"DELETE"});await pickDs(S.dsSel);await load()});
+const runDs=guard(async t=>{
+  await send(`/evals/datasets/${S.dsSel}/run`,{target:t});toast("Eval running…");await pickDs(S.dsSel);
+  const poll=setInterval(async()=>{if(S.tab!=="Evals"||!S.dsSel){clearInterval(poll);return}await pickDs(S.dsSel);if(!S.runs.some(r=>r.status==="running"))clearInterval(poll)},4000);
+});
+
+/* ---------- Feedback ---------- */
+function viewFeedback(){
+  return `<div class="card"><h2>User feedback</h2>${S.feedback.map(f=>{
+    const dss=S.datasets.filter(d=>d.agent_id===f.agent_id);
+    return `<div class="item" style="align-items:flex-start"><div><span class="pill ${f.rating==="up"?"ready":"error"}">${f.rating==="up"?"👍":"👎"}</span> <small>${esc(agentName(f.agent_id))}</small><br><b>User:</b> ${esc(f.user_message||"—")}<br><b>Agent:</b> ${esc((f.reply||"—").slice(0,300))}${f.comment?`<br><small>${esc(f.comment)}</small>`:""}</div>
+     <div class="row" style="margin:0">${dss.length&&f.user_message?`<select id="fb_${esc(f.id)}" style="width:auto">${dss.map(d=>`<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("")}</select><button class="btn ghost sm" onclick="fbToDs('${esc(f.id)}')">→ eval case</button>`:""}<button class="btn ghost sm" onclick="fbDel('${esc(f.id)}')">✕</button></div></div>`}).join("")||'<div class="empty">No feedback yet. 👍/👎 clicks from the chat widget land here.</div>'}</div>`;
+}
+const fbToDs=guard(async id=>{await send(`/feedback/${id}/to-dataset`,{dataset_id:$("#fb_"+id).value});toast("Added as an eval case");await load()});
+const fbDel=guard(async id=>{await api("/feedback/"+id,{method:"DELETE"});await load()});
+
+/* ---------- shell ---------- */
+function render(){
+  $("#nav").innerHTML=TABS.map(t=>`<button class="${t===S.tab?"on":""}" onclick="S.tab='${t}';render();load()">${t}</button>`).join("");
+  $("#view").innerHTML={Agents:viewAgents,Models:viewModels,Tools:viewTools,RAG:viewRag,Subagents:viewSubs,Evals:viewEvals,Feedback:viewFeedback,"API Keys":viewKeys,Run:viewRun}[S.tab]();
+}
+$("#tenant").addEventListener("change",()=>{S.editAgent=S.editSub=null;load()});
+render();localStorage.getItem("nmb_token")?load():login();
+</script>
+</body>
+</html>

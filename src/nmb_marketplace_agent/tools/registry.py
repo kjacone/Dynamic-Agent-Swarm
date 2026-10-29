@@ -1,0 +1,61 @@
+"""Runtime tool materialization from DB config."""
+from typing import Any
+
+from langchain_core.tools import BaseTool
+
+from nmb_marketplace_agent.config.database import async_session
+from nmb_marketplace_agent.config.models import ToolConfig
+from nmb_marketplace_agent.tools.builtin.calculator import calculator
+from nmb_marketplace_agent.tools.builtin.http_tool import make_http_tool
+from nmb_marketplace_agent.tools.builtin.search import tavily_search
+
+_BUILTINS: dict[str, BaseTool] = {
+    "tavily_search": tavily_search,
+    "calculator": calculator,
+}
+
+
+async def _load_tool_cfg(tool_id: str) -> ToolConfig | None:
+    async with async_session() as session:
+        return await session.get(ToolConfig, tool_id)
+
+
+def _materialize(cfg: ToolConfig) -> BaseTool:
+    if cfg.type == "builtin":
+        if cfg.name not in _BUILTINS:
+            raise ValueError(f"Unknown builtin tool: {cfg.name}")
+        return _BUILTINS[cfg.name]
+
+    if cfg.type == "http":
+        endpoint = cfg.config.get("endpoint")
+        if not endpoint:
+            raise ValueError(f"HTTP tool '{cfg.name}' missing endpoint")
+        return make_http_tool(cfg.name, endpoint, cfg.description)
+
+    if cfg.type == "python":
+        dotted = cfg.config.get("dotted_path")
+        if not dotted:
+            raise ValueError(f"Python tool '{cfg.name}' missing dotted_path")
+        import os
+        prefixes = [x.strip() for x in os.environ.get(
+            "PYTHON_TOOL_PREFIXES", "nmb_marketplace_agent.custom_tools.").split(",") if x.strip()]
+        if not any(dotted.startswith(x) for x in prefixes):
+            raise ValueError(f"dotted_path must start with one of {prefixes}")
+        mod_path, fn_name = dotted.rsplit(".", 1)
+        import importlib
+        mod = importlib.import_module(mod_path)
+        fn = getattr(mod, fn_name)
+        return fn() if callable(fn) and not isinstance(fn, BaseTool) else fn
+
+    raise ValueError(f"Unknown tool type: {cfg.type}")
+
+
+async def resolve_tool(tool_id: str) -> BaseTool:
+    cfg = await _load_tool_cfg(tool_id)
+    if not cfg:
+        raise ValueError(f"ToolConfig not found: {tool_id}")
+    return _materialize(cfg)
+
+
+async def resolve_tools(ids: list[str]) -> list[Any]:
+    return [await resolve_tool(i) for i in ids]

@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.remember
+.claude
+.langgraph_api
+data/app.db
+data/indexes/*
+!data/indexes/.gitkeep
+docs/*
+!data/docs/.gitkeep
+.pytest_cache/
+.ruff_cache/
+*.egg-info/

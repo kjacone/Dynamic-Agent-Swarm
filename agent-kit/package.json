@@ -1,0 +1,43 @@
+{
+  "name": "langgraph-kit",
+  "version": "0.1.0",
+  "description": "CopilotKit-style React wrapper for LangGraph API (langgraph-api + @langchain/langgraph-sdk)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "*.css"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsup"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1 || ^19.0.0",
+    "react-dom": "^18.3.1 || ^19.0.0"
+  },
+  "dependencies": {
+    "@langchain/langgraph-sdk": "^1.12.7",
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0"
+  }
+}

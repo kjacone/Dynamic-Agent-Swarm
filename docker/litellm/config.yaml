@@ -1,0 +1,63 @@
+# LiteLLM proxy configuration.
+# Register a model here, then in the dashboard Settings → Models add a
+# ModelConfig with:
+#   provider   = openai
+#   model_name = <the model_name below>
+#   base_url   = http://localhost:4000/v1
+#   api_key_env= LITELLM_MASTER_KEY
+#
+# The container reaches peers by service name (ollama, vllm) because it
+# shares the compose network. Clients on the host reach this proxy on
+# localhost:4000.
+
+model_list:
+  # ── Anthropic ─────────────────────────────────────────────────
+  - model_name: anthropic/claude-sonnet-4-5-20250929
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: anthropic/claude-haiku-4-5-20250929
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── OpenAI ────────────────────────────────────────────────────
+  - model_name: openai/gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ── Google ────────────────────────────────────────────────────
+  - model_name: google_genai/gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GOOGLE_API_KEY
+
+  # ── Ollama (local, always up with the default stack) ─────────
+  # Pull the model in Ollama first:
+  #     docker exec nmb-ollama ollama pull llama3.2
+  - model_name: ollama/llama3.2
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+
+  # ── vLLM (local, optional) ──────────────────────────────────
+  # Enable with --profile vllm and start the container once the model
+  # is downloaded. Uncomment to route traffic through it.
+  # - model_name: vllm/qwen2.5-1.5b
+  #   litellm_params:
+  #     model: openai/Qwen/Qwen2.5-1.5B-Instruct
+  #     api_base: http://vllm:8000/v1
+  #     api_key: not-needed
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 120
+
+general_settings:
+  # Callers use this as their API key. Set LITELLM_MASTER_KEY in .env
+  # to the same value. If unset, LiteLLM runs without auth — fine for a
+  # laptop, not fine for anything reachable.
+  master_key: os.environ/LITELLM_MASTER_KEY

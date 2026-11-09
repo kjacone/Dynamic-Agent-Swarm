@@ -93,7 +93,7 @@ function viewAgents(){
       <div class="row"><button class="btn ghost sm" onclick="S.editAgent=null;render()">+ New agent</button></div></div>
   </div><div class="card"><h2>${a.id?"Edit agent":"New agent"}</h2>
     <label>Name</label><input id="a_name" value="${esc(a.name)}">
-    <label>Model</label>${modelPicker("a_model",a.model||"anthropic:claude-sonnet-4-5-20250929")}
+    <label>Model</label>${modelPicker("a_model",a.model||"ollama:qwen2.5-coder:7b")}
     <label>System prompt</label><textarea id="a_prompt">${esc(a.system_prompt)}</textarea>
     <label>Tools</label>${checks("a_tools",S.tools,a.tool_ids)}
     <label>RAG collections</label>${checks("a_rags",S.rags,a.rag_collection_ids)}
@@ -232,7 +232,7 @@ function login(){const t=prompt("Admin token (ADMIN_TOKEN in the server's .env):
 function modelPicker(id,cur){
   const reg=S.models.some(m=>m.id===cur);
   return `<select id="${id}_sel"><option value="">Custom string ↓</option>${S.models.map(m=>`<option value="${esc(m.id)}" ${m.id===cur?"selected":""}>${esc(m.name)} (${esc(m.provider)})</option>`).join("")}</select>
-  <input id="${id}" style="margin-top:6px" placeholder="provider:model, e.g. anthropic:claude-sonnet-4-5-20250929" value="${reg?"":esc(cur)}">`;
+  <input id="${id}" style="margin-top:6px" placeholder="provider:model, e.g. ollama:qwen2.5-coder:7b" value="${reg?"":esc(cur)}">`;
 }
 const getModel=id=>$("#"+id+"_sel").value||$("#"+id).value.trim();
 function viewModels(){

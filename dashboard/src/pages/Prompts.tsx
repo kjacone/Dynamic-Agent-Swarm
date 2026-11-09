@@ -239,7 +239,7 @@ function Playground() {
           </div>
           <div><Label>Models (comma-separated, max 4)</Label>
             <Input value={modelsInput} onChange={(e) => setModelsInput(e.target.value)}
-              placeholder="ollama:llama3.2, anthropic:claude-sonnet-4-5-20250929" />
+              placeholder="ollama:llama3.2, ollama:qwen2.5-coder:7b" />
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={trace} onChange={(e) => setTrace(e.target.checked)} /> Trace to Langfuse

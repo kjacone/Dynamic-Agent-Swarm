@@ -222,3 +222,8 @@ volumes:
     driver: local
   langfuse_redis_data:
     driver: local
+
+networks:
+  default:
+    name: agentic-net
+    external: true

@@ -1,42 +1,41 @@
-# Ignore node_modules and other dependency directories
-node_modules
-bower_components
-vendor
-
-# Ignore logs and temporary files
-*.log
-*.tmp
-*.swp
-
-# Ignore .env files and other environment files
+# VCS / env
+.git
+.gitignore
 .env
 .env.*
 *.local
 
-# Ignore git-related files
-.git
-.gitignore
+# Python
+.venv
+**/.venv
+**/__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.langgraph_api
 
-# Ignore Docker-related files and configs
+# Node (dashboard / agent-kit are not part of the Python images)
+**/node_modules
+**/.next
+**/dist
+agent-kit
+dashboard
+
+# Runtime data, local DBs, docs, tests
+data
+docs
+tests
+*.db
+*.log
+*.tmp
+*.swp
+
+# Docker / IDE / OS
 .dockerignore
 docker-compose.yml
-
-# Ignore build and cache directories
-dist
-build
-.cache
-__pycache__
-
-# Ignore IDE and editor configurations
+docker
+observability
 .vscode
 .idea
-*.sublime-project
-*.sublime-workspace
-.DS_Store  # macOS-specific
-
-# Ignore test and coverage files
-coverage
-*.coverage
-*.test.js
-*.spec.js
-tests
+.DS_Store

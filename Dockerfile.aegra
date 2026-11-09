@@ -1,12 +1,4 @@
 # syntax=docker/dockerfile:1.7
-
-# ============================================================================
-# Stage 2: Aegra (production runtime — this is what docker-compose.yml's
-# agent-server service builds). Open-source, self-hosted, no license key.
-#
-# For fast local iteration without the extra Postgres/Redis containers Aegra
-# needs, use the `langgraph-dev` stage above instead.
-# ============================================================================
 FROM python:3.12-slim AS aegra
 
 WORKDIR /app
@@ -19,24 +11,23 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-system \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_HTTP_TIMEOUT=120 \
     UV_HTTP_RETRIES=10
 
-# --- Dependency layer (cached) ---
+# Dependency layer (project itself is not installed; src/ goes on PYTHONPATH)
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
-# --- Project layer ---
+# Source layer
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN mkdir -p /app/data
 
-# So `from app.registries.db import ...` etc. resolve — WORKDIR is /app, our
-# package lives at /app/app/, so /app must be on the path.
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH=/app
+    PYTHONPATH=/app/src:/app \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 2026
 

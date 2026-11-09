@@ -8,6 +8,7 @@ export { useAgentTool, useAgentReadable, useAssistants, useThreads } from "./hoo
 export type { ThreadSummary } from "./hooks";
 export { useFileUpload } from "./use-file-upload";
 
+
 // Surfaces
 export { Chat } from "./components/Chat";
 export type { ChatProps, ChatFeatures } from "./components/Chat";

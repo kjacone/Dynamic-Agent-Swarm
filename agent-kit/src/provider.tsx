@@ -2,63 +2,83 @@
 import { Client } from "@langchain/langgraph-sdk";
 import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
-  type ReactNode,
+  type CSSProperties, type ReactNode,
 } from "react";
 import { ArtifactProvider } from "./artifact";
 import { getStoredToken, setStoredToken } from "./lib/storage";
 import { ToastViewport, useToastState, type Notify } from "./toast";
 import type { AgentToolDefinition, Connection, ConnectionStatus, Readable } from "./types";
 
+export type ThemeMode = "light" | "dark" | "system";
+export type ResolvedTheme = "light" | "dark";
+/** CSS custom property overrides, e.g. { "--lgk-bg": "#fff" }. */
+export type ThemeVars = Record<`--${string}`, string>;
+
 export interface KitContextValue {
   connection: Connection;
   setConnection: (patch: Partial<Connection>) => void;
-  /** True once both an API URL and an assistant id are known. */
   isConfigured: boolean;
-  /** Result of a `GET /info` probe against the server. */
   status: ConnectionStatus;
   client: Client;
-  /** Resolved request auth, shared by the client and the stream hook. */
   auth: { apiKey?: string; headers: Record<string, string> };
   threadId: string | null;
   setThreadId: (id: string | null) => void;
   configurable?: Record<string, unknown>;
-  /** Keep per-message state history so messages can be edited, regenerated and branched. */
   branching: boolean;
-  /** Extra options merged into every `submit` (e.g. `{ streamSubgraphs: true }`). */
   submitOptions?: Record<string, unknown>;
   tools: Record<string, AgentToolDefinition>;
   registerTool: (def: AgentToolDefinition) => () => void;
   readables: Record<string, Readable>;
   setReadable: (id: string, r: Readable | null) => void;
-  /** Bumps whenever a thread was created or finished a run. */
   threadsRevision: number;
   bumpThreads: () => void;
   notify: Notify;
+  /** The selected mode: "light", "dark" or "system". */
+  theme: ThemeMode;
+  /** What is actually applied right now (system is resolved to light or dark). */
+  resolvedTheme: ResolvedTheme;
+  setTheme: (mode: ThemeMode) => void;
 }
 
-const Ctx = createContext<KitContextValue | null>(null);
+const LangGraphKitContext = createContext<KitContextValue | null>(null);
 
 export interface LangGraphKitProviderProps extends Partial<Connection> {
   children: ReactNode;
-  /** Controlled thread id. Omit for uncontrolled. */
   threadId?: string | null;
   onThreadIdChange?: (id: string | null) => void;
-  /** Extra `config.configurable` values sent with every run. */
   configurable?: Record<string, unknown>;
-  /** Enables edit / regenerate / branch switching. Default true. */
   branching?: boolean;
   submitOptions?: Record<string, unknown>;
-  /**
-   * localStorage namespace. Remembers endpoint, assistant and scheme; the token is
-   * stored separately and only ever returned to the origin it was saved for.
-   */
   persistKey?: string;
+  /** Controlled theme mode. Omit for uncontrolled. */
+  theme?: ThemeMode;
+  /** Starting mode when uncontrolled and nothing is saved. Default "system". */
+  defaultTheme?: ThemeMode;
+  onThemeChange?: (mode: ThemeMode) => void;
+  /** Per-theme CSS variable overrides. */
+  themeVars?: { light?: ThemeVars; dark?: ThemeVars };
+}
+
+const isMode = (v: unknown): v is ThemeMode => v === "light" || v === "dark" || v === "system";
+
+/** Tracks the OS color scheme. Starts as light so server and first client render match. */
+function useSystemDark() {
+  const [dark, setDark] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => setDark(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return dark;
 }
 
 export function LangGraphKitProvider({
   children, threadId: threadIdProp, onThreadIdChange, configurable, persistKey,
   branching = true, submitOptions,
   apiUrl = "", assistantId = "", token, authScheme = "bearer", headers,
+  theme: themeProp, defaultTheme = "system", onThemeChange, themeVars,
 }: LangGraphKitProviderProps) {
   const [conn, setConn] = useState<Connection>({ apiUrl, assistantId, token, authScheme, headers });
   const connRef = useRef(conn);
@@ -67,6 +87,43 @@ export function LangGraphKitProvider({
   const notifyRef = useRef(toasts.notify);
   notifyRef.current = toasts.notify;
 
+  // ---- Theme ----
+  const [themeState, setThemeState] = useState<ThemeMode>(defaultTheme);
+  const theme = themeProp ?? themeState;
+  const systemDark = useSystemDark();
+  const resolvedTheme: ResolvedTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+
+  const setTheme = useCallback((mode: ThemeMode) => {
+    setThemeState(mode);
+    onThemeChange?.(mode);
+  }, [onThemeChange]);
+
+  // Restore the saved mode after mount (uncontrolled only).
+  useEffect(() => {
+    if (!persistKey || themeProp !== undefined) return;
+    try {
+      const saved = localStorage.getItem(`${persistKey}:theme`);
+      if (isMode(saved)) setThemeState(saved);
+    } catch { /* storage unavailable */ }
+  }, [persistKey, themeProp]);
+  useEffect(() => {
+    if (!persistKey) return;
+    try { localStorage.setItem(`${persistKey}:theme`, theme); } catch { /* storage unavailable */ }
+  }, [persistKey, theme]);
+
+  // Mirror onto <html> so portaled UI (popups, toasts) is themed too.
+  useEffect(() => {
+    const el = document.documentElement;
+    el.dataset.lgkTheme = resolvedTheme;
+    return () => { delete el.dataset.lgkTheme; };
+  }, [resolvedTheme]);
+
+  const themeStyle = useMemo(
+    () => ({ display: "contents", colorScheme: resolvedTheme, ...(themeVars?.[resolvedTheme] ?? {}) }) as CSSProperties,
+    [resolvedTheme, themeVars],
+  );
+
+  // ---- Threads ----
   const [internalThread, setInternalThread] = useState<string | null>(threadIdProp ?? null);
   const threadId = threadIdProp !== undefined ? threadIdProp : internalThread;
   const setThreadId = useCallback((id: string | null) => {
@@ -80,10 +137,10 @@ export function LangGraphKitProvider({
       (patch.apiUrl !== undefined && patch.apiUrl !== prev.apiUrl) ||
       (patch.assistantId !== undefined && patch.assistantId !== prev.assistantId);
     setConn({ ...prev, ...patch });
-    if (moved) setThreadId(null); // threads belong to one server + assistant
+    if (moved) setThreadId(null);
   }, [setThreadId]);
 
-  // Optional persistence (client-only, so it hydrates after mount).
+  // ---- Connection persistence ----
   const [hydrated, setHydrated] = useState(!persistKey);
   useEffect(() => {
     if (!persistKey) return;
@@ -124,7 +181,6 @@ export function LangGraphKitProvider({
     [conn.apiUrl, auth],
   );
 
-  // Health probe, like agent-chat-ui: tell the user early if the server is unreachable.
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   useEffect(() => {
     if (!isConfigured) { setStatus("idle"); return; }
@@ -170,20 +226,25 @@ export function LangGraphKitProvider({
     connection: conn, setConnection, isConfigured, status, client, auth, threadId, setThreadId,
     configurable, branching, submitOptions, tools, registerTool, readables, setReadable,
     threadsRevision, bumpThreads, notify: toasts.notify,
+    theme, resolvedTheme, setTheme,
   }), [conn, setConnection, isConfigured, status, client, auth, threadId, setThreadId, configurable,
        branching, submitOptions, tools, registerTool, readables, setReadable, threadsRevision,
-       bumpThreads, toasts.notify]);
+       bumpThreads, toasts.notify, theme, resolvedTheme, setTheme]);
 
   return (
-    <Ctx.Provider value={value}>
-      <ArtifactProvider>{children}</ArtifactProvider>
-      <ToastViewport items={toasts.items} dismiss={toasts.dismiss} />
-    </Ctx.Provider>
+    <LangGraphKitContext.Provider value={value}>
+      <div className="lgk-theme-root" data-theme={resolvedTheme} style={themeStyle}>
+        <ArtifactProvider>{children}</ArtifactProvider>
+        <ToastViewport items={toasts.items} dismiss={toasts.dismiss} />
+      </div>
+    </LangGraphKitContext.Provider>
   );
 }
 
 export function useKit(): KitContextValue {
-  const v = useContext(Ctx);
-  if (!v) throw new Error("langgraph-kit: wrap your app in <LangGraphKitProvider>");
-  return v;
+  const context = useContext(LangGraphKitContext);
+  if (!context) {
+    throw new Error("langgraph-kit: wrap your app in <LangGraphKitProvider>");
+  }
+  return context;
 }

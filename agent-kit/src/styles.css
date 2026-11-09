@@ -1,13 +1,33 @@
-/* langgraph-kit — override any --lgk-* token to theme. */
+/* ---------- Base palette (fallback for standalone .lgk) ---------- */
+.lgk-theme-root,
+.lgk-theme-root[data-theme="light"] {
+  --lgk-bg: #ffffff;
+  --lgk-fg: #111827;
+  --lgk-muted: #6b7280;
+  --lgk-border: #e5e7eb;
+  --lgk-accent: #2563eb;
+}
+
+.lgk-theme-root[data-theme="dark"] {
+  --lgk-bg: #0b0f14;
+  --lgk-fg: #e5e7eb;
+  --lgk-muted: #9ca3af;
+  --lgk-border: #1f2937;
+  --lgk-accent: #60a5fa;
+}
+
+/* Portaled UI (popups, toasts) lives outside the wrapper, so mirror on <html> */
+:root[data-lgk-theme="dark"] { --lgk-bg: #0b0f14; --lgk-fg: #e5e7eb; /* ...same as dark */ }
+
 .lgk {
-  --lgk-bg: #eef1f4;
+  --lgk-bg: #eef2f7;
   --lgk-panel: #ffffff;
-  --lgk-ink: #16202a;
-  --lgk-muted: #5b6875;
-  --lgk-line: #d5dbe2;
-  --lgk-accent: #0f6b5c;
+  --lgk-ink: #0f172a;
+  --lgk-muted: #52627a;
+  --lgk-line: #d5dde8;
+  --lgk-accent: #2563eb;          /* blue-600 */
   --lgk-accent-ink: #ffffff;
-  --lgk-tint: #e1efec;
+  --lgk-tint: #e8f0fe;
   --lgk-danger: #b3261e;
   --lgk-warn: #8a5a00;
   --lgk-radius: 10px;
@@ -15,12 +35,87 @@
   --lgk-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-family: var(--lgk-font); color: var(--lgk-ink); font-size: 15px; line-height: 1.5; box-sizing: border-box;
 }
+
+/* ---------- Explicit dark on a standalone .lgk ---------- */
+.lgk[data-theme="dark"],
+:root[data-theme="dark"] .lgk:not([data-theme="light"]) {
+  --lgk-bg: #0b1220;
+  --lgk-panel: #111a2b;
+  --lgk-ink: #e6ecf5;
+  --lgk-muted: #93a3ba;
+  --lgk-line: #253247;
+  --lgk-accent: #60a5fa;          /* blue-400 */
+  --lgk-accent-ink: #06182e;
+  --lgk-tint: #122239;
+  --lgk-danger: #f2877f;
+  --lgk-warn: #e0b45a;
+}
+
+/* ---------- OS preference fallback for standalone .lgk ---------- */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .lgk {
-    --lgk-bg: #0e1419; --lgk-panel: #151c23; --lgk-ink: #e6ecf1; --lgk-muted: #93a1ae; --lgk-line: #26313b;
-    --lgk-accent: #3fbf9f; --lgk-accent-ink: #06201a; --lgk-tint: #17302c; --lgk-danger: #f2877f; --lgk-warn: #e0b45a;
+  .lgk:not([data-theme]) {
+    --lgk-bg: #0b1220;
+    --lgk-panel: #111a2b;
+    --lgk-ink: #e6ecf5;
+    --lgk-muted: #93a3ba;
+    --lgk-line: #253247;
+    --lgk-accent: #60a5fa;
+    --lgk-accent-ink: #06182e;
+    --lgk-tint: #122239;
+    --lgk-danger: #f2877f;
+    --lgk-warn: #e0b45a;
   }
 }
+
+/* ---------- Provider wrapper ---------- */
+.lgk-provider { display: contents; }
+
+.lgk-provider[data-theme="light"] {
+  --lgk-bg: #eef2f7;
+  --lgk-panel: #ffffff;
+  --lgk-ink: #0f172a;
+  --lgk-muted: #52627a;
+  --lgk-line: #d5dde8;
+  --lgk-accent: #2563eb;
+  --lgk-accent-ink: #ffffff;
+  --lgk-tint: #e8f0fe;
+  --lgk-danger: #b3261e;
+  --lgk-warn: #8a5a00;
+}
+.lgk-provider[data-theme="dark"] {
+  --lgk-bg: #0b1220;
+  --lgk-panel: #111a2b;
+  --lgk-ink: #e6ecf5;
+  --lgk-muted: #93a3ba;
+  --lgk-line: #253247;
+  --lgk-accent: #60a5fa;
+  --lgk-accent-ink: #06182e;
+  --lgk-tint: #122239;
+  --lgk-danger: #f2877f;
+  --lgk-warn: #e0b45a;
+}
+
+/* Reset inner .lgk so it inherits from the provider instead of shadowing it. */
+.lgk-provider[data-theme] .lgk {
+  --lgk-bg: unset;
+  --lgk-panel: unset;
+  --lgk-ink: unset;
+  --lgk-muted: unset;
+  --lgk-line: unset;
+  --lgk-accent: unset;
+  --lgk-accent-ink: unset;
+  --lgk-tint: unset;
+  --lgk-danger: unset;
+  --lgk-warn: unset;
+  --lgk-radius: unset;
+  --lgk-font: unset;
+  --lgk-mono: unset;
+}
+
+
+
+
+
 :root[data-theme="dark"] .lgk {
   --lgk-bg: #0e1419; --lgk-panel: #151c23; --lgk-ink: #e6ecf1; --lgk-muted: #93a1ae; --lgk-line: #26313b;
   --lgk-accent: #3fbf9f; --lgk-accent-ink: #06201a; --lgk-tint: #17302c; --lgk-danger: #f2877f; --lgk-warn: #e0b45a;

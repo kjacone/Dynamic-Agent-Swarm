@@ -27,7 +27,7 @@ dependencies = [
   "langfuse>=3.0.0",
   "pyjwt>=2.8.0",
   "pyyaml>=6.0.1",
-   "aegra",
+  "aegra",
 ]
 
 [project.optional-dependencies]
@@ -39,9 +39,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nmb_marketplace_agent"]
-
-[tool.uv]
-python-preference = "managed"
 
 [dependency-groups]
 dev = [

@@ -46,7 +46,7 @@ class AgentConfig(SQLModel, table=True):
     __tablename__ = "agents"
     id: str = Field(primary_key=True)
     name: str = Field(index=True)
-    model: str = Field(default="anthropic:claude-sonnet-4-5-20250929")
+    model: str = Field(default="ollama:qwen2.5-coder:7b")
     system_prompt: str = Field(default="", sa_column=Column(Text))
     tool_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     rag_collection_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))

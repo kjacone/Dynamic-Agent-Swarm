@@ -3,9 +3,14 @@
 Only what the dashboard needs: health, traces, usage metrics, prompt management,
 datasets/experiments and scores. Verify paths against http://<langfuse>/api/public/openapi
 for the version you run.
+
+Langfuse v4 "events_only" deployments have no legacy /traces or /metrics/daily
+endpoints, so those methods fall back to /v2/observations and /v2/metrics.
 """
 import asyncio
+import json as _json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -69,15 +74,65 @@ class LangfuseAPI:
             return f"{self.public_url}/project/{pid}{tail}"
         return f"{self.public_url}/trace/{ident}" if kind == "traces" and ident else self.public_url
 
-    # ---- observability ----
+    # ---- observability (legacy API, with Langfuse v4 events_only fallback) ----
+    async def _observations(self, **params: Any) -> dict:
+        return await self._req("GET", "/api/public/v2/observations", params=_clean(params))
+
     async def traces(self, **params: Any) -> dict:
-        return await self._req("GET", "/api/public/traces", params=_clean(params))
+        try:
+            return await self._req("GET", "/api/public/traces", params=_clean(params))
+        except LangfuseError:
+            return await self._traces_v4(**params)
+
+    async def _traces_v4(self, limit: int = 25, page: int = 1, sessionId: str | None = None,
+                         userId: str | None = None, name: str | None = None, **_: Any) -> dict:
+        flt = None
+        if sessionId:
+            flt = _json.dumps([{"type": "string", "column": "sessionId", "operator": "=", "value": sessionId}])
+        data = await self._observations(limit=1000, userId=userId, filter=flt)
+        rows: dict[str, dict] = {}
+        for o in data.get("data", []):
+            tid = o.get("traceId")
+            if not tid:
+                continue
+            r = rows.setdefault(tid, {"id": tid, "name": None, "timestamp": o.get("startTime"),
+                                      "sessionId": sessionId, "userId": o.get("userId"), "observations": 0})
+            r["observations"] += 1
+            if not o.get("parentObservationId"):
+                r["name"] = o.get("name")
+            st = o.get("startTime")
+            if st and (not r["timestamp"] or st < r["timestamp"]):
+                r["timestamp"] = st
+        out = sorted(rows.values(), key=lambda r: r["timestamp"] or "", reverse=True)
+        if name:
+            out = [r for r in out if r["name"] == name]
+        return {"data": out[:limit], "meta": {"source": "v2/observations"}}
 
     async def trace(self, trace_id: str) -> dict:
-        return await self._req("GET", f"/api/public/traces/{quote(trace_id, safe='')}")
+        try:
+            return await self._req("GET", f"/api/public/traces/{quote(trace_id, safe='')}")
+        except LangfuseError:
+            data = await self._observations(traceId=trace_id, limit=1000)
+            return {"id": trace_id, "observations": data.get("data", [])}
 
     async def daily_metrics(self, **params: Any) -> dict:
-        return await self._req("GET", "/api/public/metrics/daily", params=_clean(params))
+        try:
+            return await self._req("GET", "/api/public/metrics/daily", params=_clean(params))
+        except LangfuseError:
+            q = {
+                "view": "observations",
+                "metrics": [{"measure": "count", "aggregation": "count"},
+                            {"measure": "totalCost", "aggregation": "sum"}],
+                "dimensions": [],
+                "timeDimension": {"granularity": "day"},
+                "fromTimestamp": params.get("fromTimestamp"),
+                "toTimestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            data = await self._req("GET", "/api/public/v2/metrics", params={"query": _json.dumps(q)})
+            rows = [{"date": (r.get("time_dimension") or r.get("timeDimension") or "")[:10],
+                     "countObservations": r.get("count_count"),
+                     "totalCost": r.get("sum_totalCost")} for r in data.get("data", [])]
+            return {"data": rows}
 
     # ---- prompts ----
     async def prompts(self, **params: Any) -> dict:

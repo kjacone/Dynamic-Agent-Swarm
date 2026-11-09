@@ -21,32 +21,40 @@ def final_text(result: dict) -> str:
                 return t
     return ""
 
+
 async def invoke_agent(agent_id, tenant_id, message, thread_id=None, user_id=None, use_draft=False) -> dict:
     cfg = {"agent_id": agent_id, "tenant_id": tenant_id}
     if user_id:
         cfg["user_id"] = user_id
     if use_draft:
         cfg["use_draft"] = True
-    async with httpx.AsyncClient(timeout=300) as client:
-        created = False
-        if not thread_id:
-            t = await client.post(f"{_url()}/threads", json={})
-            if t.status_code >= 400:
-                raise HTTPException(t.status_code, t.text)
-            thread_id = t.json()["thread_id"]
-            created = True
-        payload = {
-            "assistant_id": "supervisor",
-            "input": {"messages": [{"role": "user", "content": message}]},
-            "config": {"configurable": cfg},
-        }
-        r = await client.post(f"{_url()}/threads/{thread_id}/runs/wait", json=payload)
-        if r.status_code >= 400:
-            raise HTTPException(r.status_code, r.text)
-        data = r.json()
+    created = False
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            if not thread_id:
+                t = await client.post(f"{_url()}/threads", json={})
+                if t.status_code >= 400:
+                    raise HTTPException(t.status_code, t.text)
+                thread_id = t.json()["thread_id"]
+                created = True
+            payload = {
+                "assistant_id": "supervisor",
+                "input": {"messages": [{"role": "user", "content": message}]},
+                "config": {"configurable": cfg},
+            }
+            r = await client.post(f"{_url()}/threads/{thread_id}/runs/wait", json=payload)
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, r.text)
+            data = r.json()
+    except httpx.RequestError as e:
+        raise HTTPException(
+            502,
+            f"Agent server unreachable at {_url()} ({type(e).__name__}). "
+            "Check `docker compose logs agent-server`.",
+        ) from e
 
-    # If we created this thread, record its ownership so /v1/feedback and the
-    # lg_proxy don't 404 on it later. Failure here must not fail the invoke.
+    # Record ownership so /v1/feedback and the lg_proxy don't 404 later.
+    # Failure here must not fail the invoke.
     if created:
         try:
             from nmb_marketplace_agent.config.database import async_session
@@ -61,6 +69,7 @@ async def invoke_agent(agent_id, tenant_id, message, thread_id=None, user_id=Non
             pass
 
     return {"thread_id": thread_id, "result": data}
+
 
 class RunRequest(BaseModel):
     agent_id: str

@@ -1,32 +1,13 @@
-# Default stack is Ollama only. Opt in to extras with --profile.
+# Optional extras. Ollama is NOT here: you run it on the host.
 #
-#   docker compose up -d                          # ollama only
-#   docker compose --profile litellm up -d        # + LiteLLM proxy
-#   docker compose --profile vllm up -d           # + vLLM OpenAI server (GPU)
-#   docker compose --profile training up -d       # + LLaMA-Factory trainer (GPU)
+# Paths below are relative to this file's folder (docker/), and the env file
+# is the repo-root .env, so run from the repo root:
 #
-# The FastAPI app and the LangGraph server run on the host (see root README).
-# Containers expose their ports on localhost so the app can reach them via
-# the default URLs from integrations/connections.py.
-#
-# Shared data lives under ./data — the trainer's /data mount is what makes
-# settings.training_container_root = "/data/training" work.
+#   docker compose --env-file .env -f docker/docker-compose.yml --profile litellm up -d
+#   docker compose --env-file .env -f docker/docker-compose.yml --profile vllm up -d      # GPU
+#   docker compose --env-file .env -f docker/docker-compose.yml --profile training up -d  # GPU
 
 services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: nmb-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-models:/root/.ollama
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: nmb-litellm
@@ -34,15 +15,15 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+      - ./litellm/config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
-    depends_on:
-      - ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   vllm:
@@ -70,10 +51,8 @@ services:
     container_name: nmb-trainer
     profiles: ["training"]
     volumes:
-      # Same files the FastAPI app writes on the host.
-      - ./data:/data
-      # The runner is our code, not the image's.
-      - ./docker/trainer:/runner:ro
+      - ../data:/data
+      - ./trainer:/runner:ro
       - hf-cache:/root/.cache/huggingface
     environment:
       TRAINING_ROOT: /data/training
@@ -90,5 +69,9 @@ services:
     restart: unless-stopped
 
 volumes:
-  ollama-models:
   hf-cache:
+
+networks:
+  default:
+    name: agentic-net
+    external: true

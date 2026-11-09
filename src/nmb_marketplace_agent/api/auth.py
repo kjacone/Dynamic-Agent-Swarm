@@ -48,10 +48,10 @@ async def _authenticate(request: Request, authorization: str, x_api_key: str, db
     if key.kind == "publishable":
         allowed = key.allowed_origins or []
         # An empty allow-list is treated as "unconfigured" and rejects all browser
-        # origins — the admin must explicitly set ["*"] or specific origins.
+        # origins; the admin must explicitly set ["*"] or specific origins.
         if "*" not in allowed and request.headers.get("origin", "") not in allowed:
             raise HTTPException(403, "Origin not allowed for this key")
-
+    return key  # <- was missing: every API-key request crashed without it
 
 
 async def require_api_key_nocount(
@@ -72,5 +72,6 @@ async def require_api_key(
     key = await _authenticate(request, authorization, x_api_key, db)
     check_rate(key)
     return key
+
 
 verify_api_key = require_api_key_nocount

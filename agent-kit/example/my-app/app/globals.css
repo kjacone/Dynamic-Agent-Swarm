@@ -1,0 +1,32 @@
+/* Theme picker */
+.lgk-theme-controls { display: flex; flex-direction: column; gap: 10px; }
+.lgk-theme-seg { display: flex; gap: 0; border: 1px solid var(--lgk-line); border-radius: 8px; overflow: hidden; }
+.lgk-theme-seg button {
+  flex: 1; padding: 6px 10px; font-size: 13px;
+  background: var(--lgk-panel); border: 0; color: var(--lgk-muted);
+}
+.lgk-theme-seg button + button { border-left: 1px solid var(--lgk-line); }
+.lgk-theme-seg button[data-selected="true"] {
+  background: var(--lgk-accent); color: var(--lgk-accent-ink); font-weight: 600;
+}
+.lgk-theme-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.lgk-theme-swatches button {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px var(--lgk-line) inset;
+  padding: 0;
+}
+.lgk-theme-swatches button[data-selected="true"] {
+  border-color: var(--lgk-ink);
+  box-shadow: 0 0 0 2px var(--lgk-panel) inset;
+}
+.lgk-theme-custom {
+  display: grid; place-items: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px dashed var(--lgk-line); cursor: pointer;
+  background: conic-gradient(red, orange, yellow, green, cyan, blue, violet, red);
+  overflow: hidden;
+}
+.lgk-theme-custom input[type="color"] {
+  opacity: 0; width: 100%; height: 100%; border: 0; padding: 0; cursor: pointer;
+}

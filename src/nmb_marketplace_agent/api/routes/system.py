@@ -65,7 +65,8 @@ def _trainer() -> dict:
 async def check_all() -> list[dict]:
     g, o, v, l = (connections.get(n) for n in ("langgraph", "ollama", "vllm", "litellm"))
     results = await asyncio.gather(
-        _http_check("langgraph", "LangGraph", g["url"], "/ok"),
+        # Aegra serves /health (the LangGraph dev server's /ok does not exist here).
+        _http_check("langgraph", "LangGraph", g["url"], "/health"),
         _langfuse(),
         _http_check("ollama", "Ollama", o["url"], "/api/tags", lambda r: f"{len(r.json().get('models', []))} models"),
         _http_check("vllm", "vLLM", v["url"], "/v1/models", lambda r: f"{len(r.json().get('data', []))} models"),

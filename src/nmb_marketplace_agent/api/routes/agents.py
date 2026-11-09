@@ -34,7 +34,7 @@ router = APIRouter()
 
 class AgentCreate(BaseModel):
     name: str
-    model: str = "anthropic:claude-sonnet-4-5-20250929"
+    model: str = "ollama:qwen2.5-coder:7b"
     system_prompt: str = ""
     tool_ids: list[str] = []
     rag_collection_ids: list[str] = []

@@ -11,36 +11,26 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-system \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_HTTP_TIMEOUT=120 \
     UV_HTTP_RETRIES=10
 
-# --- Dependency layer (cached; busts only when pyproject.toml / uv.lock change) ---
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
-# --- Project layer (installs nmb_marketplace_agent so `uvicorn
-#     nmb_marketplace_agent.api.main:app` resolves) ---
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
-
-RUN useradd --create-home --uid 10001 app && chown -R app:app /app
-USER app
+RUN mkdir -p /app/data/indexes /app/data/docs /app/data/training
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH=/app
+    PYTHONPATH=/app/src:/app \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
   CMD curl -sf http://127.0.0.1:8000/health || exit 1
 
-# --no-sync: we already synced at build time; don't re-resolve on every boot.
-# --reload is fine here only if you bind-mount the source (compose does not,
-# by default) — it's a no-op otherwise; see the note below before shipping
-# this to prod.
-CMD ["uv", "run", "--no-sync", "uvicorn", \
-     "nmb_marketplace_agent.api.main:app", \
-     "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Tables are created by the app's lifespan (init_db) on startup.
+CMD ["uvicorn", "nmb_marketplace_agent.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

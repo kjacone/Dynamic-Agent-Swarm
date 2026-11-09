@@ -1,4 +1,4 @@
-"""Seed built-in tools + a working sample agent."""
+"""Seed built-in tools + a working sample agent (Ollama by default)."""
 import asyncio
 import uuid
 
@@ -8,6 +8,8 @@ from nmb_marketplace_agent.config.database import async_session, init_db
 from nmb_marketplace_agent.config.models import AgentConfig, SubAgentConfig, ToolConfig
 from nmb_marketplace_agent.prompts.system import MAIN_SYSTEM_PROMPT
 from nmb_marketplace_agent.subagents.defaults import RESEARCHER_PROMPT
+
+DEFAULT_AGENT_MODEL = "ollama:qwen2.5-coder:7b"
 
 
 async def main():
@@ -67,7 +69,7 @@ async def main():
             agent = AgentConfig(
                 id=str(uuid.uuid4()),
                 name="default",
-                model="anthropic:claude-sonnet-4-5-20250929",
+                model=DEFAULT_AGENT_MODEL,
                 system_prompt=MAIN_SYSTEM_PROMPT,
                 tool_ids=[search.id, calc.id],
                 subagent_ids=[sync_res.id],

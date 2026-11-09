@@ -1,14 +1,13 @@
-# LiteLLM proxy configuration.
-# Register a model here, then in the dashboard Settings → Models add a
-# ModelConfig with:
-#   provider   = openai
-#   model_name = <the model_name below>
-#   base_url   = http://localhost:4000/v1
-#   api_key_env= LITELLM_MASTER_KEY
+# LiteLLM proxy configuration (run via docker/docker-compose.yml --profile litellm).
 #
-# The container reaches peers by service name (ollama, vllm) because it
-# shares the compose network. Clients on the host reach this proxy on
-# localhost:4000.
+# In the dashboard (Models), add a ModelConfig with:
+#   provider    = openai
+#   model_name  = <a model_name below>
+#   api_key_env = LITELLM_MASTER_KEY
+#   base_url    = http://litellm:4000/v1       <- for agent-server / admin-api
+#                 http://localhost:4000/v1     <- only for tools on your host
+#
+# Ollama runs on your host, so it is reached via host.docker.internal.
 
 model_list:
   # ── Anthropic ─────────────────────────────────────────────────
@@ -17,9 +16,9 @@ model_list:
       model: anthropic/claude-sonnet-4-5-20250929
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  - model_name: anthropic/claude-haiku-4-5-20250929
+  - model_name: anthropic/claude-haiku-4-5-20251001
     litellm_params:
-      model: anthropic/claude-haiku-4-5-20250929
+      model: anthropic/claude-haiku-4-5-20251001
       api_key: os.environ/ANTHROPIC_API_KEY
 
   # ── OpenAI ────────────────────────────────────────────────────
@@ -34,17 +33,14 @@ model_list:
       model: gemini/gemini-2.0-flash
       api_key: os.environ/GOOGLE_API_KEY
 
-  # ── Ollama (local, always up with the default stack) ─────────
-  # Pull the model in Ollama first:
-  #     docker exec nmb-ollama ollama pull llama3.2
-  - model_name: ollama/llama3.2
+  # ── Ollama (host, outside Docker) ─────────────────────────────
+  # Pull the model on your host first:  ollama pull llama3.1:8b
+  - model_name: ollama/qwen2.5-coder:7b
     litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
+      model: ollama/qwen2.5-coder:7b
+      api_base: http://host.docker.internal:11434
 
-  # ── vLLM (local, optional) ──────────────────────────────────
-  # Enable with --profile vllm and start the container once the model
-  # is downloaded. Uncomment to route traffic through it.
+  # ── vLLM (optional, --profile vllm) ──────────────────────────
   # - model_name: vllm/qwen2.5-1.5b
   #   litellm_params:
   #     model: openai/Qwen/Qwen2.5-1.5B-Instruct
@@ -58,6 +54,5 @@ router_settings:
 
 general_settings:
   # Callers use this as their API key. Set LITELLM_MASTER_KEY in .env
-  # to the same value. If unset, LiteLLM runs without auth — fine for a
-  # laptop, not fine for anything reachable.
+  # (must start with "sk-"). Without it, LiteLLM runs with no auth.
   master_key: os.environ/LITELLM_MASTER_KEY

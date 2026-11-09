@@ -6,67 +6,61 @@ services:
     ports:
       - "2026:2026"
     environment:
-      # Aegra's own state (threads, checkpoints, runs) — see aegra-postgres below.
-      DATABASE_URL: postgresql://aegra:aegra@aegra-postgres:5432/aegra
+      # Aegra state (threads, runs, checkpoints) in aegra-postgres.
+      # Component vars on purpose: DATABASE_URL stays unset so the app's own
+      # settings.database_url (sqlite in /app/data/app.db) is not hijacked.
+      POSTGRES_USER: ${AEGRA_POSTGRES_USER:-aegra}
+      POSTGRES_PASSWORD: ${AEGRA_POSTGRES_PASSWORD:-aegra}
+      POSTGRES_HOST: aegra-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${AEGRA_POSTGRES_DB:-aegra}
       REDIS_BROKER_ENABLED: "true"
       REDIS_URL: redis://aegra-redis:6379/0
       WORKER_COUNT: ${WORKER_COUNT:-3}
       N_JOBS_PER_WORKER: ${N_JOBS_PER_WORKER:-10}
       AUTH_TYPE: ${AUTH_TYPE:-noop}
 
-      # Our own registry (agents/subagents/tools/prompts) — distinct name
-      # from DATABASE_URL on purpose, see the NOTE in app/registries/db.py.
-      REGISTRY_DATABASE_URL: postgresql://postgres:postgres@registry-db:5432/agentic_platform
+      MAIN_MODEL: ${MAIN_MODEL:-ollama:llama3.1:8b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-ollama:nomic-embed-text}
+      ASYNC_RESEARCHER_URL: http://agent-server:2026
 
-      # Local model serving — your own already-running Ollama on the host,
-      # not a container. host.docker.internal resolves automatically on
-      # Docker Desktop (Mac/Windows); the extra_hosts entry below is what
-      # makes it also resolve on Linux (Docker 20.10+). Override via
-      # OLLAMA_BASE_URL in .env if your setup needs something else (e.g. a
-      # specific LAN IP).
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      LANGGRAPH_URL: http://agent-server:2026
       QDRANT_URL: http://qdrant:6333
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
-      DEFAULT_MODEL: ${DEFAULT_MODEL:-ollama:llama3.1:8b}
 
-      # Cloud model providers — optional. Only needed if an agent's `model`
-      # field (set in the Dashboard, e.g. "openai:gpt-4o" or
-      # "anthropic:claude-sonnet-4-6") uses that provider. init_chat_model
-      # resolves the prefix; langchain-openai/langchain-anthropic (already
-      # in requirements.txt) do the rest. Leave blank to stay fully local.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
 
-      # Aegra's own built-in OpenTelemetry export to Langfuse — no callback
-      # wiring needed in our graph code for this (see observability.py).
       OTEL_TARGETS: ${OTEL_TARGETS:-LANGFUSE}
-      LANGFUSE_BASE_URL: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+      LANGFUSE_HOST: ${LANGFUSE_INTERNAL_URL:-http://langfuse-web:3000}
+      LANGFUSE_BASE_URL: ${LANGFUSE_INTERNAL_URL:-http://langfuse-web:3000}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+    volumes:
+      - ./data:/app/data
     depends_on:
       aegra-postgres:
         condition: service_healthy
       aegra-redis:
         condition: service_healthy
-      registry-db:
-        condition: service_healthy
       qdrant:
         condition: service_started
+      admin-api:
+        condition: service_healthy   # admin-api creates the SQLite tables
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # Linux only — no-op/harmless on Docker Desktop
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:2026/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 40s
     restart: unless-stopped
 
-  # Aegra's own state — threads, runs, checkpoints. Separate from
-  # registry-db (our agents/tools/prompts) and from Langfuse's postgres —
-  # three different tools, three different schemas, none of them need to
-  # know about each other.
   aegra-postgres:
     image: pgvector/pgvector:pg18
     environment:
@@ -74,9 +68,9 @@ services:
       POSTGRES_USER: ${AEGRA_POSTGRES_USER:-aegra}
       POSTGRES_PASSWORD: ${AEGRA_POSTGRES_PASSWORD:-aegra}
     ports:
-      - "5434:5432"   # 5433 is registry-db, 5432 is Langfuse's own postgres
+      - "127.0.0.1:5434:5432"   # 5432 is Langfuse's postgres
     volumes:
-      - aegra_postgres_data:/var/lib/postgresql
+      - aegra_postgres_data:/var/lib/postgresql   # pg18 layout
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${AEGRA_POSTGRES_USER:-aegra} -d ${AEGRA_POSTGRES_DB:-aegra}"]
       interval: 5s
@@ -84,11 +78,8 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Job queue + SSE streaming broker for Aegra's worker pool.
   aegra-redis:
     image: redis:7-alpine
-    # ports:
-    #   - "6379:6379"
     volumes:
       - aegra_redis_data:/data
     healthcheck:
@@ -98,41 +89,14 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # The Dashboard's data store: agents, subagents, tools, prompt versions.
-  # Distinct from Langfuse's own postgres (observability/docker-compose.langfuse.yml)
-  # on purpose — don't let app data and Langfuse's internal schema share a
-  # database, they have nothing to do with each other and you don't want a
-  # Langfuse upgrade touching your agent registry.
-  registry-db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: agentic_platform
-    ports:
-      - "5433:5432"   # 5433 on the host — 5432 is already Langfuse's postgres
-    volumes:
-      - registry_db_data:/var/lib/postgresql/data
-      # Runs once, only on first container start (empty data dir) — this is
-      # how the schema gets created with zero manual steps on `make up`.
-      - ./backend/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333"
+      - "127.0.0.1:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
-  # Admin API — CRUD over agents/subagents/tools/prompts + the Langfuse
-  # evaluate-and-redirect endpoint. What dashboard/index.html talks to.
   admin-api:
     build:
       context: .
@@ -140,28 +104,86 @@ services:
     ports:
       - "8000:8000"
     environment:
-      REGISTRY_DATABASE_URL: postgresql://postgres:postgres@registry-db:5432/agentic_platform
-      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      MAIN_MODEL: ${MAIN_MODEL:-ollama:llama3.1:8b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-ollama:nomic-embed-text}
+
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      LANGGRAPH_URL: http://agent-server:2026
+      LITELLM_URL: ${LITELLM_URL:-}
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-}
+      VLLM_URL: ${VLLM_URL:-}
+      QDRANT_URL: http://qdrant:6333
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+
+      # LANGFUSE_HOST = what containers call; LANGFUSE_PUBLIC_URL = what the
+      # browser opens (used for "open in Langfuse" links).
+      LANGFUSE_HOST: ${LANGFUSE_INTERNAL_URL:-http://langfuse-web:3000}
+      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
-    depends_on:
-      registry-db:
-        condition: service_healthy
+    volumes:
+      - ./data:/app/data   # also holds data/connections.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  # Dashboard — static file, no build step. Open http://localhost:8080.
   dashboard:
-    image: nginx:alpine
+    build:
+      context: ./dashboard
+      args:
+        VITE_API_BASE: ${DASHBOARD_API_URL:-http://localhost:8000}
     ports:
       - "8080:80"
+    depends_on:
+      - admin-api
+    restart: unless-stopped
+
+  # ── agent-kit demo (static): http://localhost:3001 ─────────────────
+  # docker compose --profile demo up -d agent-kit-demo
+  agent-kit-demo:
+    profiles: ["demo"]
+    image: nginx:alpine
+    ports:
+      - "3001:80"
     volumes:
-      - ./dashboard:/usr/share/nginx/html:ro
+      - ./agent-kit/example/static:/usr/share/nginx/html:ro
+    depends_on:
+      - admin-api
+    restart: unless-stopped
+
+  # ── agent-kit Next.js example: http://localhost:3002 ───────────────
+  # docker compose --profile demo-next up -d --build agent-kit-next
+  # NOTE: env var names are guesses until I see example/my-app's route.ts.
+  agent-kit-next:
+    profiles: ["demo-next"]
+    build:
+      context: ./agent-kit
+      dockerfile: example/my-app/Dockerfile
+    ports:
+      - "3002:3000"
+    environment:
+      # Server-side (route handler reads this at runtime)
+      LANGGRAPH_API_URL: http://admin-api:8000/v1/lg
+      # NEXT_PUBLIC_* work at runtime in `next dev` (not in prod builds) — fine here.
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_KEY: ${DEMO_API_KEY:-${ADMIN_TOKEN}}
+      NEXT_PUBLIC_AGENT_ID: ${DEMO_AGENT_ID:-}
     depends_on:
       - admin-api
     restart: unless-stopped
 
 volumes:
   qdrant_data:
-  registry_db_data:
   aegra_postgres_data:
   aegra_redis_data:
+
+networks:
+  default:
+    name: agentic-net
+    external: true

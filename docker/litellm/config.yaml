@@ -35,9 +35,9 @@ model_list:
 
   # ── Ollama (host, outside Docker) ─────────────────────────────
   # Pull the model on your host first:  ollama pull llama3.1:8b
-  - model_name: ollama/qwen2.5-coder:7b
+  - model_name: ollama/llama3.1:8b
     litellm_params:
-      model: ollama/qwen2.5-coder:7b
+      model: ollama/llama3.1:8b
       api_base: http://host.docker.internal:11434
 
   # ── vLLM (optional, --profile vllm) ──────────────────────────

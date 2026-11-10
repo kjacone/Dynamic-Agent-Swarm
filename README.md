@@ -1,147 +1,78 @@
 # Dynamic AI Agent
 
-A self-hostable, multi-tenant platform for configuring, publishing, running, and evaluating LLM agents. Includes an admin dashboard, a FastAPI gateway, a Python SDK, an embeddable chat widget, and `agent-kit` React components.
+A self-hostable, multi-tenant platform for building, running, governing and auditing LLM agents and automated business workflows. It includes an admin dashboard, a FastAPI gateway, a Python SDK, an embeddable chat widget, `agent-kit` React components, and an enterprise layer for regulated industries.
 
 ## Features
 
-- **Agents:** Configure models, prompts, tools, RAG collections, and subagents.
-- **Versioning:** Publish immutable versions and roll back when needed.
-- **Chat API:** JSON and server-sent events (SSE), protected by API keys.
-- **Knowledge:** Upload TXT, Markdown, and PDF documents; retrieve via a vector store (Qdrant in the compose topology).
-- **Evaluation:** Run datasets against draft or published agents; optionally sync results to Langfuse.
-- **Observability:** Trace agent runs with Langfuse (OpenTelemetry export, no callback wiring required).
-- **Fine-tuning:** Optional LLaMA-Factory training jobs.
-- **Integrations:** Python SDK, `embed.js`, and CopilotKit-style React components.
-- **Models:** Ollama, Anthropic, OpenAI, Google, vLLM, and LiteLLM.
-- **Two runtimes:**
-  - **Local dev:** `langgraph dev` (free, no keys, hot-reload) for fast iteration.
-  - **Production:** Aegra (open-source, self-hosted, no license key) for durable threads/runs, Redis-backed workers, and Postgres checkpoints.
+**Agent platform**
+- **Agents:** models, prompts, tools, RAG collections, subagents. Publish immutable versions and roll back.
+- **Chat API:** JSON or SSE, protected by tenant-scoped API keys.
+- **Knowledge:** upload TXT, Markdown and PDF; retrieve from Qdrant.
+- **Evaluation and tracing:** run datasets against draft or published agents; Langfuse via OpenTelemetry.
+- **Models:** Ollama, Anthropic, OpenAI, Google, vLLM, LiteLLM. Optional LLaMA-Factory fine-tuning.
+- **Runtimes:** `langgraph dev` for local work; Aegra (Redis workers, Postgres checkpoints) for production.
+
+**Enterprise layer** (`src/nmb_marketplace_agent/enterprise/`, served at `/enterprise/*`)
+
+| Capability | What it gives you |
+| --- | --- |
+| Audit trail | Hash-chained, tamper-evident log; optional HMAC key; signed checkpoints; JSONL export |
+| Access control | RBAC, OIDC SSO (Entra, Okta, Keycloak), IdP group to role mapping |
+| Guardrails | PII and secret redaction, prompt-injection blocking, per-tool policies, human review on risky tool calls |
+| Workflows | Durable engine: agent, tool, connector, approval, condition and parallel steps; retries; safe expressions |
+| Approvals | Maker-checker, N-of-M approvers, veto on reject, SLA escalation and expiry |
+| Connectors | REST (mTLS), file drop, fixed-width/CSV, IMAP, RPA bridge; egress allow-list; secrets by reference only |
+| Solution packs | Banking KYC, insurance claims, telecom service, government documents, healthcare, NGO procurement, corporate automation, education |
+| Licensing and metering | Offline Ed25519 licences (modules, solutions, tenants, seats, quotas); usage metering with CSV export |
+| Compliance | Control mapping (SOC 2, ISO 27001, GDPR/Kenya DPA, PCI DSS, HIPAA, NIST), live posture checks, evidence bundle. Not a certification. |
+
+Design notes: [docs/ENTERPRISE_PLATFORM.md](docs/ENTERPRISE_PLATFORM.md).
 
 ## Architecture
 
-There are two supported topologies. They share the same Python package (`nmb_marketplace_agent`) but differ in which runtime executes agent graphs.
-
-### Local dev (single developer, `uv` + `langgraph dev`)
-
 ```text
-dashboard (Vite :5173) ──▶ admin/gateway API (:8000) ──▶ langgraph dev (:2024)
-                               │
-                               ├──▶ Ollama (host :11434) [optional]
-                               └──▶ Langfuse (host :3000) [optional]
+dashboard ──▶ admin/gateway API (FastAPI :8000) ──▶ agent runtime (langgraph dev :2024 | Aegra :2026)
+                 │                                      ├── aegra-postgres, aegra-redis
+                 ├── registry-db (Postgres)             └── OTEL ──▶ Langfuse
+                 ├── qdrant (vectors)
+                 └── Ollama / cloud model providers
 ```
 
-- **Admin/Gateway:** FastAPI (`:8000`) — `nmb_marketplace_agent.api.main:app`.
-- **Runtime:** `langgraph dev` (`:2024` by default).
-- **Dashboard:** React + Vite (`:5173`).
-- **Storage:** Postgres `registry-db` (`:5433` on host, running in the compose topology) holds agents/tools/prompts; checkpoints live with the runtime.
-- **Optional:** Ollama, Langfuse, LiteLLM, vLLM, trainer.
-
-### Docker Compose (production-shaped, `Aegra`)
-
-See `services.txt` (app stack) and the Langfuse compose file (observability stack). Bring them up together so container DNS resolves across both — see "Troubleshooting" below.
-
-```text
-┌──────────────────────────────────────────────────────────────────────┐
-│ your host                                                            │
-│                                                                      │
-│ dashboard :8080 ──▶ nginx (static dashboard)                         │
-│                                                                      │
-│ admin-api :8000 ──▶ FastAPI (registry CRUD, eval, gateway)           │
-│                                                                      │ 
-│ agent-server :2026 ──▶ Aegra (:2026) — worker pool ────-─────────────┐ 
-│                                                                      │ 
-│  ├── aegra-postgres (:5434)                                          │ 
-│  ├── aegra-redis                                                     │ 
-│  └── qdrant (:6333)                                                  │ 
-│                                                                      │ 
-│ registry-db (:5433) ◀────────────────────────────────────────────────┘ 
-│                                                                      │
-│ Langfuse (compose file #2)                                           │
-│ langfuse-web :3000 ◀── OTEL traces                                   │
-│ langfuse postgres :5432 (127.0.0.1)                                  │
-│ clickhouse :8123/:9000 (127.0.0.1)                                   │
-│ minio :9090 (host), :9091 console (127.0.0.1)                        │
-│                                                                      │
-│ Ollama (host process, port 11434)                                    │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-**Components (compose):**
-
-- **`agent-server` (`:2026`)** — Aegra. Runs agent graphs, holds threads/runs/checkpoints in `aegra-postgres`, uses `aegra-redis` as the job queue + SSE broker, and exports traces to Langfuse via OTEL.
-- **`admin-api` (`:8000`)** — FastAPI. CRUD over the registry (agents, subagents, tools, prompts, versions) plus the Langfuse evaluate-and-redirect endpoint. What the dashboard talks to.
-- **`dashboard` (`:8080`)** — nginx serving the built dashboard.
-- **`aegra-postgres` (`:5434`)** — Aegra's own state. **`pgvector/pgvector:pg18`; the data volume mounts `/var/lib/postgresql`, not `/var/lib/postgresql/data` — that is correct for PG 18 and must not be "normalised" to the PG 17 layout.**
-- **`registry-db` (`:5433`)** — the platform's own data (agents/tools/prompts). Separate from Aegra's Postgres and Langfuse's Postgres on purpose — three tools, three schemas, no upgrade can touch another's data.
-- **`aegra-redis`** — internal only, not published on the host.
-- **`qdrant` (`:6333`)** — vector store for RAG.
-- **Langfuse stack** (separate compose file) — observability UI at `:3000`, its own Postgres/ClickHouse/MinIO/Redis, all bound to `127.0.0.1` except web (and MinIO on `:9090` for the S3 endpoint).
+- **admin-api (`:8000`):** registry CRUD, evaluation, public chat gateway, `/enterprise/*`.
+- **Runtime:** executes agent graphs; every tool call passes through the enterprise guard.
+- **registry-db:** agents, tools, prompts and the enterprise tables. Kept separate from Aegra's and Langfuse's Postgres so no upgrade touches another's data.
+- **aegra-postgres:** `pgvector/pgvector:pg18`. Its volume mounts `/var/lib/postgresql` (the PG 18 layout), not `/var/lib/postgresql/data`. Do not change it.
+- **Langfuse:** separate compose file with its own Postgres, ClickHouse, MinIO and Redis.
 
 ## Requirements
 
-- **Python** 3.11+ (3.12 recommended; the Dockerfiles use 3.12).
-- **Node.js** 18+ (20+ recommended) for the dashboard and `agent-kit` example.
-- **`uv`** — https://docs.astral.sh/uv/
-- **Docker** with BuildKit (the Dockerfiles use cache mounts) for the compose path.
-- **A model provider.** Ollama can run everything locally; cloud providers (OpenAI, Anthropic, Google) are optional.
+Python 3.11+ (3.12 recommended), Node 18+, [`uv`](https://docs.astral.sh/uv/), Docker with BuildKit, and a model provider (Ollama runs everything locally).
 
-## Quick start — local dev
+## Quick start (local dev)
 
 ```bash
-# 1. Install backend dependencies and pin the lockfile.
-#    (uv.lock is required by the Docker builds — commit it.)
-uv lock
-uv sync
+uv lock && uv sync
+cp .env.example .env        # set ADMIN_TOKEN and NMB_JWT_SECRET (see Configuration)
 
-# 2. Configure environment.
-cp .env.example .env
-# Set ADMIN_TOKEN and NMB_JWT_SECRET. Add provider keys if needed.
-
-# 3. Start Ollama (optional).
-docker compose -f docker/docker-compose.yml up -d ollama
-docker exec nmb-ollama ollama pull llama3.2
-
-# 4. Initialize and seed the local database.
 uv run python scripts/init_db.py
 uv run python scripts/seed.py
 
-# Terminal 1 — LangGraph dev runtime (:2024)
-uv run langgraph dev
-
-# Terminal 2 — Admin / Gateway API (:8000)
-uv run uvicorn nmb_marketplace_agent.api.main:app --reload --port 8000
-
-# Terminal 3 — Dashboard (:5173)
-cd dashboard && npm install && npm run dev
-
-# Terminal 4 — Example customer using agent-kit (:3000)
-cd agent-kit/example && npm install && npm run dev
+uv run langgraph dev                                          # terminal 1: runtime :2024
+uv run uvicorn nmb_marketplace_agent.api.main:app --reload    # terminal 2: API :8000
+cd dashboard && npm install && npm run dev                    # terminal 3: dashboard :5173
 ```
 
-- Dashboard: http://localhost:5173
-- Gateway/admin API: http://localhost:8000
-- LangGraph dev: http://localhost:2024
+Optional Ollama: `docker compose -f docker/docker-compose.yml up -d ollama && docker exec nmb-ollama ollama pull llama3.2`.
 
-agent-kit example: http://localhost:3000 (conflicts with Langfuse-web if you also run compose — run one or the other)
+## Quick start (Docker Compose)
 
-## Quick start — Docker Compose
-Prerequisite: uv.lock committed, and aegra present in pyproject.toml (see "Project setup additions" below).
+Needs a committed `uv.lock`, `aegra` in `pyproject.toml` dependencies, and a `.dockerignore` that excludes `.env`, `.venv`, `data/`, `node_modules/` and `.git`.
 
 ```bash
-# Build & run the app stack + Langfuse in ONE compose invocation so the
-# two projects share a network and `http://langfuse-web:3000` resolves
-# from `agent-server` and `admin-api`.
-docker compose \
-  -f services.txt \
-  -f observability/docker-compose.langfuse.yml \
-  up -d --build
-
-# Or bring up only the app stack (Aegra OTEL export to Langfuse will fail
-# silently — see Troubleshooting):
-docker compose -f services.txt up -d --build
+# One invocation so both projects share a network and `langfuse-web` resolves
+docker compose -f services.txt -f observability/docker-compose.langfuse.yml up -d --build
+docker compose exec admin-api alembic upgrade head
 ```
-
-### Ports after up
 
 | Service | URL |
 | --- | --- |
@@ -150,215 +81,174 @@ docker compose -f services.txt up -d --build
 | Aegra runtime | http://localhost:2026 |
 | Langfuse | http://localhost:3000 |
 | Qdrant | http://localhost:6333 |
-| Registry DB | localhost:5433 (postgres:16) |
-| Aegra DB | localhost:5434 (pgvector/pg18) |
-| MinIO S3 endpoint | http://localhost:9090 |
+| registry-db / aegra-db | localhost:5433 / localhost:5434 |
+| MinIO S3 / console | localhost:9090 / localhost:9091 |
 
-Ollama is not containerized. It runs on the host at `:11434` and is reached from containers via `host.docker.internal` (Docker Desktop resolves this automatically). On Linux, `services.txt` adds `extra_hosts: host.docker.internal:host-gateway`, which requires Docker 20.10+ and Ollama listening on `0.0.0.0` — see Troubleshooting.
-
-### Which Dockerfile when
-
-There are three:
-
-- `Dockerfile` — dev runtime, `langgraph dev` on `:8123`. Only used if you explicitly build with `--target langgraph-dev`. Not used by the default Compose path.
-- `Dockerfile.aegra` — production runtime, Aegra on `:2026`. This is what `docker-compose.yml` builds for the `agent-server` service; its default/final stage is `aegra`.
-- `Dockerfile.admin-api` — FastAPI on `:8000`. Built for the `admin-api` service.
-
-All three use `uv + pyproject.toml` with `uv sync --frozen` and require `uv.lock` to be committed.
+Ollama runs on the host (`:11434`) and is reached through `host.docker.internal`. On Linux it must listen on `0.0.0.0`.
 
 ## First chat
 
-1. Register a model in the dashboard under Models.
-2. Create or edit an agent and select its model, tools, and knowledge collections.
-3. Publish the agent.
-4. Create a publishable API key under Settings and save it securely; the raw key is shown only once.
-
-Send a chat request:
+1. Register a model (Models), create an agent, and publish it.
+2. Create a publishable API key (Settings). The raw key is shown once.
 
 ```bash
 curl -X POST http://localhost:8000/v1/chat \
-  -H "Authorization: Bearer pk_YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Hello!"}'
+  -H "Authorization: Bearer pk_YOUR_KEY" -H "Content-Type: application/json" \
+  -d '{"message":"Hello!"}'          # add Accept: text/event-stream for SSE
 ```
 
-Use `Accept: text/event-stream` to request SSE streaming.
+**Clients:** Python SDK `NmbAgent` (`nmb_marketplace_agent.client`); embed widget
+`<script src="http://localhost:8000/embed.js" data-key="pk_..." data-api="http://localhost:8000"></script>`;
+React via `agent-kit/` (`LangGraphKitProvider`, see `agent-kit/example/`).
 
-> Note: In the Compose topology, chat may route through `admin-api` on `:8000` and be proxied to `agent-server` on `:2026`, or it may have moved directly to `:2026`. Confirm against `nmb_marketplace_agent/api/main.py` before shipping client code. The URL above matches the historical gateway path.
+## Enterprise quick start
 
-### Client integrations
+```bash
+# 1. Secrets (keep out of git)
+cat >> .env <<EOF
+AUDIT_HMAC_KEY=$(openssl rand -hex 32)
+REDACTION_KEY=$(openssl rand -hex 32)
+WEBHOOK_SECRET=$(openssl rand -hex 32)
+EOF
 
-#### Python SDK
+# 2. Create the enterprise tables
+ALEMBIC_DATABASE_URL=<async db url> uv run alembic upgrade head
 
-Use `NmbAgent` from `nmb_marketplace_agent.client` in gateway mode with the gateway URL and publishable API key. It emits `thread`, `token`, `done`, and `error` events.
+# 3. Mint a named user token (admin token can view approvals but cannot decide them)
+uv run python scripts/mint_token.py officer1@bank.co acme-bank compliance_officer
 
-#### Embed widget
-
-```html
-<script src="http://localhost:8000/embed.js"
-        data-key="pk_YOUR_KEY"
-        data-api="http://localhost:8000"
-        data-title="Support"></script>
+# 4. End-to-end demo: install KYC pack, high-risk case, two approvers, audit verify, tamper detection
+uv run python scripts/demo_kyc.py
 ```
 
-#### React (agent-kit)
+The demo runs in-process on a temporary SQLite database. The LLM and bank systems are scripted, so it needs no model or network.
 
-The `agent-kit/` package provides `LangGraphKitProvider`, chat components, hooks, frontend tool handling, and readable application state. See `agent-kit/example/my-app/` for an example.
+### Dashboard screens
 
-### Useful endpoints
+Sign in with `ADMIN_TOKEN` or a named SSO/tenant JWT. Named users are bound to their token's tenant and see only what their roles allow.
+
+| Section | Screens |
+| --- | --- |
+| Build | Overview, Agents, Subagents, Prompts, Tools, Knowledge, Models, Training, Evaluations, Observability, Settings |
+| Operate and govern | Approvals, Workflows, Solutions, Connectors, Audit trail, Governance |
+
+### Roles
+
+`platform_admin`, `tenant_admin`, `agent_builder`, `workflow_designer`, `operator`, `approver`, `auditor`, `viewer`, plus industry approver roles (`compliance_officer`, `claims_adjuster`, `underwriter`, `case_worker`, `procurement_officer`, `clinician_reviewer`, `registrar`, `team_lead`, `finance_controller`). Add more with `EXTRA_APPROVER_ROLES`.
+
+### Solution packs
+
+Packs are YAML in `enterprise/solutions/packs/`. Installing one creates agents, versioned workflows, policies, disabled connector templates and evaluation sets for the tenant. It is parameterised and idempotent; re-installing upgrades in place and keeps earlier settings.
+
+```bash
+curl -X POST localhost:8000/enterprise/solutions/banking-kyc/install \
+  -H "Authorization: Bearer $ADMIN_JWT" -H 'Content-Type: application/json' \
+  -d '{"parameters":{"edd_threshold":60,"model":"ollama:llama3.1:8b"}}'
+```
+
+Packs are starting templates. Have each customer's compliance team review prompts, thresholds and wording. Workflows expect agents to return JSON; weaker models may need stricter prompts or `retries`.
+
+### Licensing
+
+```bash
+uv run python scripts/issue_license.py keygen > keys.pem          # once; keep the private key offline
+uv run python scripts/issue_license.py issue --key license_private.pem --customer "Acme Bank" \
+  --modules workflows,approvals,connectors,solutions,compliance,sso --solutions banking-kyc \
+  --tenants 2 --seats 150 --deployment air_gapped --quota agent_runs=500000 --days 365
+```
+
+Set `LICENSE_ENFORCE=true`, `LICENSE_PUBLIC_KEY` and the customer's `LICENSE_KEY` in production. With enforcement off (the default) everything is unlocked for development. An expired licence never blocks access to the customer's own audit data.
+
+## Configuration
+
+Set in `.env` (local) or the compose files.
+
+| Variable | Purpose |
+| --- | --- |
+| `ADMIN_TOKEN` | Admin bearer token. At least 32 random characters. |
+| `NMB_JWT_SECRET` | Signs and verifies tenant JWTs. |
+| `DATABASE_URL` | Aegra state (threads, runs, checkpoints). Do not point at registry-db. |
+| `REGISTRY_DATABASE_URL` | Platform data. |
+| `REDIS_URL`, `REDIS_BROKER_ENABLED`, `WORKER_COUNT`, `N_JOBS_PER_WORKER` | Aegra queue and workers. |
+| `AUTH_TYPE` | Aegra auth. Never leave `noop` on anything reachable. |
+| `OLLAMA_BASE_URL`, `EMBEDDING_MODEL`, `DEFAULT_MODEL` | Local models. |
+| `QDRANT_URL` | Vector store. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | Only for those providers. |
+| `OTEL_TARGETS`, `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Tracing. Keys must match Langfuse's bootstrap keys or traces get 401. |
+
+**Enterprise**
+
+| Variable | Purpose |
+| --- | --- |
+| `AUDIT_HMAC_KEY` | Keys the audit chain so a database admin cannot forge it. |
+| `REDACTION_KEY` | Keys deterministic redaction tokens. |
+| `CORS_ORIGINS` | Comma-separated front-end origins (default `*`; restrict in production). |
+| `EGRESS_ALLOWED_HOSTS` | Hosts connectors may call (default: none). |
+| `OIDC_JWKS_URL`, `OIDC_ISSUER`, `OIDC_AUDIENCE`, `OIDC_TENANT_CLAIM`, `OIDC_ROLES_CLAIM`, `OIDC_ROLE_MAP` | Enterprise SSO and group-to-role mapping. |
+| `LICENSE_ENFORCE`, `LICENSE_PUBLIC_KEY`, `LICENSE_KEY` / `LICENSE_FILE` | Licensing. |
+| `WEBHOOK_SECRET` | HMAC for `POST /enterprise/hooks/{tenant}/{workflow}`. |
+| `ALLOW_ADMIN_TOKEN_APPROVALS` | Keep `false`. Shared credentials should not approve. |
+| `ENTERPRISE_GUARDRAILS`, `ENTERPRISE_SWEEPER`, `ENTERPRISE_SWEEP_INTERVAL_S`, `QUOTA_HARD_STOP` | Feature toggles and SLA sweep interval. |
+| `AUTO_CREATE_TABLES`, `ALEMBIC_DATABASE_URL` | Schema management (see Database migrations). |
+
+## Database migrations
+
+`create_all` is fine for local dev. For production use Alembic.
+
+```bash
+ALEMBIC_DATABASE_URL=postgresql+asyncpg://user:pass@host/db uv run alembic upgrade head
+```
+
+Set `AUTO_CREATE_TABLES=false` in production and run the upgrade as a deploy step. On Postgres the migration also makes `audit_events` append-only at the database level. Existing databases: run `alembic stamp` for the baseline first (the migration skips tables that already exist).
+
+## Endpoints
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | Admin/gateway health (used by Compose healthcheck) |
-| `GET /openapi.json` | API schema |
-| `/agents` | Admin agent management |
-| `/models` | Model registry |
-| `/rag` | Knowledge collections |
-| `/evals` | Evaluation datasets and runs |
-| `/keys` | API key management |
-| `POST /v1/chat` | Public chat (JSON or SSE) |
-| `POST /v1/feedback` | Submit chat feedback |
+| `GET /health` | Health check |
+| `/agents`, `/models`, `/rag`, `/evals`, `/keys` | Admin APIs (need `ADMIN_TOKEN`) |
+| `POST /v1/chat`, `POST /v1/feedback` | Public chat and feedback (API key) |
 | `GET /agents/{id}/manifest` | Agent manifest |
-| `GET :2026/health` | Aegra runtime health |
+| `/enterprise/me`, `/license`, `/usage` | Identity, licence, metering |
+| `/enterprise/audit`, `/audit/verify`, `/audit/checkpoint`, `/audit/export` | Audit trail |
+| `/enterprise/workflows`, `/runs`, `/approvals` | Workflows and approvals |
+| `/enterprise/solutions`, `/connectors`, `/policies` | Packs, connectors, guardrails |
+| `/enterprise/compliance/readiness`, `/capabilities`, `/evidence` | Compliance |
 
-Admin endpoints require `Authorization: Bearer $ADMIN_TOKEN`. Public endpoints require a publishable or secret API key. API keys are tenant-scoped; never expose secret keys or commit `.env`.
-
-### Environment variables
-
-Copy `.env.example` to `.env` (local dev) and/or set them in the Compose files. The most load-bearing ones are below:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `ADMIN_TOKEN` | required | Bearer token for admin endpoints. Set a strong value. |
-| `NMB_JWT_SECRET` | required | Signing key for tenant JWTs. Set a strong value. |
-| `DATABASE_URL` | `postgresql://aegra:aegra@aegra-postgres:5432/aegra` | Aegra state (threads, runs, checkpoints). Distinct from registry DB on purpose — do not repoint to registry-db. |
-| `REGISTRY_DATABASE_URL` | `postgresql://postgres:postgres@registry-db:5432/agentic_platform` | Platform data (agents/tools/prompts). |
-| `REDIS_URL` | `redis://aegra-redis:6379/0` | Aegra worker queue + SSE broker. |
-| `REDIS_BROKER_ENABLED` | `"true"` | Enables the Redis-backed queue. |
-| `WORKER_COUNT` | `3` | Number of Aegra workers. |
-| `N_JOBS_PER_WORKER` | `10` | Concurrency per worker. |
-| `AUTH_TYPE` | `noop` | Aegra auth mode. Do not leave `noop` on anything internet-facing. |
-| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Local Ollama endpoint. Override if Ollama runs at a fixed LAN IP. |
-| `EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model. |
-| `DEFAULT_MODEL` | `ollama:llama3.1:8b` | Fallback model when an agent does not set one. |
-| `QDRANT_URL` | `http://qdrant:6333` | Vector store. |
-| `OPENAI_API_KEY / OPENAI_BASE_URL` | empty | Optional. Only required if an agent's model uses the `openai:` prefix. |
-| `ANTHROPIC_API_KEY` | empty | Optional. Only required for `anthropic:` prefix. |
-| `OTEL_TARGETS` | `LANGFUSE` | OTEL export target(s) for Aegra traces. |
-| `LANGFUSE_BASE_URL / LANGFUSE_HOST` | `http://langfuse-web:3000` | Must match the Langfuse Compose hostname, or use `http://host.docker.internal:3000` if the projects are on separate networks. |
-| `LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY` | empty | Must match the Langfuse bootstrap keys (`LANGFUSE_INIT_PROJECT_PUBLIC_KEY` / `..._SECRET_KEY`) in the Langfuse Compose file. Mismatch = every trace gets 401. |
-
-Langfuse itself has ~80 environment variables, all documented inline in the Compose file (`# CHANGEME` marks values you must supply). The ones that matter most for integration are the `LANGFUSE_*_KEY` pairs above and `LANGFUSE_INIT_PROJECT_*` / `LANGFUSE_INIT_USER_*` when you want automatic project + user bootstrap.
-
-### Project setup additions (one-time)
-
-These are not yet in the tree but are required for the Compose path to work:
-
-- `uv.lock` — commit it. All three Dockerfiles run `uv sync --frozen`, which hard-fails without it. Run `uv lock` once locally and commit.
-- `aegra` in `pyproject.toml` — the Aegra stage `CMD` is `aegra serve`. Add `"aegra"` to `[project].dependencies` and re-lock.
-- `.dockerignore` — `COPY . .` currently bakes `.env`, `.venv`, `data/`, `node_modules/`, and `.git` into every image. Minimum contents:
-
-```gitignore
-gitignore
-.env
-.env.*
-!.env.example
-.venv/
-**/__pycache__/
-**/*.pyc
-.git/
-node_modules/
-**/node_modules/
-data/
-dashboard/dist/
-**/*.log
-.pytest_cache/
-```
-
-Note: this also removes `.env` from the `langgraph-dev` stage, and `langgraph.json` declares `"env": ".env"`. Feed environment variables via the Compose `environment` block (as `agent-server` already does) or change the key in `langgraph.json`.
-
-- `.env.example` — if it does not exist, add one mirroring the table above with placeholder values.
-- Extra Postgres for `admin-api` — if `admin_api/api` uses SQLAlchemy async with `asyncpg` (or sync with `psycopg`), enable the optional dependency: `uv sync --frozen --no-dev --extra postgres` in `Dockerfile.admin-api`.
-- `/health` on `admin-api` — the Compose `depends_on` for the dashboard can only gate on `condition: service_healthy` once `admin-api` has a healthcheck; add one that hits `/health`.
-
-### Tests and builds
+## Tests and builds
 
 ```bash
-# Backend
-uv lock --check                   # lockfile is in sync with pyproject.toml
-uv run pytest tests/ -q
-uv run python -m compileall src scripts tests
-
-# Dashboard
-cd dashboard && npm run build     # produces dashboard/dist — mount that, not the source root
-
-# Images
-docker build --target langgraph-dev -t app:dev -f Dockerfile .
-docker build --target aegra         -t app:aegra -f Dockerfile.aegra .
-docker build                         -t app:admin -f Dockerfile.admin-api .
+uv lock --check && uv run pytest tests/ -q
+uv run pytest tests/enterprise -q            # enterprise layer only
+cd dashboard && npm run build                # serve dashboard/dist, not the source root
+docker build --target aegra -t app:aegra -f Dockerfile.aegra .
+docker build -t app:admin -f Dockerfile.admin-api .
 ```
 
-### Data and configuration
+`Dockerfile` (dev, `langgraph dev`) is only used with `--target langgraph-dev`. All Dockerfiles run `uv sync --frozen` and need `uv.lock` committed.
 
-The storage layer changed with the Compose topology. SQLite and FAISS are the old local-only layout and are no longer authoritative when you run Compose:
+## Troubleshooting
 
-- Registry data (agents, subagents, tools, prompt versions): `registry-db` Postgres. Schema is created on first container start from `./backend/db/schema.sql`.
-- Aegra state (threads, runs, checkpoints): `aegra-postgres` (pgvector/pg18).
-- Queue + SSE broker: `aegra-redis`.
-- Vector store: `qdrant_data` volume.
-- Langfuse data: its own Postgres, ClickHouse, MinIO, and Redis — never share these with the app.
+- **No traces in Langfuse:** check `LANGFUSE_BASE_URL` reachability, that the key pair matches the bootstrap keys, and `OTEL_TARGETS=LANGFUSE`. Both compose files must be started in one invocation (or share an external network). Check `docker compose logs agent-server | grep -i otel`.
+- **`ModuleNotFoundError: aegra`:** add it to `pyproject.toml`, run `uv lock`, rebuild.
+- **`uv sync --frozen` fails:** commit `uv.lock`.
+- **`asyncpg` / `aiosqlite` missing:** `uv add asyncpg` (Postgres) or `uv add aiosqlite` (SQLite).
+- **Alembic cannot find the URL:** set `ALEMBIC_DATABASE_URL`.
+- **Approve buttons disabled:** you are signed in with the shared admin token. Use a named user token.
+- **Workflow fails at a parse step:** the model returned non-JSON. Use a stronger model, tighten the pack prompt, or add `retries`.
+- **Connector calls refused:** add the host to `EGRESS_ALLOWED_HOSTS`.
+- **Ollama unreachable on Linux:** run Ollama with `OLLAMA_HOST=0.0.0.0`.
+- **Blank dashboard or 404 assets:** nginx must serve `dashboard/dist`.
+- **`agent-server` flaps unhealthy at start:** raise `start_period` to `60s`.
+- **Port 3000 clash:** the `agent-kit` example and Langfuse both use it; run one.
 
-Local-dev legacy (still used by `uv run langgraph dev` / SQLite path):
+## Security and data
 
-- `data/app.db`
-- `data/docs/`
-- `data/indexes/`
-- `data/training/`
-- `data/connections.json`
+- Tenant and agent access derive from API keys or token claims; request-supplied IDs must match.
+- Publishable keys can be limited by origin and rate. The current rate limiter is per process; use Redis for multi-worker limits.
+- Replace `postgres:postgres` / `aegra:aegra` defaults and every Langfuse `# CHANGEME` before exposing anything. A remaining placeholder in a running deployment is a security incident.
+- Bind internal services (`registry-db`, `aegra-postgres`, ClickHouse) to `127.0.0.1` and put a reverse proxy in front of anything public.
+- Back up `registry_db_data`, `aegra_postgres_data`, `qdrant_data` and the Langfuse volumes. Never commit `.env`, database files or runtime data.
+- Review `docs/BACKEND_REVIEW.md` before production, especially JWT verification and FAISS deserialization.
 
-Back up the relevant Docker volumes (`aegra_postgres_data`, `registry_db_data`, `qdrant_data`, plus the Langfuse volumes) to preserve state. Do not commit `.env`, DB files, credentials, or runtime data.
-
-### Operational notes
-
-Port map on the host:
-
-- `3000` — Langfuse web
-- `5432` — Langfuse Postgres
-- `5433` — registry-db
-- `5434` — aegra-postgres
-- `6333` — Qdrant
-- `8000` — admin-api
-- `8080` — dashboard
-- `2026` — Aegra
-- `8123` — langgraph-dev (only if built)
-- `9090` — MinIO S3
-- `9091` — MinIO console
-- `11434` — Ollama (host process)
-
-Network isolation: everything is bound to `127.0.0.1` except Langfuse web (`:3000`) and MinIO's S3 endpoint (`:9090`), which are internal-only by design. If you expose the platform, front it with a reverse proxy and do not publish `registry-db`, `aegra-postgres`, or ClickHouse on `0.0.0.0`.
-
-Two Compose files must share a network. If you run them separately, `http://langfuse-web:3000` will not resolve inside `agent-server` or `admin-api`. Either bring them up in one invocation (recommended), declare an external network in both files, or point `LANGFUSE_BASE_URL` / `LANGFUSE_HOST` at `http://host.docker.internal:3000`.
-
-### Troubleshooting
-
-- `agent-server` is up but Langfuse is empty. Almost always one of: (a) `LANGFUSE_BASE_URL` / `LANGFUSE_HOST` cannot reach `langfuse-web`; (b) `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` do not match the Langfuse bootstrap keys; (c) `OTEL_TARGETS` is not `LANGFUSE`. Check `docker compose logs agent-server | grep -i otel`.
-- `ModuleNotFoundError: aegra in agent-server` — `aegra` is not in `pyproject.toml`. Add it and rebuild (run `uv lock` first).
-- `uv sync --frozen` fails with `lockfile missing` — commit `uv.lock`.
-- Aegra data volume looks empty after `up` — verify `aegra-postgres` still mounts `/var/lib/postgresql` (PG 18 layout). Changing it to `/var/lib/postgresql/data` will break the volume initialization.
-- `ModuleNotFoundError: asyncpg / psycopg in admin-api` — SQLAlchemy driver missing; add `--extra postgres` to the build's `uv sync` and make sure `[project.optional-dependencies].postgres` contains the correct driver for the URL prefix used in `main.py`.
-- Ollama unreachable from containers on Linux — host Ollama must listen on `0.0.0.0:11434` (`OLLAMA_HOST=0.0.0.0` in its unit/environment), and `host.docker.internal` must be resolvable (`services.txt` handles this via `extra_hosts: host.docker.internal:host-gateway`).
-- Dashboard shows a blank page / 404 on JS assets — nginx is serving the Vite source root. Mount `dashboard/dist` (built with `npm run build`), not `./dashboard`.
-- Cold-start `agent-server` flaps unhealthy — `start_period: 20s` is tight for 3 workers + Redis + Postgres + first-boot migrations; raise it to `60s` if you see flapping.
-
-### Security and limitations
-
-- Tenant and agent access is derived from API keys; request-supplied tenant/agent IDs must match.
-- Publishable keys can be restricted by allowed origins and rate limits.
-- Configure a strong `ADMIN_TOKEN` and `NMB_JWT_SECRET` in production.
-- `AUTH_TYPE: noop` on Aegra is a local-only setting — do not ship it to anything reachable.
-- Default `postgres:postgres` / `aegra:aegra` credentials in the Compose files are local-only; replace them via env vars before exposing.
-- The current in-memory rate limiter is per process and is not suitable for coordinated multi-worker limits.
-- Review `docs/BACKEND_REVIEW.md` before production deployment, especially JWT verification, FAISS deserialization, and other tracked security findings.
-- Database schema changes are not automatically migrated by `create_all`; use a migration tool for production changes.
-- The Langfuse Compose file ships `# CHANGEME` placeholders — treat any that remain in a running deployment as a security incident.
-
+**Not built yet:** data retention and legal hold, subject access and erasure across all stores, customer-managed encryption keys, Redis rate limiting, Helm packaging. `/enterprise/compliance/capabilities` reports these honestly.

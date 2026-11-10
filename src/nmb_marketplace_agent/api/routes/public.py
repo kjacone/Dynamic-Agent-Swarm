@@ -38,6 +38,12 @@ async def chat(
     if tenant_id != key.tenant_id:
         raise HTTPException(403, "API key not authorized for this tenant")
 
+    from nmb_marketplace_agent.enterprise.hooks import enforce_chat
+
+    # Enterprise controls: guardrails (PII redaction / injection block), hash-only audit, usage metering.
+    body.message = await enforce_chat(db, tenant_id=tenant_id, agent_id=agent_id,
+                                      actor=f"key:{key.prefix or key.id}", message=body.message)
+
     from langgraph_sdk import get_client
 
     lg_url = os.environ.get("LANGGRAPH_URL", "http://127.0.0.1:2024")

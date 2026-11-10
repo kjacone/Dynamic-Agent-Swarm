@@ -133,7 +133,7 @@ function AgentForm({
   initial?: Agent;
 }) {
   const [name, setName] = useState(initial?.name || "");
-  const [model, setModel] = useState(initial?.model || "ollama:qwen2.5-coder:7b");
+  const [model, setModel] = useState(initial?.model || "ollama:llama3.1:8b");
   const [prompt, setPrompt] = useState(initial?.system_prompt || "");
   const [toolIds, setToolIds] = useState<string[]>(initial?.tool_ids || []);
   const [ragIds, setRagIds] = useState<string[]>(initial?.rag_collection_ids || []);

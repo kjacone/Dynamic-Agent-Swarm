@@ -1,3 +1,5 @@
+import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -35,6 +37,9 @@ from nmb_marketplace_agent.api.routes import (
     observability as observability_routes,
 )
 from nmb_marketplace_agent.config.database import init_db
+from nmb_marketplace_agent.enterprise import models as _enterprise_models  # noqa: F401 (register tables)
+from nmb_marketplace_agent.enterprise.api import router as enterprise_router
+from nmb_marketplace_agent.enterprise.api import sweeper_loop
 
 PKG_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PKG_DIR / "static"
@@ -45,14 +50,18 @@ admin = [Depends(require_admin)]
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    sweeper = asyncio.create_task(sweeper_loop()) if os.environ.get("ENTERPRISE_SWEEPER", "on") == "on" else None
     yield
+    if sweeper:
+        sweeper.cancel()
 
 
 app = FastAPI(title="NMB Marketplace Agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # Restrict in production: CORS_ORIGINS="https://app.bank.co,https://admin.bank.co"
+    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
@@ -84,6 +93,10 @@ for mod, prefix in [
         tags=[prefix.strip("/")],
         dependencies=admin,
     )
+
+
+# ── Enterprise layer (RBAC/SSO-protected; license-gated per module) ──
+app.include_router(enterprise_router, prefix="/enterprise", tags=["enterprise"])
 
 
 # ── Public (API-key / embed) endpoints ───────────────────────────────

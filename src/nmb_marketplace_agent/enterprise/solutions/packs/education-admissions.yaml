@@ -1,0 +1,27 @@
+id: education-admissions
+name: Admissions & Administration Automation
+industry: education
+priority: later
+version: 1.0.0
+summary: Application completeness checks, transcript extraction and registrar approval.
+compliance_frameworks: [FERPA, GDPR, Kenya-DPA]
+parameters: {}
+agents:
+  - key: admissions-clerk
+    name: Admissions Clerk
+    tools: []
+    system_prompt: |
+      Extract applicant data and check programme requirements. Return ONLY JSON {"applicant","programme","grades":{...},"requirements_met":[...],"requirements_missing":[...],"summary":"..."}.
+      You do not decide admissions. Decisions are made by the registrar using published criteria.
+workflows:
+  - key: admission_application
+    name: Admission application
+    inputs: {application_text: {required: true, type: string}, programme: {required: true, type: string}}
+    steps:
+      - {id: review, type: agent, agent: "@admissions-clerk", output: r_raw, prompt: "Programme: {{ programme }}\n{{ application_text }}"}
+      - {id: r, type: set, values: {assessment: "{{ parse_json(r_raw) }}"}}
+      - {id: registrar, type: approval, title: "Admissions decision: {{ programme }}", summary: "{{ assessment.summary }}", roles: [registrar], due_hours: 72, on_reject: declined}
+      - {id: offer, type: end, outcome: offer_made}
+      - {id: declined, type: end, outcome: declined}
+kpis:
+  - {name: time_to_decision_days, description: Submission to decision, formula: "median(updated_at - created_at)"}

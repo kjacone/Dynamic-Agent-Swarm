@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    main_model: str = "ollama:qwen2.5-coder:7b"
+    main_model: str = "ollama:llama3.1:8b"
     embedding_model: str = "openai:text-embedding-3-small"
     database_url: str = "sqlite+aiosqlite:///./data/app.db"
     vector_store_root: str = "data/indexes"

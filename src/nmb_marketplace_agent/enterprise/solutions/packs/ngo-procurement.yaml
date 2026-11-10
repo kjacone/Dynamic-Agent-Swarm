@@ -1,0 +1,40 @@
+id: ngo-procurement
+name: Procurement Intelligence
+industry: ngo
+priority: later
+version: 1.0.0
+summary: Quote comparison, donor-rule compliance checks and segregated approvals for grant-funded purchasing.
+compliance_frameworks: [Donor-Rules, ISO27001, GDPR]
+parameters:
+  tier2_limit: {default: 5000, description: Purchases above this need finance-controller approval}
+  min_quotes: {default: 3, description: Competitive quotes required above tier-2 limit}
+agents:
+  - key: quote-analyst
+    name: Quote Analyst
+    tools: [calculator]
+    system_prompt: |
+      Compare supplier quotes. Return ONLY JSON {"recommended","total","comparison":[{"supplier","total","compliance_issues":[...]}],"policy_flags":[...]}.
+      Check quotes against the donor procurement rules provided. Never pick on price alone; flag conflicts of interest and split-purchase patterns.
+  - key: report-writer
+    name: Donor Report Writer
+    tools: []
+    system_prompt: |
+      Draft donor-report narrative from the structured spend data provided. Factual, traceable to line items, no embellishment.
+workflows:
+  - key: purchase_request
+    name: Purchase request
+    inputs: {request: {required: true, type: string}, amount: {required: true, type: number}, quotes: {required: true, type: array}}
+    steps:
+      - {id: qa, type: agent, agent: "@quote-analyst", output: q_raw, prompt: "Request: {{ request }}\nQuotes: {{ quotes }}"}
+      - {id: q, type: set, values: {analysis: "{{ parse_json(q_raw) }}"}}
+      - {id: enough, type: condition, if: "amount <= ${tier2_limit} or len(quotes) >= ${min_quotes}", then: tier, else: need_quotes}
+      - {id: need_quotes, type: end, outcome: more_quotes_required}
+      - {id: tier, type: condition, if: "amount > ${tier2_limit}", then: controller, else: manager}
+      - {id: manager, type: approval, title: "Approve purchase {{ amount }}", roles: [procurement_officer], on_reject: stopped, next: ordered}
+      - {id: controller, type: approval, title: "Approve purchase {{ amount }} (above tier 2)", required_approvals: 2,
+         roles: [procurement_officer, finance_controller], on_reject: stopped}
+      - {id: ordered, type: end, outcome: approved}
+      - {id: stopped, type: end, outcome: rejected}
+kpis:
+  - {name: savings_vs_first_quote, description: Savings from competitive comparison, formula: "sum(first_quote - chosen)"}
+  - {name: policy_exception_rate, description: Requests flagged for rule exceptions, formula: "flagged / total"}

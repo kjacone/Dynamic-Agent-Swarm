@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -10,6 +11,8 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 
 
 async def init_db() -> None:
+    if os.environ.get("AUTO_CREATE_TABLES", "true").lower() != "true":
+        return  # production: run `alembic upgrade head` in the deploy step instead
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 

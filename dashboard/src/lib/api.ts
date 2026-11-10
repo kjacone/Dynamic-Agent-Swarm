@@ -28,6 +28,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   const tok = getToken();
   if (tok) headers.set("Authorization", `Bearer ${tok}`);
+  // Enterprise routes are tenant-scoped; for named (JWT/SSO) users the server uses the token's tenant instead.
+  if (path.startsWith("/enterprise")) headers.set("X-Tenant-Id", sessionStorage.getItem("nmb_tenant") || "default");
 
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   const text = await res.text();
@@ -108,6 +110,83 @@ export interface Connection {
   [k: string]: string | boolean | undefined;
 }
 
+// ── Enterprise types ───────────────────────────────────────────────
+export interface Me {
+  sub: string; tenant_id: string; roles: string[]; auth: "admin_token" | "jwt" | "oidc";
+  permissions: string[]; license: { edition: string; state: string; modules: string[] };
+}
+/** Mirrors the server's wildcard rules ("*", "res:*", exact). The server is still the authority. */
+export function can(me: Me | null, perm: string): boolean {
+  if (!me) return false;
+  const res = perm.split(":")[0];
+  return me.permissions.some((p) => p === "*" || p === perm || p === `${res}:*`);
+}
+export interface ApprovalDecision { by: string; decision: "approve" | "reject"; comment: string; ts: string }
+export interface ApprovalItem {
+  id: string; run_id: string; step_id: string; title: string; summary: string; requester: string;
+  required_approvals: number; allowed_roles: string[]; status: "pending" | "approved" | "rejected" | "expired";
+  decisions: ApprovalDecision[]; due_at: string | null; escalated: boolean;
+  created_at: string; decided_at: string | null; context: Record<string, unknown>;
+}
+export interface WfInput { required: boolean; type: string; description: string }
+export interface WfSummary { key: string; version: number; name: string | null; steps: number; inputs: Record<string, WfInput> }
+export interface WfStep {
+  id: string; type: string; name?: string; agent?: string; connector?: string; operation?: string; tool?: string;
+  roles?: string[]; required_approvals?: number; due_hours?: number | null; if?: string; then?: string; else?: string; next?: string | null;[k: string]: unknown
+}
+export interface WfSpec { key: string; name: string; version: number; description: string; inputs: Record<string, WfInput>; steps: WfStep[]; start: string | null }
+export interface RunView {
+  id: string; workflow: string; version: number; status: string; initiator: string; outcome: string | null; error: string | null;
+  history: Array<{ step: string; status: string; ts: string; error?: string }>; created_at: string; updated_at: string;
+  context?: Record<string, unknown>;
+}
+export interface AuditEventRow {
+  id: string; seq: number; ts: string; actor: string; actor_type: string; action: string; resource_type: string;
+  resource_id: string; outcome: string; details: Record<string, unknown>; prev_hash: string; hash: string;
+}
+export interface Pack {
+  id: string; name: string; industry: string; version: string; summary: string; priority: "first" | "later";
+  agents: number; workflows: number; frameworks: string[]; kpis: string[];
+  parameters: Record<string, { default: unknown; description?: string }>;
+  installed: boolean; entitled: boolean; installed_version: string | null;
+}
+export interface PostureCheck { id: string; title: string; status: "pass" | "warn" | "fail"; detail: string; remediation: string }
+export interface Readiness {
+  tenant_id: string; disclaimer: string;
+  posture: { checks: PostureCheck[]; score_pct: number };
+  frameworks: Record<string, {
+    name: string; coverage_pct: number;
+    controls: Array<{ id: string; title: string; supported: boolean; gaps: string[]; roadmap: string[] }>
+  }>;
+}
+export interface UsageView {
+  period: string; usage: Record<string, number>;
+  quotas: Record<string, { used: number; limit: number; pct: number | null; exceeded: boolean }>;
+}
+export interface PolicyDecision {
+  action: "allow" | "log" | "redact" | "require_approval" | "block"; rule_ids: string[]; reasons: string[]; text: string | null;
+  findings: Array<{ kind: string; start: number; end: number; severity: string; score: number }>;
+}
+
+async function download(path: string, filename: string) {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${getToken()}`,
+    "X-Tenant-Id": sessionStorage.getItem("nmb_tenant") || "default"
+  };
+  const res = await fetch(`${BASE}${path}`, { headers });
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+export interface ConnectorSummary { name: string; type: string; enabled: boolean; needs_setup: boolean; operations: string[] }
+export interface ConnectorDetail {
+  name: string; type: string; enabled: boolean; needs_setup: boolean;
+  config: Record<string, any>; egress_allowed_hosts: string[]
+}
+
 // ── API ────────────────────────────────────────────────────────────
 export const api = {
   // system
@@ -117,7 +196,26 @@ export const api = {
     request(`/system/connections/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   testConnection: (name: string) =>
     request<ServiceStatus>(`/system/connections/${name}/test`, { method: "POST" }),
-  authCheck: () => request<{ ok: boolean }>("/auth/check"),
+
+
+    listConnectors: () => request<ConnectorSummary[]>("/enterprise/connectors"),
+  getConnector: (name: string) => request<ConnectorDetail>(`/enterprise/connectors/${encodeURIComponent(name)}`),
+  saveConnector: (name: string, body: { type: string; config: Record<string, unknown>; enabled?: boolean }) =>
+    request(`/enterprise/connectors/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(body) }),
+  setConnectorEnabled: (name: string, enabled: boolean) =>
+    request(`/enterprise/connectors/${encodeURIComponent(name)}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  deleteConnector: (name: string) => request(`/enterprise/connectors/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  testConnector: (name: string, operation: string, params: Record<string, unknown>) =>
+    request<{ ok: boolean; result: unknown; error: string | null }>(
+      `/enterprise/connectors/${encodeURIComponent(name)}/test/${encodeURIComponent(operation)}`,
+      { method: "POST", body: JSON.stringify(params) }),
+
+      
+  // Admin token (legacy) or a named SSO/JWT user: either is a valid console login.
+  authCheck: async () => {
+    try { return await request<{ ok: boolean }>("/auth/check"); }
+    catch { await request("/enterprise/me"); return { ok: true }; }
+  },
 
   // agents
   listAgents: (tenant = "default") => request<Agent[]>(`/agents?tenant_id=${tenant}`),
@@ -204,7 +302,7 @@ export const api = {
   listModels: (t = "default") => request<ModelCfg[]>(`/models?tenant_id=${t}`),
   createModel: (body: Partial<ModelCfg>) =>
     request<ModelCfg>("/models", { method: "POST", body: JSON.stringify(body) }),
-    patchModel: (id: string, body: Partial<ModelCfg>) =>
+  patchModel: (id: string, body: Partial<ModelCfg>) =>
     request<ModelCfg>(`/models/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteModel: (id: string) => request(`/models/${id}`, { method: "DELETE" }),
   testModel: (id: string) =>
@@ -279,4 +377,37 @@ export const api = {
     allowed_origins?: string[]; rate_limit_per_min?: number;
   }) => request<ApiKey>("/keys", { method: "POST", body: JSON.stringify(body) }),
   revokeKey: (id: string) => request(`/keys/${id}`, { method: "DELETE" }),
+  // ── enterprise ──
+  me: () => request<Me>("/enterprise/me"),
+  listApprovals: (status = "pending") => request<ApprovalItem[]>(`/enterprise/approvals?status=${status}`),
+  decideApproval: (id: string, decision: "approve" | "reject", comment = "") =>
+    request<{ id: string; status: string }>(`/enterprise/approvals/${id}/decide`, { method: "POST", body: JSON.stringify({ decision, comment }) }),
+  sweepApprovals: () => request<{ escalated: number; expired: number }>("/enterprise/approvals/sweep", { method: "POST" }),
+  listWorkflows: () => request<WfSummary[]>("/enterprise/workflows"),
+  getWorkflow: (key: string, version?: number) =>
+    request<WfSpec>(`/enterprise/workflows/${encodeURIComponent(key)}${version ? `?version=${version}` : ""}`),
+  runWorkflow: (key: string, inputs: Record<string, unknown>, wait = false) =>
+    request<RunView>(`/enterprise/workflows/${encodeURIComponent(key)}/runs`, { method: "POST", body: JSON.stringify({ inputs, wait }) }),
+  listRuns: (status?: string) => request<RunView[]>(`/enterprise/runs${status ? `?status=${status}` : ""}`),
+  getRun: (id: string) => request<RunView>(`/enterprise/runs/${id}`),
+  cancelRun: (id: string) => request<RunView>(`/enterprise/runs/${id}/cancel`, { method: "POST" }),
+  queryAudit: (p: { action?: string; actor?: string; resource_id?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]));
+    return request<AuditEventRow[]>(`/enterprise/audit?${q}`);
+  },
+  verifyAudit: () => request<{ ok: boolean; checked: number; first_bad_seq: number | null; reason: string }>("/enterprise/audit/verify"),
+  auditCheckpoint: () => request<Record<string, unknown>>("/enterprise/audit/checkpoint"),
+  exportAudit: () => download("/enterprise/audit/export", "audit-export.jsonl"),
+  listPacks: () => request<Pack[]>("/enterprise/solutions"),
+  installPack: (id: string, parameters: Record<string, unknown>) =>
+    request<{ solution: string; version: string; created: { agents: Record<string, string>; workflows: Array<{ key: string; version: number }>; connectors: string[] } }>(
+      `/enterprise/solutions/${id}/install`, { method: "POST", body: JSON.stringify({ parameters }) }),
+  readiness: () => request<Readiness>("/enterprise/compliance/readiness"),
+  capabilities: () => request<Record<string, { description: string; status: string }>>("/enterprise/compliance/capabilities"),
+  evidence: () => request<Record<string, unknown>>("/enterprise/compliance/evidence"),
+  license: () => request<Record<string, unknown>>("/enterprise/license"),
+  usage: () => request<UsageView>("/enterprise/usage"),
+  exportUsage: () => download("/enterprise/usage/export.csv", "usage.csv"),
+  testPolicy: (text: string, direction: string) =>
+    request<PolicyDecision>("/enterprise/policies/test", { method: "POST", body: JSON.stringify({ text, direction }) }),
 };

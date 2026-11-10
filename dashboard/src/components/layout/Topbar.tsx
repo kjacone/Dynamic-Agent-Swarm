@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { clearToken } from "@/lib/api";
 import { ThemeToggle } from "./ThemeToggle";
 
-export function Topbar({ tenant, onTenant, onLogout }: { tenant: string; onTenant: (t: string) => void; onLogout: () => void }) {
+export function Topbar({ tenant, onTenant, onLogout, lockedTenant = false, user }: { tenant: string; onTenant: (t: string) => void; onLogout: () => void; lockedTenant?: boolean; user?: string }) {
   return (
     <header className="flex h-14 items-center justify-between border-b px-6">
       <div className="flex items-center gap-3 text-sm">
@@ -11,11 +11,14 @@ export function Topbar({ tenant, onTenant, onLogout }: { tenant: string; onTenan
         <input
           value={tenant}
           onChange={(e) => onTenant(e.target.value)}
+          disabled={lockedTenant}
+          title={lockedTenant ? "Your account is bound to this tenant" : undefined}
           className="w-40 rounded-md border bg-background px-2 py-1 text-sm"
         />
       </div>
       <div className="flex items-center gap-2">
-        <ThemeToggle />          {/* ← add this */}
+        {user && <span className="text-xs text-muted-foreground">{user}</span>}
+        <ThemeToggle />
         {/* existing: notifications, user menu, etc. */}
       </div>
 

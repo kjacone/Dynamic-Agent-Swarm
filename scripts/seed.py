@@ -9,7 +9,7 @@ from nmb_marketplace_agent.config.models import AgentConfig, SubAgentConfig, Too
 from nmb_marketplace_agent.prompts.system import MAIN_SYSTEM_PROMPT
 from nmb_marketplace_agent.subagents.defaults import RESEARCHER_PROMPT
 
-DEFAULT_AGENT_MODEL = "ollama:qwen2.5-coder:7b"
+DEFAULT_AGENT_MODEL = "ollama:llama3.1:8b"
 
 
 async def main():

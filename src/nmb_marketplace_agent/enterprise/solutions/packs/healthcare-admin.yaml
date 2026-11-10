@@ -1,0 +1,36 @@
+id: healthcare-admin
+name: Healthcare Document Automation
+industry: healthcare
+priority: later
+version: 1.0.0
+summary: Referral, prior-authorisation and records administration with PHI-safe handling and clinician sign-off.
+compliance_frameworks: [HIPAA, GDPR, ISO27001, Kenya-DPA]
+parameters: {}
+agents:
+  - key: records-clerk
+    name: Records & Referral Clerk
+    tools: []
+    system_prompt: |
+      Summarise referral letters and admin records into JSON {"patient_ref","reason","urgency","documents":[...],"missing":[...]}.
+      Administrative support only: never give diagnoses, treatment advice or interpret results. Use the patient reference, not names, in outputs.
+  - key: auth-assistant
+    name: Prior-Authorisation Assistant
+    tools: []
+    system_prompt: |
+      Compare a request with the payer criteria provided. Return ONLY JSON {"criteria_met":[...],"criteria_unmet":[...],"recommendation":"submit|needs_info","gaps":[...]}.
+      A clinician makes every final decision.
+policy:
+  rules:
+    - {id: phi-ids-out, kinds: [national_id, us_ssn, email, phone], applies_to: [output], action: redact}
+workflows:
+  - key: prior_authorisation
+    name: Prior authorisation
+    inputs: {request_text: {required: true, type: string}, payer_criteria: {required: true, type: string}}
+    steps:
+      - {id: assess, type: agent, agent: "@auth-assistant", output: a_raw, prompt: "Criteria:\n{{ payer_criteria }}\nRequest:\n{{ request_text }}"}
+      - {id: a, type: set, values: {assessment: "{{ parse_json(a_raw) }}"}}
+      - {id: clinician, type: approval, title: "Prior-auth review", summary: "Unmet: {{ assessment.criteria_unmet }}", roles: [clinician_reviewer], due_hours: 24, on_reject: held}
+      - {id: submitted, type: end, outcome: ready_to_submit}
+      - {id: held, type: end, outcome: returned_to_clinic}
+kpis:
+  - {name: auth_turnaround_hours, description: Request to submission, formula: "median(updated_at - created_at)"}

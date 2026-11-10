@@ -77,6 +77,10 @@ async def make_graph(config: RunnableConfig):
             except Exception as e:
                 log.warning("Skipping RAG collection %s: %s", rag_id, e)
 
+        # Enterprise guardrails: every tool call is policy-checked, audited, and can pause for human approval.
+        from nmb_marketplace_agent.enterprise.hooks import guard_agent_tools
+        tools = await guard_agent_tools(tools, tenant_id, agent.id)
+
         subagents = await build_subagents(cfg["subagent_ids"])
         model = await resolve_model(cfg["model"] or settings.main_model, tenant_id)
 

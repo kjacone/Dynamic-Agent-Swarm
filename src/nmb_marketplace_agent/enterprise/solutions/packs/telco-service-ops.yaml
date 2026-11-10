@@ -1,0 +1,50 @@
+id: telco-service-ops
+name: AI Service Operations
+industry: telecom
+priority: first
+version: 1.0.0
+summary: Tier-1 resolution agent, SIM-swap safeguards, and human approval for credits and refunds.
+compliance_frameworks: [GDPR, SOC2, ISO27001, Kenya-DPA]
+parameters:
+  credit_limit: {default: 1000, description: Maximum credit the agent may grant autonomously}
+  sla_hours: {default: 4, description: Approval SLA for escalations}
+agents:
+  - key: service-agent
+    name: Customer Service Agent
+    tools: [calculator]
+    system_prompt: |
+      You are a telecom support agent. Resolve billing, data-bundle, coverage and device queries using the knowledge base.
+      Verify identity before account-specific answers. Never reveal full ID numbers or card data. Never perform SIM swaps or number changes;
+      hand those to a human. Offer credits only up to policy limits; otherwise escalate with a clear summary.
+  - key: triage
+    name: Ticket Triage
+    tools: []
+    system_prompt: |
+      Classify the ticket. Return ONLY JSON {"category","priority":"p1|p2|p3","sentiment","churn_risk":0-100,"suggested_action","needs_human":true|false}.
+connectors:
+  - name: crm
+    type: rest
+    config:
+      base_url: "https://crm.example.internal"
+      auth: {type: bearer, secret: "env:CRM_API_TOKEN"}
+      operations: {get_account: {method: GET, path: "/accounts/{msisdn}"}, apply_credit: {method: POST, path: /credits}}
+policy:
+  tool_rules:
+    - {tool: "crm*", action: require_approval, when: "args.body.credit > ${credit_limit}", message: "Credit above autonomous limit."}
+    - {tool: "*sim_swap*", action: block, message: "SIM swaps are never automated."}
+workflows:
+  - key: ticket_resolution
+    name: Ticket triage and resolution
+    inputs: {ticket: {required: true, type: string}, msisdn: {required: true, type: string}}
+    steps:
+      - {id: tri, type: agent, agent: "@triage", output: tri_raw, prompt: "Ticket: {{ ticket }}"}
+      - {id: t, type: set, values: {triage: "{{ parse_json(tri_raw) }}"}}
+      - {id: gate, type: condition, if: "triage.needs_human or triage.priority == 'p1'", then: human, else: resolve}
+      - {id: resolve, type: agent, agent: "@service-agent", output: reply, prompt: "Customer {{ msisdn }} says: {{ ticket }}"}
+      - {id: done, type: end, outcome: resolved_by_ai}
+      - {id: human, type: approval, title: "Escalated ticket ({{ triage.category }})", summary: "{{ triage.suggested_action }}",
+         roles: [team_lead], due_hours: "${sla_hours}", on_reject: closed, next: done}
+      - {id: closed, type: end, outcome: closed_by_human}
+kpis:
+  - {name: containment_rate, description: Tickets resolved without a human, formula: "resolved_by_ai / total"}
+  - {name: escalation_sla, description: Escalations handled within SLA, formula: "approved before due_at / escalations"}

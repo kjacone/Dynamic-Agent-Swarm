@@ -31,11 +31,11 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
         <div className="mb-6">
           <h1 className="text-xl font-semibold">NMB Marketplace Admin</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Paste the <code>ADMIN_TOKEN</code> set on the server.
+            Paste the <code>ADMIN_TOKEN</code> set on the server, or your SSO / tenant access token. Approvers must use a named account.
           </p>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="token">Admin token</Label>
+          <Label htmlFor="token">Admin or access token</Label>
           <Input
             id="token"
             type="password"

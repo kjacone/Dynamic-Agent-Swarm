@@ -1840,6 +1840,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aegra" },
     { name = "aiosqlite" },
+    { name = "cryptography" },
     { name = "deepagents" },
     { name = "faiss-cpu" },
     { name = "fastapi" },
@@ -1854,7 +1855,7 @@ dependencies = [
     { name = "langgraph-cli", extra = ["inmem"] },
     { name = "langgraph-sdk" },
     { name = "pydantic-settings" },
-    { name = "pyjwt" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "pyyaml" },
@@ -1881,6 +1882,7 @@ requires-dist = [
     { name = "aegra" },
     { name = "aiosqlite" },
     { name = "asyncpg", marker = "extra == 'postgres'" },
+    { name = "cryptography" },
     { name = "deepagents" },
     { name = "faiss-cpu" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1896,7 +1898,7 @@ requires-dist = [
     { name = "langgraph-cli", extras = ["inmem"] },
     { name = "langgraph-sdk" },
     { name = "pydantic-settings" },
-    { name = "pyjwt", specifier = ">=2.8.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8.0" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "pyyaml", specifier = ">=6.0.1" },
@@ -2663,6 +2665,11 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/50/ca/44de4e75f8aadc457f0634be3b542815078ded46dca30efb960edeecad6e/pyjwt-2.15.1-py3-none-any.whl", hash = "sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193", size = 33860, upload-time = "2026-09-28T18:40:41.429Z" },
+]
+
+[package.optional-dependencies]
+crypto = [
+    { name = "cryptography" },
 ]
 
 [[package]]

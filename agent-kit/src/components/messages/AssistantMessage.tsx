@@ -5,6 +5,7 @@ import type { ComponentType } from "react";
 import { useAgentContext } from "../../agent-context";
 import { useArtifact } from "../../artifact";
 import { messageReasoning, messageText, messageToolCalls } from "../../content";
+import type { GatewaySource } from "../../gateway";
 import type { ToolStatus } from "../../types";
 import { Markdown, type MarkdownOptions } from "../Markdown";
 import { RefreshIcon } from "../ui/icons";
@@ -37,6 +38,7 @@ function GenerativeUi({ message, components }: { message: Message; components?: 
 
 export function AssistantMessage({
   message, results, loading, hideToolCalls, branching = true, copy = true, uiComponents, markdown,
+  sources, feedback,
 }: {
   message: Message;
   /** Tool results by `tool_call_id`. */
@@ -48,6 +50,10 @@ export function AssistantMessage({
   copy?: boolean;
   uiComponents?: UiComponents;
   markdown?: MarkdownOptions;
+  /** Gateway citations for this reply. */
+  sources?: GatewaySource[];
+  /** Gateway feedback controls for the last reply. */
+  feedback?: { sent: "up" | "down" | null; onRate: (rating: "up" | "down") => void };
 }) {
   const agent = useAgentContext();
   const text = messageText(message.content);
@@ -68,6 +74,16 @@ export function AssistantMessage({
         </details>
       )}
       {text && <Markdown {...markdown}>{text}</Markdown>}
+      {sources && sources.length > 0 && (
+        <div className="lgk-sources" aria-label="Sources">
+          <span className="lgk-sources-label">Sources</span>
+          {sources.map((s, i) => (
+            <span className="lgk-source" key={`${s.id ?? i}`}>
+              <b>{s.id ?? i + 1}</b> {s.title}{s.page ? ` · p. ${s.page}` : ""}
+            </span>
+          ))}
+        </div>
+      )}
       {!hideToolCalls && calls.map((c, i) => {
         const res = c.id ? results.get(c.id) : undefined;
         const status: ToolStatus = res
@@ -82,6 +98,21 @@ export function AssistantMessage({
           {copy && <CopyButton text={text} disabled={busy} />}
           {branching && parentCheckpoint && (
             <IconButton label="Regenerate" disabled={busy} onClick={() => void agent.regenerate(parentCheckpoint)}><RefreshIcon /></IconButton>
+          )}
+          {feedback && (
+            <span className="lgk-feedback" aria-label="Rate this answer">
+              {feedback.sent
+                ? <span className="lgk-feedback-thanks">Thanks for the feedback</span>
+                : (["up", "down"] as const).map((rating) => (
+                    <button
+                      key={rating} type="button" className="lgk-icon-btn"
+                      aria-label={rating === "up" ? "Good answer" : "Bad answer"}
+                      disabled={busy} onClick={() => feedback.onRate(rating)}
+                    >
+                      {rating === "up" ? "👍" : "👎"}
+                    </button>
+                  ))}
+            </span>
           )}
         </div>
       )}

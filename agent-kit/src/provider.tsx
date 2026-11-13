@@ -5,6 +5,10 @@ import {
   type CSSProperties, type ReactNode,
 } from "react";
 import { ArtifactProvider } from "./artifact";
+import {
+  createGatewayEventBus, GatewayTransport,
+  type GatewayConfig, type GatewayEventBus,
+} from "./gateway";
 import { getStoredToken, setStoredToken } from "./lib/storage";
 import { ToastViewport, useToastState, type Notify } from "./toast";
 import type { AgentToolDefinition, Connection, ConnectionStatus, Readable } from "./types";
@@ -21,6 +25,10 @@ export interface KitContextValue {
   status: ConnectionStatus;
   client: Client;
   auth: { apiKey?: string; headers: Record<string, string> };
+  /** Set when the kit talks to the NMB gateway instead of a LangGraph server. */
+  gateway?: GatewayConfig;
+  gatewayTransport: GatewayTransport | null;
+  gatewayEvents: GatewayEventBus;
   threadId: string | null;
   setThreadId: (id: string | null) => void;
   configurable?: Record<string, unknown>;
@@ -44,6 +52,11 @@ const LangGraphKitContext = createContext<KitContextValue | null>(null);
 
 export interface LangGraphKitProviderProps extends Partial<Connection> {
   children: ReactNode;
+  /**
+   * Talk to the NMB gateway (`/v1/session` + `/v1/chat`) instead of a LangGraph
+   * server. Enables citations, human handoff and feedback in the chat surfaces.
+   */
+  gateway?: GatewayConfig;
   threadId?: string | null;
   onThreadIdChange?: (id: string | null) => void;
   configurable?: Record<string, unknown>;
@@ -76,8 +89,8 @@ function useSystemDark() {
 
 export function LangGraphKitProvider({
   children, threadId: threadIdProp, onThreadIdChange, configurable, persistKey,
-  branching = true, submitOptions,
-  apiUrl = "", assistantId = "", token, authScheme = "bearer", headers,
+  branching = true, submitOptions, gateway,
+  apiUrl = gateway?.baseUrl ?? "", assistantId = "", token, authScheme = "bearer", headers,
   theme: themeProp, defaultTheme = "system", onThemeChange, themeVars,
 }: LangGraphKitProviderProps) {
   const [conn, setConn] = useState<Connection>({ apiUrl, assistantId, token, authScheme, headers });
@@ -174,11 +187,34 @@ export function LangGraphKitProvider({
     return { apiKey, headers: out };
   }, [conn.token, conn.authScheme, conn.headers]);
 
-  const isConfigured = !!conn.apiUrl && !!conn.assistantId;
+  const isConfigured = gateway
+    ? !!gateway.baseUrl && !!gateway.publishableKey
+    : !!conn.apiUrl && !!conn.assistantId;
 
   const client = useMemo(
     () => new Client({ apiUrl: conn.apiUrl || undefined, apiKey: auth.apiKey, defaultHeaders: auth.headers }),
     [conn.apiUrl, auth],
+  );
+
+  const gatewayEvents = useMemo(() => createGatewayEventBus(), []);
+  const gatewayBaseUrl = gateway?.baseUrl;
+  const gatewayKey = gateway?.publishableKey;
+  const gatewayUser = gateway?.userId;
+  const gatewayCustomer = gateway?.customerId;
+  const gatewayPersist = gateway?.persistKey;
+  const gatewayFetchImpl = gateway?.fetch;
+  const gatewayTransport = useMemo(
+    () => (gatewayBaseUrl && gatewayKey
+      ? new GatewayTransport({
+          baseUrl: gatewayBaseUrl,
+          publishableKey: gatewayKey,
+          userId: gatewayUser,
+          customerId: gatewayCustomer,
+          persistKey: gatewayPersist,
+          fetch: gatewayFetchImpl,
+        }, gatewayEvents.emit)
+      : null),
+    [gatewayBaseUrl, gatewayKey, gatewayUser, gatewayCustomer, gatewayPersist, gatewayFetchImpl, gatewayEvents],
   );
 
   const [status, setStatus] = useState<ConnectionStatus>("idle");
@@ -186,23 +222,31 @@ export function LangGraphKitProvider({
     if (!isConfigured) { setStatus("idle"); return; }
     let off = false;
     setStatus("checking");
-    const h = new Headers(auth.headers);
-    if (auth.apiKey) h.set("X-Api-Key", auth.apiKey);
     const fail = () => {
       if (off) return;
       setStatus("error");
       notifyRef.current({
         kind: "error",
-        title: "Can't reach the LangGraph server",
-        description: `Check that it is running at ${conn.apiUrl}, your token is right, and CORS allows this origin.`,
+        title: gatewayBaseUrl ? "Can't reach the agent gateway" : "Can't reach the LangGraph server",
+        description: gatewayBaseUrl
+          ? `Check that ${gatewayBaseUrl} is up and CORS allows this origin.`
+          : `Check that it is running at ${conn.apiUrl}, your token is right, and CORS allows this origin.`,
         duration: 10000,
       });
     };
-    fetch(`${conn.apiUrl.replace(/\/$/, "")}/info`, { headers: h })
-      .then((r) => (r.ok ? !off && setStatus("ok") : fail()))
-      .catch(fail);
+    if (gatewayBaseUrl) {
+      fetch(`${gatewayBaseUrl.replace(/\/$/, "")}/health`)
+        .then((r) => (r.ok ? !off && setStatus("ok") : fail()))
+        .catch(fail);
+    } else {
+      const h = new Headers(auth.headers);
+      if (auth.apiKey) h.set("X-Api-Key", auth.apiKey);
+      fetch(`${conn.apiUrl.replace(/\/$/, "")}/info`, { headers: h })
+        .then((r) => (r.ok ? !off && setStatus("ok") : fail()))
+        .catch(fail);
+    }
     return () => { off = true; };
-  }, [isConfigured, conn.apiUrl, auth]);
+  }, [isConfigured, conn.apiUrl, auth, gatewayBaseUrl]);
 
   const [tools, setTools] = useState<Record<string, AgentToolDefinition>>({});
   const registerTool = useCallback((def: AgentToolDefinition) => {
@@ -223,13 +267,14 @@ export function LangGraphKitProvider({
   const bumpThreads = useCallback(() => setRev((n) => n + 1), []);
 
   const value = useMemo<KitContextValue>(() => ({
-    connection: conn, setConnection, isConfigured, status, client, auth, threadId, setThreadId,
+    connection: conn, setConnection, isConfigured, status, client, auth, gateway, gatewayTransport, gatewayEvents,
+    threadId, setThreadId,
     configurable, branching, submitOptions, tools, registerTool, readables, setReadable,
     threadsRevision, bumpThreads, notify: toasts.notify,
     theme, resolvedTheme, setTheme,
-  }), [conn, setConnection, isConfigured, status, client, auth, threadId, setThreadId, configurable,
-       branching, submitOptions, tools, registerTool, readables, setReadable, threadsRevision,
-       bumpThreads, toasts.notify, theme, resolvedTheme, setTheme]);
+  }), [conn, setConnection, isConfigured, status, client, auth, gateway, gatewayTransport, gatewayEvents,
+       threadId, setThreadId, configurable, branching, submitOptions, tools, registerTool, readables,
+       setReadable, threadsRevision, bumpThreads, toasts.notify, theme, resolvedTheme, setTheme]);
 
   return (
     <LangGraphKitContext.Provider value={value}>

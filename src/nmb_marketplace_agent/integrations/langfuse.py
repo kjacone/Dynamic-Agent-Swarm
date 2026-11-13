@@ -115,6 +115,14 @@ class LangfuseAPI:
             data = await self._observations(traceId=trace_id, limit=1000)
             return {"id": trace_id, "observations": data.get("data", [])}
 
+    async def delete_traces(self, trace_ids: list[str]) -> int:
+        """Submit up to 1000 traces for deletion. Langfuse processes the queue asynchronously."""
+        ids = [t for t in dict.fromkeys(trace_ids) if t][:1000]
+        if not ids:
+            return 0
+        await self._req("DELETE", "/api/public/traces", json={"traceIds": ids})
+        return len(ids)
+
     async def daily_metrics(self, **params: Any) -> dict:
         try:
             return await self._req("GET", "/api/public/metrics/daily", params=_clean(params))

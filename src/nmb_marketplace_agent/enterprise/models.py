@@ -77,6 +77,45 @@ class Approval(SQLModel, table=True):
     decided_at: Optional[str] = Field(default=None)
 
 
+class NotificationRoute(SQLModel, table=True):
+    """Where to send an approval notification.
+
+    ``role`` is a directory role (``approver``, ``credit_officer``, ...) or an
+    explicit ``user:<subject>`` so a decision can reach the requester.
+    """
+    __tablename__ = "notification_routes"
+    __table_args__ = (UniqueConstraint("tenant_id", "role", "channel", "target",
+                                       name="uq_notification_route"),)
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    role: str = Field(index=True)
+    channel: str = Field(default="webhook")  # webhook | email
+    target: str = Field(default="")
+    enabled: bool = Field(default=True)
+    created_at: str = Field(default_factory=now_iso)
+
+
+class Notification(SQLModel, table=True):
+    """Durable outbox row. Written with the approval, delivered by the dispatcher."""
+    __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("tenant_id", "approval_id", "event", "channel", "target",
+                                       name="uq_notification_target"),)
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    event: str = Field(index=True)  # approval.requested|escalated|expired|decided
+    approval_id: str = Field(default="", index=True)
+    channel: str = Field(default="webhook")
+    target: str = Field(default="")
+    subject: str = Field(default="")
+    body: str = Field(default="", sa_column=Column(Text))
+    status: str = Field(default="pending", index=True)  # pending|sent|dead
+    attempts: int = Field(default=0)
+    next_attempt_at: str = Field(default_factory=now_iso, index=True)
+    last_error: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: str = Field(default_factory=now_iso)
+    sent_at: Optional[str] = Field(default=None)
+
+
 class UsageEvent(SQLModel, table=True):
     __tablename__ = "usage_events"
     id: str = Field(primary_key=True)
@@ -111,6 +150,19 @@ class InstalledSolution(SQLModel, table=True):
     installed_at: str = Field(default_factory=now_iso)
 
 
+class SolutionSnapshot(SQLModel, table=True):
+    """Last applied pack content per version, so a pilot can roll back."""
+    __tablename__ = "solution_snapshots"
+    id: str = Field(primary_key=True)  # tenant:solution:version
+    tenant_id: str = Field(index=True)
+    solution_id: str = Field(index=True)
+    version: str
+    parameters: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    pack: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    created_by: str = Field(default="")
+    created_at: str = Field(default_factory=now_iso)
+
+
 class ConnectorConfig(SQLModel, table=True):
     """Connector settings. Secrets are *references* (``env:NAME``), never stored values."""
     __tablename__ = "connector_configs"
@@ -120,6 +172,48 @@ class ConnectorConfig(SQLModel, table=True):
     type: str = Field(default="rest")
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
     enabled: bool = Field(default=True)
+
+
+class RetentionPolicy(SQLModel, table=True):
+    """Per-tenant retention windows, in days. A missing key keeps data forever;
+    an explicit ``null`` disables the store's default window."""
+    __tablename__ = "retention_policies"
+    tenant_id: str = Field(primary_key=True)
+    settings: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    updated_by: str = Field(default="")
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class LegalHold(SQLModel, table=True):
+    """Blocks erasure and retention deletion for a tenant, subject or thread."""
+    __tablename__ = "legal_holds"
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    scope: str = Field(default="tenant", index=True)  # tenant | customer | user | thread
+    scope_id: str = Field(default="", index=True)
+    reason: str = Field(default="", sa_column=Column(Text))
+    active: bool = Field(default=True, index=True)
+    created_by: str = Field(default="")
+    created_at: str = Field(default_factory=now_iso)
+    released_by: Optional[str] = Field(default=None)
+    released_at: Optional[str] = Field(default=None)
+
+
+class PrivacyRequest(SQLModel, table=True):
+    """Durable record of an erasure run and its per-store outcome."""
+    __tablename__ = "privacy_requests"
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    kind: str = Field(default="erasure", index=True)
+    subject_type: str = Field(default="customer")  # customer | user | thread
+    subject_id: str = Field(default="", index=True)
+    thread_ids: list = Field(default_factory=list, sa_column=Column(JSON))
+    reason: str = Field(default="", sa_column=Column(Text))
+    status: str = Field(default="running", index=True)  # running|completed|partial|blocked|failed
+    result: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    requested_by: str = Field(default="")
+    created_at: str = Field(default_factory=now_iso)
+    completed_at: Optional[str] = Field(default=None)
 
 
 class WorkflowRule(SQLModel, table=True):

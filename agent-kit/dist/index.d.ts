@@ -5,6 +5,110 @@ import { Client, Message, Checkpoint, Assistant, ToolMessage } from '@langchain/
 import { UIMessage, RemoveUIMessage } from '@langchain/langgraph-sdk/react-ui';
 import { Options } from 'react-markdown';
 
+/**
+ * Connect the kit to the NMB gateway (`/v1/session` + `/v1/chat`) instead of a
+ * LangGraph server. The browser only ever holds a publishable key; the gateway
+ * mints a short-lived session token and keeps sessions, guardrails, citations,
+ * thread ownership and human handoff server-side.
+ */
+interface GatewayConfig {
+    /** e.g. https://agents.bank.co — no trailing slash */
+    baseUrl: string;
+    /** Publishable key (pk_…). Never pass a secret key to the browser. */
+    publishableKey: string;
+    /** Stable end-user id (your app's user id). */
+    userId?: string;
+    /** Only meaningful when a server-side secret key minted the session. */
+    customerId?: string;
+    /** Namespace for the persisted thread map. Defaults to the gateway host. */
+    persistKey?: string;
+    /** Injectable fetch (tests, non-browser runtimes). */
+    fetch?: typeof fetch;
+}
+interface GatewaySource {
+    id?: number | string;
+    title: string;
+    page?: number;
+    collection?: string;
+}
+interface GatewayHandoff {
+    id: string;
+    thread_id: string;
+    status: "requested" | "active" | "resolved";
+    reason?: string | null;
+    assigned_to?: string | null;
+    created_at?: string | null;
+    resolved_at?: string | null;
+}
+interface GatewayStaffMessage {
+    id: string;
+    role: "staff" | "customer" | "system" | string;
+    author?: string | null;
+    text: string;
+    created_at?: string | null;
+}
+type GatewayEvent = {
+    type: "thread";
+    threadId: string;
+} | {
+    type: "citations";
+    sources: GatewaySource[];
+} | {
+    type: "handoff";
+    handoff: GatewayHandoff;
+    messageId?: string;
+};
+interface GatewayEventBus {
+    subscribe(fn: (event: GatewayEvent) => void): () => void;
+    emit(event: GatewayEvent): void;
+}
+/** Exchanges the publishable key for a short-lived session token; falls back to the key. */
+declare function gatewayToken(cfg: GatewayConfig, force?: boolean): Promise<string>;
+declare function requestHandoff(cfg: GatewayConfig, threadId: string, reason?: string): Promise<{
+    handoff: GatewayHandoff;
+    created: boolean;
+}>;
+declare function handoffSnapshot(cfg: GatewayConfig, threadId: string): Promise<{
+    handoff: GatewayHandoff | null;
+    messages: GatewayStaffMessage[];
+}>;
+declare function sendFeedback(cfg: GatewayConfig, body: {
+    thread_id: string;
+    rating: "up" | "down";
+    user_message?: string;
+    reply?: string;
+    comment?: string;
+}): Promise<void>;
+type Chunk = {
+    id?: string;
+    event: string;
+    data: unknown;
+};
+type TransportPayload = {
+    input: unknown;
+    context?: unknown;
+    command?: unknown;
+    signal: AbortSignal;
+    config?: {
+        configurable?: Record<string, unknown>;
+    };
+};
+/**
+ * SDK custom transport: maps `/v1/chat` SSE onto the LangGraph event shape the
+ * kit already understands (`messages` chunks + `custom` events).
+ */
+declare class GatewayTransport {
+    private readonly cfg;
+    private readonly emit;
+    private boundThread;
+    private serverThread;
+    constructor(cfg: GatewayConfig, emit?: (event: GatewayEvent) => void);
+    private get storeKey();
+    private restore;
+    private remember;
+    stream(payload: TransportPayload): AsyncGenerator<Chunk>;
+}
+
 type ToastKind = "info" | "success" | "error";
 type Notify = (t: {
     kind?: ToastKind;
@@ -69,6 +173,10 @@ interface KitContextValue {
         apiKey?: string;
         headers: Record<string, string>;
     };
+    /** Set when the kit talks to the NMB gateway instead of a LangGraph server. */
+    gateway?: GatewayConfig;
+    gatewayTransport: GatewayTransport | null;
+    gatewayEvents: GatewayEventBus;
     threadId: string | null;
     setThreadId: (id: string | null) => void;
     configurable?: Record<string, unknown>;
@@ -89,6 +197,11 @@ interface KitContextValue {
 }
 interface LangGraphKitProviderProps extends Partial<Connection> {
     children: ReactNode;
+    /**
+     * Talk to the NMB gateway (`/v1/session` + `/v1/chat`) instead of a LangGraph
+     * server. Enables citations, human handoff and feedback in the chat surfaces.
+     */
+    gateway?: GatewayConfig;
     threadId?: string | null;
     onThreadIdChange?: (id: string | null) => void;
     configurable?: Record<string, unknown>;
@@ -106,7 +219,7 @@ interface LangGraphKitProviderProps extends Partial<Connection> {
         dark?: ThemeVars;
     };
 }
-declare function LangGraphKitProvider({ children, threadId: threadIdProp, onThreadIdChange, configurable, persistKey, branching, submitOptions, apiUrl, assistantId, token, authScheme, headers, theme: themeProp, defaultTheme, onThemeChange, themeVars, }: LangGraphKitProviderProps): react.JSX.Element;
+declare function LangGraphKitProvider({ children, threadId: threadIdProp, onThreadIdChange, configurable, persistKey, branching, submitOptions, gateway, apiUrl, assistantId, token, authScheme, headers, theme: themeProp, defaultTheme, onThemeChange, themeVars, }: LangGraphKitProviderProps): react.JSX.Element;
 declare function useKit(): KitContextValue;
 
 /**
@@ -232,6 +345,19 @@ declare function useAgent(): {
     resolve: () => Promise<void>;
     newThread: () => void;
     selectThread: (id: string | null) => void;
+    /** Gateway mode: citations for the current reply. */
+    sources: GatewaySource[];
+    /** Gateway mode: the open (or most recent) human handoff, if any. */
+    handoff: GatewayHandoff | null;
+    handoffMessages: GatewayStaffMessage[];
+    /** Gateway mode: ask a human to join this conversation. */
+    requestHuman: (reason?: string) => Promise<void>;
+    /** Gateway mode: rate the last reply. */
+    feedback: (rating: "up" | "down") => void;
+    feedbackSent: "up" | "down" | null;
+    /** Gateway mode: the server-side thread id (differs from the SDK client id). */
+    serverThreadId: string | null;
+    isGateway: boolean;
     /** Escape hatch to the raw SDK stream. */
     stream: _langchain_langgraph_sdk.BaseStream<AgentState, _langchain_langgraph_sdk.DefaultToolCall, Bag>;
 };
@@ -321,7 +447,7 @@ declare const Markdown: react.NamedExoticComponent<MarkdownOptions & {
 
 /** Components the graph's generative-UI (`ui`) messages are rendered with, keyed by name. */
 type UiComponents = Record<string, ComponentType<any>>;
-declare function AssistantMessage({ message, results, loading, hideToolCalls, branching, copy, uiComponents, markdown, }: {
+declare function AssistantMessage({ message, results, loading, hideToolCalls, branching, copy, uiComponents, markdown, sources, feedback, }: {
     message: Message;
     /** Tool results by `tool_call_id`. */
     results: Map<string, ToolMessage>;
@@ -332,6 +458,13 @@ declare function AssistantMessage({ message, results, loading, hideToolCalls, br
     copy?: boolean;
     uiComponents?: UiComponents;
     markdown?: MarkdownOptions;
+    /** Gateway citations for this reply. */
+    sources?: GatewaySource[];
+    /** Gateway feedback controls for the last reply. */
+    feedback?: {
+        sent: "up" | "down" | null;
+        onRate: (rating: "up" | "down") => void;
+    };
 }): react.JSX.Element | null;
 
 interface ChatFeatures {
@@ -522,4 +655,4 @@ declare function useArtifactContext(): Slot<Record<string, unknown>>;
  */
 declare function ensureToolCallsHaveResponses(messages: Message[]): Message[];
 
-export { type ActionRequest, type AgentState, type AgentToolDefinition, AssistantMessage, Chat, type ChatFeatures, ChatPopup, type ChatPopupProps, type ChatProps, ChatSidebar, type ChatSidebarProps, Composer, type Connection, ConnectionForm, type ConnectionStatus, DO_NOT_RENDER_ID_PREFIX, type Decision, type DecisionType, ExpandableText, GenericInterrupt, HistoryPanel, type HitlRequest, HitlReview, HumanMessage, type InterruptRenderProps, InterruptView, KeyValueTable, type KitContextValue, LangGraphKitProvider, type LangGraphKitProviderProps, Markdown, type MarkdownOptions, type MultimodalBlock, Playground, type ReviewConfig, type SendInput, ThreadHistory, type ThreadSummary, ToolCallCard, ToolOutput, type ToolRenderProps, type ToolStatus, type UiComponents, ensureToolCallsHaveResponses, isHitlRequest, messageReasoning, messageText, messageToolCalls, useAgent, useAgentContext, useAgentReadable, useAgentTool, useArtifact, useArtifactContext, useArtifactOpen, useAssistants, useFileUpload, useKit, useThreads };
+export { type ActionRequest, type AgentState, type AgentToolDefinition, AssistantMessage, Chat, type ChatFeatures, ChatPopup, type ChatPopupProps, type ChatProps, ChatSidebar, type ChatSidebarProps, Composer, type Connection, ConnectionForm, type ConnectionStatus, DO_NOT_RENDER_ID_PREFIX, type Decision, type DecisionType, ExpandableText, type GatewayConfig, type GatewayEvent, type GatewayHandoff, type GatewaySource, type GatewayStaffMessage, GatewayTransport, GenericInterrupt, HistoryPanel, type HitlRequest, HitlReview, HumanMessage, type InterruptRenderProps, InterruptView, KeyValueTable, type KitContextValue, LangGraphKitProvider, type LangGraphKitProviderProps, Markdown, type MarkdownOptions, type MultimodalBlock, Playground, type ReviewConfig, type SendInput, ThreadHistory, type ThreadSummary, ToolCallCard, ToolOutput, type ToolRenderProps, type ToolStatus, type UiComponents, ensureToolCallsHaveResponses, gatewayToken, handoffSnapshot, isHitlRequest, messageReasoning, messageText, messageToolCalls, requestHandoff, sendFeedback, useAgent, useAgentContext, useAgentReadable, useAgentTool, useArtifact, useArtifactContext, useArtifactOpen, useAssistants, useFileUpload, useKit, useThreads };

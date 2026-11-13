@@ -75,21 +75,33 @@ async def test_readiness_is_honest_about_gaps(db, monkeypatch):
     assert checks["admin-token-strength"]["status"] == "fail" and checks["admin-token-strength"]["remediation"]
     assert checks["audit-chain"]["status"] == "pass"
     gdpr = {c["id"]: c for c in r["frameworks"]["GDPR"]["controls"]}
-    assert gdpr["Art.15/17"]["supported"] is False and gdpr["Art.15/17"]["roadmap"] == ["subject_rights"]
+    assert gdpr["Art.15/17"]["supported"] is True and gdpr["Art.15/17"]["roadmap"] == []
+    assert gdpr["Art.5(1)(e)"]["supported"] is True
     assert gdpr["Art.5(1)(c)"]["supported"] is True
+    iso = {c["id"]: c for c in r["frameworks"]["ISO27001"]["controls"]}
+    assert iso["A.8.24"]["supported"] is False and iso["A.8.24"]["roadmap"] == ["encryption_at_rest_kms"]
     assert "not a certification" in r["disclaimer"]
 
 
 # ── API (RBAC + license gating + audit) ──────────────────────────────
 @pytest.fixture
-async def client(db, monkeypatch):
+async def client(db, monkeypatch, tmp_path):
     from fastapi import FastAPI
 
     from nmb_marketplace_agent.api.deps import get_db
     from nmb_marketplace_agent.enterprise import api as eapi
+    from nmb_marketplace_agent.enterprise.solutions import loader
     from nmb_marketplace_agent.enterprise.workflows import Runtime
 
     monkeypatch.setenv("NMB_JWT_SECRET", "s" * 32)
+    # Pack installs in these API tests must not call an embedding or model provider.
+    monkeypatch.setattr(loader, "build_index", lambda *a, **k: 1)
+    monkeypatch.setattr(loader, "DOCS_ROOT", tmp_path / "docs")
+
+    async def _no_conformance(*_a, **_k):
+        return []
+
+    monkeypatch.setattr(loader.conformance, "run_conformance", _no_conformance)
     app = FastAPI()
     app.include_router(eapi.router, prefix="/enterprise")
     app.dependency_overrides[get_db] = lambda: db
@@ -145,6 +157,37 @@ async def test_api_end_to_end_permit_flow(client):
     assert other.json() == []
     usage = (await client.get("/enterprise/usage", headers=tok("aud", "auditor"))).json()["usage"]
     assert usage["workflow_runs"] == 1 and usage["approvals"] == 1
+
+
+async def test_sample_case_run_endpoint(client):
+    await client.post("/enterprise/solutions/gov-document-workflows/install", json={},
+                      headers=tok("a", "tenant_admin"))
+    r = await client.post("/enterprise/solutions/gov-document-workflows/samples/complete-permit/run",
+                          headers=tok("clerk", "operator"))
+    assert r.status_code == 200, r.text
+    run = r.json()
+    assert run["workflow"] == "permit_application"
+    assert run["expect"] == "waiting_approval"
+    missing = await client.post("/enterprise/solutions/gov-document-workflows/samples/nope/run",
+                                headers=tok("clerk", "operator"))
+    assert missing.status_code == 404
+
+
+async def test_embed_snippet_for_widget_solution(client):
+    r = await client.post("/enterprise/solutions/telco-service-ops/install", json={},
+                          headers=tok("a", "tenant_admin"))
+    assert r.status_code == 200, r.text
+    embed = await client.get("/enterprise/solutions/telco-service-ops/embed",
+                             headers=tok("a", "tenant_admin"))
+    assert embed.status_code == 200, embed.text
+    body = embed.json()
+    assert "<script src=" in body["script"] and "pk_" in body["script"]
+    assert body["widget"]["title"] == "NMB Service Assistant"
+    assert body["agent_id"]
+
+    backoffice = await client.get("/enterprise/solutions/gov-document-workflows/embed",
+                                  headers=tok("a", "tenant_admin"))
+    assert backoffice.status_code == 409
 
 
 async def test_api_policy_test_and_connector_secret_rule(client):

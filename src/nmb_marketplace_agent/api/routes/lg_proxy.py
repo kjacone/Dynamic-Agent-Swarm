@@ -15,9 +15,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nmb_marketplace_agent.api.auth import check_rate, require_api_key_nocount
+from nmb_marketplace_agent.api.auth import (
+    ChatPrincipal,
+    check_rate,
+    require_chat_principal_nocount,
+)
 from nmb_marketplace_agent.api.deps import get_db
-from nmb_marketplace_agent.config.models import ApiKey, ThreadOwner
+from nmb_marketplace_agent.config.models import ThreadOwner
 
 router = APIRouter()         # mounted at /v1/lg
 config_router = APIRouter()  # mounted at /v1
@@ -31,21 +35,21 @@ def _base() -> str:
     return os.environ.get("LANGGRAPH_URL", "http://127.0.0.1:2024")
 
 
-def assistant_id_for(key: ApiKey) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"nmb:{key.tenant_id}:{key.agent_id}"))
+def assistant_id_for(tenant_id: str, agent_id: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"nmb:{tenant_id}:{agent_id}"))
 
 
-async def ensure_assistant(key: ApiKey, force: bool = False) -> str:
+async def ensure_assistant(tenant_id: str, agent_id: str, force: bool = False) -> str:
     """One assistant per agent: its default config pins agent_id/tenant_id."""
-    aid = assistant_id_for(key)
+    aid = assistant_id_for(tenant_id, agent_id)
     if aid in _ensured and not force:
         return aid
     body = {
         "assistant_id": aid,
         "graph_id": "supervisor",
-        "name": f"{key.tenant_id}:{key.agent_id}",
+        "name": f"{tenant_id}:{agent_id}",
         "if_exists": "do_nothing",
-        "config": {"configurable": {"agent_id": key.agent_id, "tenant_id": key.tenant_id}},
+        "config": {"configurable": {"agent_id": agent_id, "tenant_id": tenant_id}},
     }
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{_base()}/assistants", json=body)
@@ -55,24 +59,30 @@ async def ensure_assistant(key: ApiKey, force: bool = False) -> str:
     return aid
 
 
-def _scrub(o, aid: str, user: str | None):
+def _scrub(o, aid: str, user: str | None, customer: str | None):
     """Overwrite anything a client could use to pick a different agent/config."""
     if isinstance(o, dict):
         for k, v in list(o.items()):
             if k == "configurable":
-                o[k] = {"user_id": user} if user else {}
+                cfg = {}
+                if user:
+                    cfg["user_id"] = user
+                if customer:
+                    cfg["customer_id"] = customer
+                o[k] = cfg
             elif k == "assistant_id":
                 o[k] = aid
             else:
-                _scrub(v, aid, user)
+                _scrub(v, aid, user, customer)
     elif isinstance(o, list):
         for i in o:
-            _scrub(i, aid, user)
+            _scrub(i, aid, user, customer)
 
 
 @config_router.get("/config")
-async def public_config(request: Request, key: ApiKey = Depends(require_api_key_nocount)):
-    aid = await ensure_assistant(key, force=True)
+async def public_config(request: Request,
+                        principal: ChatPrincipal = Depends(require_chat_principal_nocount)):
+    aid = await ensure_assistant(principal.tenant_id, principal.agent_id, force=True)
     base = os.environ.get("PUBLIC_BASE_URL") or str(request.base_url).rstrip("/")
     return {"assistantId": aid, "apiUrl": f"{base}/v1/lg"}
 
@@ -81,12 +91,13 @@ async def public_config(request: Request, key: ApiKey = Depends(require_api_key_
 async def proxy(
     path: str,
     request: Request,
-    key: ApiKey = Depends(require_api_key_nocount),
+    principal: ChatPrincipal = Depends(require_chat_principal_nocount),
     db: AsyncSession = Depends(get_db),
 ):
     path = path.strip("/")
-    aid = await ensure_assistant(key)
-    user = request.headers.get("x-nmb-user") or None
+    aid = await ensure_assistant(principal.tenant_id, principal.agent_id)
+    # A session identity is authoritative; an API-key caller may still label itself.
+    user = principal.user_id if principal.auth == "session" else (request.headers.get("x-nmb-user") or None)
     method = request.method
     is_create = method == "POST" and path == "threads"
 
@@ -95,15 +106,16 @@ async def proxy(
         owner = await db.get(ThreadOwner, m.group(1))
         if (
             not owner
-            or owner.agent_id != key.agent_id
-            or owner.tenant_id != key.tenant_id
+            or owner.agent_id != principal.agent_id
+            or owner.tenant_id != principal.tenant_id
             or (owner.user_id or "") != (user or "")
+            or (owner.customer_id or "") != (principal.customer_id or "")
         ):
             raise HTTPException(403, "Thread not accessible")
         if method == "DELETE" and not m.group(2):
             raise HTTPException(403, "Deleting threads is not allowed")
-        if method == "POST" and _RATE.search("/" + path):
-            check_rate(key)
+        if method == "POST" and _RATE.search("/" + path) and principal.key:
+            await check_rate(principal.key)
     elif is_create:
         pass
     elif method == "GET" and (
@@ -119,7 +131,7 @@ async def proxy(
             data = json.loads(body)
         except ValueError:
             raise HTTPException(400, "Invalid JSON")
-        _scrub(data, aid, user)
+        _scrub(data, aid, user, principal.customer_id)
         if is_create and isinstance(data, dict):
             data["if_exists"] = "raise"  # never adopt someone else's thread id
         body = json.dumps(data).encode()
@@ -138,7 +150,9 @@ async def proxy(
             if tid:
                 if await db.get(ThreadOwner, tid):
                     raise HTTPException(409, "Thread already exists")
-                db.add(ThreadOwner(thread_id=tid, tenant_id=key.tenant_id, agent_id=key.agent_id, user_id=user))
+                db.add(ThreadOwner(thread_id=tid, tenant_id=principal.tenant_id,
+                                   agent_id=principal.agent_id, user_id=user,
+                                   customer_id=principal.customer_id))
                 await db.commit()
         return Response(r.content, status_code=r.status_code, media_type=r.headers.get("content-type"))
 

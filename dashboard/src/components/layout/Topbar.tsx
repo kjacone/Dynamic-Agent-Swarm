@@ -5,8 +5,8 @@ import { ThemeToggle } from "./ThemeToggle";
 
 export function Topbar({ tenant, onTenant, onLogout, lockedTenant = false, user }: { tenant: string; onTenant: (t: string) => void; onLogout: () => void; lockedTenant?: boolean; user?: string }) {
   return (
-    <header className="flex h-14 items-center justify-between border-b px-6">
-      <div className="flex items-center gap-3 text-sm">
+    <header className="flex h-14 items-center gap-3 border-b px-6">
+      <div className="flex shrink-0 items-center gap-3 text-sm">
         <span className="text-muted-foreground">Tenant</span>
         <input
           value={tenant}
@@ -16,8 +16,8 @@ export function Topbar({ tenant, onTenant, onLogout, lockedTenant = false, user 
           className="w-40 rounded-md border bg-background px-2 py-1 text-sm"
         />
       </div>
-      <div className="flex items-center gap-2">
-        {user && <span className="text-xs text-muted-foreground">{user}</span>}
+      <div className="ml-auto flex min-w-0 items-center gap-2">
+        {user && <span className="truncate text-xs text-muted-foreground">{user}</span>}
         <ThemeToggle />
         {/* existing: notifications, user menu, etc. */}
       </div>
@@ -25,6 +25,7 @@ export function Topbar({ tenant, onTenant, onLogout, lockedTenant = false, user 
       <Button
         variant="ghost"
         size="sm"
+        className="shrink-0"
         onClick={() => {
           clearToken();
           onLogout();

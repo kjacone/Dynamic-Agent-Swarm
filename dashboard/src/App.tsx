@@ -15,9 +15,11 @@ import { Evaluations } from "@/pages/Evaluations";
 import { Observability } from "@/pages/Observability";
 import { Settings } from "@/pages/Settings";
 import { Approvals } from "@/pages/Approvals";
+import { Handoffs } from "@/pages/Handoffs";
 import { Workflows } from "@/pages/Workflows";
 import { Solutions } from "@/pages/Solutions";
 import { Audit } from "@/pages/Audit";
+import { Privacy } from "@/pages/Privacy";
 import { Governance } from "@/pages/Governance";
 import { getToken, api, can, clearToken, type Me } from "@/lib/api";
 import { Connectors } from "@/pages/Connectors";
@@ -30,6 +32,7 @@ export default function App() {
 
   const [me, setMe] = useState<Me | null>(null);
   const [pending, setPending] = useState(0);
+  const [waiting, setWaiting] = useState(0);
 
   useEffect(() => { sessionStorage.setItem(TENANT_KEY, tenant); }, [tenant]);
   useEffect(() => { if (authed) api.authCheck().catch(() => setAuthed(false)); }, [authed]);
@@ -51,12 +54,19 @@ export default function App() {
     api.listApprovals("pending").then((a) => setPending(a.length)).catch(() => {});
   };
   useEffect(() => { refreshPending(); const id = setInterval(refreshPending, 30000); return () => clearInterval(id); }, [authed, me, tenant]);
+  useEffect(() => {
+    if (!authed || !can(me, "handoffs:read")) return;
+    const load = () => api.listHandoffs("requested").then((h) => setWaiting(h.length)).catch(() => {});
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, [authed, me, tenant]);
 
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
   return (
     <div className="flex h-full">
-      <Sidebar active={tab} onSelect={setTab} me={me} badges={{ approvals: pending }} />
+      <Sidebar active={tab} onSelect={setTab} me={me} badges={{ approvals: pending, handoffs: waiting }} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar tenant={tenant} onTenant={setTenant} onLogout={() => { clearToken(); setAuthed(false); }} lockedTenant={!!me && me.auth !== "admin_token"} user={me ? `${me.sub} · ${me.roles.join(", ") || "no roles"}` : undefined} />
         <main className="flex-1 overflow-auto p-6">
@@ -73,9 +83,11 @@ export default function App() {
           {tab === "observability" && <Observability />}
           {tab === "settings" && <Settings tenant={tenant} />}
           {tab === "approvals" && <Approvals key={tenant} me={me} onChanged={refreshPending} />}
-          {tab === "workflows" && <Workflows key={tenant} me={me} />}
+          {tab === "handoffs" && <Handoffs key={tenant} me={me} />}
+          {tab === "workflows" && <Workflows key={tenant} me={me} tenant={tenant} />}
           {tab === "solutions" && <Solutions key={tenant} me={me} />}
           {tab === "audit" && <Audit key={tenant} me={me} />}
+          {tab === "privacy" && <Privacy key={tenant} me={me} />}
           {tab === "governance" && <Governance key={tenant} me={me} />}
         </main>
       </div>

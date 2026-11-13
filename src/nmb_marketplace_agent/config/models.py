@@ -1,8 +1,12 @@
 from datetime import UTC, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Column, Text
+from sqlalchemy import JSON, Column, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 class ToolConfig(SQLModel, table=True):
@@ -137,11 +141,36 @@ class Feedback(SQLModel, table=True):
     tenant_id: str = Field(default="default", index=True)
     agent_id: str = Field(index=True)
     thread_id: str = Field(default="")
+    customer_id: Optional[str] = Field(default=None, index=True)
     rating: str = Field(default="up")
     comment: Optional[str] = Field(default=None)
     user_message: Optional[str] = Field(default=None, sa_column=Column(Text))
     reply: Optional[str] = Field(default=None, sa_column=Column(Text))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class Citation(SQLModel, table=True):
+    """A retrieved passage recorded for one chat run.
+
+    The RAG tool writes these rows (shared database) instead of relying on the
+    stream, so citations survive subagents, async tools and buffered runs. The
+    gateway reads them back by ``run_ref`` when the run finishes.
+    """
+    __tablename__ = "citations"
+    __table_args__ = (
+        UniqueConstraint("run_ref", "seq", name="uq_citation_run_seq"),
+        UniqueConstraint("run_ref", "dedupe_key", name="uq_citation_run_source"),
+    )
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    thread_id: str = Field(default="", index=True)
+    run_ref: str = Field(index=True)
+    seq: int = Field(default=0)
+    collection: str = Field(default="")
+    dedupe_key: str = Field(default="")
+    title: str = Field(default="")
+    page: Optional[int] = Field(default=None)
+    created_at: str = Field(default_factory=lambda: _now_iso())
+
 
 class ThreadOwner(SQLModel, table=True):
     """Maps a chat thread to the agent/tenant/user that owns it.
@@ -154,4 +183,46 @@ class ThreadOwner(SQLModel, table=True):
     tenant_id: str = Field(default="default", index=True)
     agent_id: str = Field(index=True)
     user_id: Optional[str] = Field(default=None, index=True)
+    customer_id: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_active_at: Optional[datetime] = Field(default=None, index=True)
+
+
+class Handoff(SQLModel, table=True):
+    """A chat conversation handed from the bot to a human.
+
+    ``requested`` -> ``active`` (claimed by staff) -> ``resolved`` (bot resumes).
+    At most one non-resolved row exists per thread; a new request after a
+    resolution starts a fresh row so the queue keeps its history.
+    """
+    __tablename__ = "handoffs"
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    thread_id: str = Field(index=True)
+    status: str = Field(default="requested", index=True)
+    reason: str = Field(default="", sa_column=Column(Text))
+    requested_by: str = Field(default="customer")
+    user_id: Optional[str] = Field(default=None, index=True)
+    customer_id: Optional[str] = Field(default=None, index=True)
+    assigned_to: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    resolved_at: Optional[datetime] = Field(default=None)
+
+
+class HandoffMessage(SQLModel, table=True):
+    """A customer or staff turn exchanged while a handoff is open.
+
+    These rows never go through the model: the bot is paused for the whole
+    handoff, so the widget polls this table for staff replies.
+    """
+    __tablename__ = "handoff_messages"
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    thread_id: str = Field(index=True)
+    handoff_id: str = Field(index=True)
+    role: str = Field(default="customer")  # customer | staff
+    author: str = Field(default="")
+    text: str = Field(default="", sa_column=Column(Text))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

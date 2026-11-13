@@ -187,12 +187,15 @@ DEFAULT_POLICY = Policy(
     rules=[
         Rule(id="block-injection-input", kinds=["prompt_injection"], applies_to=["input", "document", "tool_result"],
              min_score=0.8, action="block", message="Possible prompt-injection attempt."),
-        Rule(id="block-secrets-out", kinds=["secret"], applies_to=["output", "tool_args"], action="block",
-             message="Credentials must never leave the platform."),
+        Rule(id="block-secrets-out", kinds=["secret"], applies_to=["output", "tool_args", "tool_result"],
+             action="block", message="Credentials must never leave the platform."),
         Rule(id="redact-card-and-ids-out", kinds=["credit_card", "iban", "us_ssn", "tax_id", "national_id"],
              applies_to=["output"], action="redact"),
         Rule(id="redact-card-in", kinds=["credit_card"], applies_to=["input", "document"], action="redact",
              message="Card numbers are never sent to a model (PCI DSS scope reduction)."),
+        Rule(id="redact-ids-in-documents", kinds=["credit_card", "iban", "us_ssn", "tax_id", "national_id"],
+             applies_to=["document"], action="redact",
+             message="Identifiers in retrieved documents are masked before they reach a model."),
         Rule(id="log-contact-pii", kinds=["email", "phone"], action="log"),
     ],
 )
@@ -271,6 +274,65 @@ class PolicyEngine:
         return d
 
 
+class OutputStreamGuard:
+    """Apply output policy to a token stream without leaking a split pattern.
+
+    Model tokens are not aligned to policy patterns: a card number or key can be
+    split across chunks. The guard therefore only emits up to a sentence boundary
+    that is at least ``holdback`` characters behind the buffer end, so a match
+    always completes inside one screened chunk. ``flush`` screens the remainder.
+    """
+
+    def __init__(self, engine: PolicyEngine, holdback: int = 128):
+        self.engine = engine
+        self.holdback = holdback
+        self.buffer = ""
+        self.blocked = False
+        self.redacted = False
+        self.decision: Decision | None = None
+        self._boundary = -1
+
+    def feed(self, text: str) -> str:
+        if self.blocked or not text:
+            return ""
+        start = len(self.buffer)
+        self.buffer += text
+        self._remember_boundaries(start)
+        limit = len(self.buffer) - self.holdback
+        if self._boundary < 0 or self._boundary > limit:
+            return ""
+        cut, self._boundary = self._boundary, -1
+        return self._emit(cut)
+
+    def flush(self) -> str:
+        if self.blocked:
+            return ""
+        self._boundary = -1
+        return self._emit(len(self.buffer))
+
+    def _remember_boundaries(self, start: int) -> None:
+        # A dot only ends a sentence when whitespace follows; that keeps dots
+        # inside JWTs, emails, URLs and decimals from becoming unsafe cut points.
+        for i in range(max(0, start - 1), max(0, len(self.buffer) - 1)):
+            ch = self.buffer[i]
+            if ch == "\n" or (ch in ".!?" and self.buffer[i + 1].isspace()):
+                self._boundary = i + 1
+
+    def _emit(self, cut: int) -> str:
+        if cut <= 0:
+            return ""
+        chunk, self.buffer = self.buffer[:cut], self.buffer[cut:]
+        dec = self.engine.check_text(chunk, "output")
+        self.decision = dec
+        if dec.blocked:
+            self.blocked = True
+            self.buffer = ""
+            return ""
+        if dec.text is not None and dec.text != chunk:
+            self.redacted = True
+        return dec.text if dec.text is not None else chunk
+
+
 # ── LangChain/LangGraph integration ───────────────────────────────────
 def guard_tools(tools: list, engine: PolicyEngine, *, tenant_id: str, agent_id: str = "",
                 on_event: Callable[[str, dict], None] | None = None) -> list:
@@ -311,20 +373,66 @@ def guard_tools(tools: list, engine: PolicyEngine, *, tenant_id: str, agent_id: 
                 emit("tool.approved", {"tool": tool.name})
             return args, None
 
+        # RAG retrievers declare `policy_direction: document` in metadata so retrieved
+        # chunks get the stricter document rules; everything else is screened as tool output.
+        direction = "document" if (getattr(tool, "metadata", None) or {}).get("policy_direction") == "document" else "tool_result"
+        withheld = object()
+
         def _post(result):
-            if isinstance(result, str):
-                out = engine.check_text(result, "tool_result")
-                if out.blocked:
-                    emit("tool.result_blocked", {"tool": tool.name, **out.as_dict()})
-                    return "Tool result withheld by policy."
-                return out.text if out.text is not None else result
-            return result
+            holder: dict = {"dec": None, "redacted": False}
+
+            def walk(value):
+                if isinstance(value, str):
+                    dec = engine.check_text(value, direction)
+                    if dec.findings or dec.action != "allow":
+                        holder["dec"] = holder["dec"] or dec
+                    if dec.blocked:
+                        return withheld
+                    out = dec.text if dec.text is not None else value
+                    if out != value:
+                        holder["redacted"] = True
+                    return out
+                if isinstance(value, list):
+                    out = []
+                    for item in value:
+                        v = walk(item)
+                        if v is withheld:
+                            return withheld
+                        out.append(v)
+                    return out
+                if isinstance(value, dict):
+                    out = {}
+                    for k, item in value.items():
+                        v = walk(item)
+                        if v is withheld:
+                            return withheld
+                        out[k] = v
+                    return out
+                return value
+
+            screened = walk(result)
+            dec = holder["dec"]
+            if screened is withheld:
+                emit("tool.result_blocked", {"tool": tool.name, **(dec.as_dict() if dec else {})})
+                return "Tool result withheld by policy."
+            if holder["redacted"] and dec is not None:
+                emit("tool.result_redacted", {"tool": tool.name, **dec.as_dict()})
+            return screened
 
         def sync(**kw):
             args, refusal = _gate(kw)
             if refusal:
                 return refusal
             emit("tool.call", {"tool": tool.name})
+            # Retrieval tools are async (they do network + DB work); the agent
+            # runtime always takes the async path, but keep sync callers working.
+            if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
+                import asyncio
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    return _post(asyncio.run(tool.ainvoke(args)))
+                raise RuntimeError(f"Tool '{tool.name}' is async; await it instead of calling invoke()")
             return _post(tool.invoke(args))
 
         async def asyn(**kw):

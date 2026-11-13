@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Check, Copy, KeyRound, Settings2 } from "lucide-react";
 import { api, type ApiKey, type Agent, type Connection, type ServiceStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,13 +8,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { PageHeader } from "@/components/common/PageHeader";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { StatusBadge } from "@/components/common/StatusBadge";
 import { useToast } from "@/components/ui/toast";
-import { fmtDate, truncate } from "@/lib/utils";
+import { fmtDate } from "@/lib/utils";
 import { AsyncButton } from "@/components/common/AsyncButton";
+import { cn } from "@/lib/utils";
 
 const SERVICES = ["langfuse", "ollama", "vllm", "litellm", "langgraph"] as const;
 type ServiceName = (typeof SERVICES)[number];
@@ -21,9 +24,9 @@ type ServiceName = (typeof SERVICES)[number];
 export function Settings({ tenant }: { tenant: string }) {
   return (
     <div>
-      <PageHeader title="Settings" description="Service connections, API keys, and embed snippets." />
+      <PageHeader icon={Settings2} title="Settings" description="Service connections, API keys, and embed snippets." />
       <Tabs defaultValue="connections">
-        <TabsList>
+        <TabsList className="h-10 rounded-xl p-1">
           <TabsTrigger value="connections">Connections</TabsTrigger>
           <TabsTrigger value="keys">API keys</TabsTrigger>
           <TabsTrigger value="embed">Embed</TabsTrigger>
@@ -89,34 +92,36 @@ function ConnectionsTab() {
   const st = status[active];
 
   return (
-    <div className="grid gap-4 md:grid-cols-[220px,1fr]">
-      <div className="space-y-1">
-        {SERVICES.map((s) => (
-          <button
-            key={s}
-            onClick={() => setActive(s)}
-            className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm ${
-              active === s ? "bg-muted font-medium" : "hover:bg-muted/60"
-            }`}
-          >
-            <span className="capitalize">{s}</span>
-            {status[s] && (
-              <Badge variant={status[s].ok ? "success" : status[s].configured ? "destructive" : "outline"}>
-                {status[s].ok ? "ok" : status[s].configured ? "bad" : "—"}
-              </Badge>
-            )}
-          </button>
-        ))}
-      </div>
+    <div className="grid gap-4 md:grid-cols-[240px,minmax(0,1fr)]">
+      <Card className="self-start"><CardHeader className="pb-2"><CardTitle className="text-sm">Services</CardTitle></CardHeader>
+        <CardContent className="space-y-1 p-2">
+          {SERVICES.map((s) => (
+            <button key={s} onClick={() => setActive(s)}
+              className={cn(
+                "flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
+                active === s ? "border-primary/40 bg-primary/5 font-medium shadow-sm" : "border-transparent hover:bg-muted/60",
+              )}>
+              <span className="capitalize">{s}</span>
+              {status[s] && (
+                <StatusBadge
+                  value={status[s].ok ? "pass" : status[s].configured ? "fail" : "cancelled"}
+                  label={status[s].ok ? "ok" : status[s].configured ? "bad" : "—"}
+                />
+              )}
+            </button>
+          ))}
+        </CardContent></Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex-row items-center justify-between space-y-0">
           <CardTitle className="capitalize">{active}</CardTitle>
+          {st && <StatusBadge value={st.ok ? "pass" : st.configured ? "fail" : "cancelled"} label={st.ok ? "connected" : st.configured ? "failing" : "not configured"} />}
         </CardHeader>
         <CardContent className="space-y-3">
+          {fields.length === 0 && <div className="text-sm text-muted-foreground">No settings for this service.</div>}
           {fields.map((field) => (
-            <div key={field} className="space-y-1">
-              <Label htmlFor={`${active}-${field}`}>{field.replace(/_/g, " ")}</Label>
+            <div key={field} className="space-y-1.5">
+              <Label htmlFor={`${active}-${field}`} className="capitalize">{field.replace(/_/g, " ")}</Label>
               <Input
                 id={`${active}-${field}`}
                 value={(values[active] as any)?.[field] || ""}
@@ -125,7 +130,7 @@ function ConnectionsTab() {
               />
             </div>
           ))}
-          <div className="flex gap-2 pt-2">
+          <div className="flex gap-2 border-t border-border/60 pt-3">
             <AsyncButton onRun={save}>Save</AsyncButton>
             <Button
               variant="outline"
@@ -139,11 +144,14 @@ function ConnectionsTab() {
                 }
               }}
             >
-              Test
+              Test connection
             </Button>
           </div>
           {st && (
-            <div className="text-xs text-muted-foreground">
+            <div className={cn(
+              "rounded-lg border p-2.5 text-xs",
+              st.ok ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400" : "border-border bg-muted/40 text-muted-foreground",
+            )}>
               {st.detail}
               {st.latency_ms != null && ` · ${st.latency_ms}ms`}
             </div>
@@ -160,6 +168,8 @@ function KeysTab({ tenant }: { tenant: string }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [open, setOpen] = useState(false);
   const [created, setCreated] = useState<ApiKey | null>(null);
+  const [revoking, setRevoking] = useState<ApiKey | null>(null);
+  const [copied, setCopied] = useState(false);
   const toast = useToast();
 
   async function refresh() {
@@ -172,7 +182,9 @@ function KeysTab({ tenant }: { tenant: string }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="text-sm text-muted-foreground">Keys are shown once. Store them securely.</div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <KeyRound className="h-4 w-4" /> Keys are shown once. Store them securely.
+        </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button>New key</Button>
@@ -192,55 +204,75 @@ function KeysTab({ tenant }: { tenant: string }) {
       </div>
 
       {created && (
-        <Card className="border-emerald-300 bg-emerald-50">
-          <CardHeader><CardTitle>Key created — copy now</CardTitle></CardHeader>
+        <Card className="border-emerald-500/30 bg-emerald-500/5">
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-sm text-emerald-700 dark:text-emerald-400">Key created — copy it now</CardTitle>
+            <Button size="sm" variant="outline" onClick={async () => {
+              await navigator.clipboard.writeText(created.key ?? "");
+              setCopied(true);
+              toast.push("Key copied", "success");
+              setTimeout(() => setCopied(false), 1500);
+            }}>
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
+            </Button>
+          </CardHeader>
           <CardContent>
-            <code className="block break-all rounded bg-white p-2 text-xs">{created.key}</code>
-            <div className="mt-2 text-xs text-emerald-900">This value is never shown again.</div>
+            <code className="block break-all rounded-lg border bg-background p-2.5 font-mono text-xs">{created.key}</code>
+            <div className="mt-2 text-xs text-muted-foreground">This value is never shown again.</div>
           </CardContent>
         </Card>
       )}
 
-      <Card>
-        <Table>
-          <THead>
-            <TR>
-              <TH>Name</TH><TH>Kind</TH><TH>Prefix</TH><TH>Agent</TH>
-              <TH>Origins</TH><TH>Rate</TH><TH>Created</TH><TH></TH>
-            </TR>
-          </THead>
-          <TBody>
-            {keys.map((k) => (
-              <TR key={k.id}>
-                <TD>{k.name}</TD>
-                <TD><Badge variant="secondary">{k.kind}</Badge></TD>
-                <TD className="font-mono text-xs">{k.prefix}…</TD>
-                <TD className="font-mono text-xs">{k.agent_id.slice(0, 8)}…</TD>
-                <TD className="text-xs">{k.allowed_origins.join(", ") || "—"}</TD>
-                <TD className="text-xs tabular-nums">{k.rate_limit_per_min}/min</TD>
-                <TD className="text-xs">{fmtDate(k.created_at)}</TD>
-                <TD>
-                  {k.revoked ? (
-                    <Badge variant="outline">revoked</Badge>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={async () => {
-                        await api.revokeKey(k.id);
-                        toast.push("Revoked", "success");
-                        refresh();
-                      }}
-                    >
-                      Revoke
-                    </Button>
-                  )}
-                </TD>
+      {keys.length === 0 ? (
+        <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">No API keys yet. Create one to embed the assistant on a site.</CardContent></Card>
+      ) : (
+        <Card>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Name</TH><TH>Kind</TH><TH>Prefix</TH><TH>Agent</TH>
+                <TH>Origins</TH><TH className="text-right">Rate</TH><TH>Created</TH><TH></TH>
               </TR>
-            ))}
-          </TBody>
-        </Table>
-      </Card>
+            </THead>
+            <TBody>
+              {keys.map((k) => (
+                <TR key={k.id}>
+                  <TD className="font-medium">{k.name}</TD>
+                  <TD><Badge variant="secondary">{k.kind}</Badge></TD>
+                  <TD className="font-mono text-xs text-muted-foreground">{k.prefix}…</TD>
+                  <TD className="font-mono text-xs text-muted-foreground">{k.agent_id.slice(0, 8)}…</TD>
+                  <TD className="max-w-[180px] truncate text-xs">{k.allowed_origins.join(", ") || "—"}</TD>
+                  <TD className="text-right text-xs tabular-nums">{k.rate_limit_per_min}/min</TD>
+                  <TD className="whitespace-nowrap text-xs">{fmtDate(k.created_at)}</TD>
+                  <TD>
+                    {k.revoked ? (
+                      <StatusBadge value="cancelled" label="revoked" />
+                    ) : (
+                      <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setRevoking(k)}>
+                        Revoke
+                      </Button>
+                    )}
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </Card>
+      )}
+
+      {revoking && (
+        <ConfirmDialog
+          title={`Revoke ${revoking.name}?`}
+          description="Any site or service using this key will stop working immediately. This cannot be undone."
+          confirmLabel="Revoke key" destructive
+          onClose={() => setRevoking(null)}
+          onConfirm={async () => {
+            await api.revokeKey(revoking.id);
+            toast.push("Key revoked", "success");
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -275,7 +307,10 @@ function CreateKeyForm({
 
   return (
     <>
-      <DialogHeader><DialogTitle>Create API key</DialogTitle></DialogHeader>
+      <DialogHeader>
+        <DialogTitle>Create API key</DialogTitle>
+        <DialogDescription>One key per site or integration. Restrict origins in production.</DialogDescription>
+      </DialogHeader>
       <div className="space-y-3">
         <div><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div>
@@ -319,6 +354,8 @@ function EmbedTab({ tenant }: { tenant: string }) {
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [agentId, setAgentId] = useState("");
   const [keyId, setKeyId] = useState("");
+  const [copied, setCopied] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     (async () => {
@@ -367,10 +404,20 @@ function EmbedTab({ tenant }: { tenant: string }) {
           </div>
         </div>
         {snippet && (
-          <div>
-            <Label>Embed snippet</Label>
-            <pre className="overflow-auto rounded-md border bg-muted/40 p-3 text-xs">{snippet}</pre>
-            <div className="mt-1 text-xs text-muted-foreground">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Embed snippet</Label>
+              <Button size="sm" variant="outline" onClick={async () => {
+                await navigator.clipboard.writeText(snippet);
+                setCopied(true);
+                toast.push("Snippet copied", "success");
+                setTimeout(() => setCopied(false), 1500);
+              }}>
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
+              </Button>
+            </div>
+            <pre className="overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-relaxed">{snippet}</pre>
+            <div className="text-xs text-muted-foreground">
               The prefix shown is a placeholder — paste the real key you saved when creating it.
             </div>
           </div>

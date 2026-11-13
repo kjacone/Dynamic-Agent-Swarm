@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>NMB Marketplace — industry solution packs</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { --teal:#0f766e; --teal-dark:#115e59; --ink:#0f172a; --muted:#52627a; --line:#dbe3ec; --bg:#f3f6fa; --card:#fff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+  body.lock { overflow:hidden; }
+  header { background:linear-gradient(135deg,var(--teal),var(--teal-dark)); color:#fff; }
+  .bar { max-width:1120px; margin:0 auto; padding:0 20px; height:64px; display:flex; align-items:center; gap:18px; }
+  .brand { font-weight:800; letter-spacing:-.02em; font-size:19px; }
+  .brand span { opacity:.75; font-weight:500; }
+  .bar .spacer { flex:1; }
+  .btn { border:0; border-radius:9px; padding:9px 15px; font:inherit; font-weight:600; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:6px; }
+  .btn-primary { background:var(--teal); color:#fff; }
+  .btn-primary:hover { background:var(--teal-dark); }
+  .btn-ghost { background:#fff; color:var(--teal-dark); border:1px solid var(--line); }
+  .btn-light { background:rgb(255 255 255 / .14); color:#fff; border:1px solid rgb(255 255 255 / .35); }
+  .btn-light:hover { background:rgb(255 255 255 / .24); }
+  .hero { max-width:1120px; margin:0 auto; padding:34px 20px 30px; }
+  .hero h1 { margin:0 0 6px; font-size:30px; letter-spacing:-.03em; }
+  .hero p { margin:0; color:#d8fbf6; max-width:640px; }
+  .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:22px; }
+  .search { flex:1 1 240px; max-width:340px; border:1px solid rgb(255 255 255 / .35); background:rgb(255 255 255 / .12); color:#fff; border-radius:9px; padding:9px 12px; font:inherit; }
+  .search::placeholder { color:#c7eee9; }
+  .search:focus { outline:2px solid #e7fffb; background:rgb(255 255 255 / .2); }
+  .chip { border:1px solid rgb(255 255 255 / .35); background:transparent; color:#e7fffb; border-radius:999px; padding:5px 11px; font:inherit; font-size:12px; cursor:pointer; }
+  .chip:hover { background:rgb(255 255 255 / .12); }
+  .chip.on { background:#fff; color:var(--teal-dark); border-color:#fff; font-weight:700; }
+  main { max-width:1120px; margin:0 auto; padding:24px 20px 70px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:0 1px 2px rgb(15 23 42 / .04); display:flex; flex-direction:column; gap:10px; }
+  .pack h3 { margin:0; font-size:16px; letter-spacing:-.01em; }
+  .rowtop { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+  .muted { color:var(--muted); }
+  .pack .muted { font-size:12px; }
+  .pack p { margin:0; font-size:13.5px; color:#334155; flex:1; }
+  .badge { font-size:11px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; border-radius:999px; padding:3px 9px; background:#eef2f7; color:#334155; white-space:nowrap; }
+  .badge.both { background:#e7fffb; color:var(--teal-dark); }
+  .badge.agent_kit { background:#e8f1ff; color:#1d4ed8; }
+  .chips, .fw { display:flex; flex-wrap:wrap; gap:5px; }
+  .mini { font-size:11px; color:var(--muted); background:#f1f5f9; border-radius:5px; padding:1px 6px; }
+  .pack .btn { justify-content:center; }
+  #status { padding:18px 0; }
+  .error { border:1px solid #fecaca; background:#fef2f2; color:#991b1b; border-radius:10px; padding:12px 14px; font-size:14px; }
+  .overlay { position:fixed; inset:0; background:rgb(15 23 42 / .55); display:grid; place-items:center; padding:20px; z-index:20; }
+  .overlay[hidden] { display:none; }
+  .modal { background:#fff; width:min(760px,100%); max-height:88vh; border-radius:16px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 60px rgb(15 23 42 / .3); }
+  .modal header { background:#fff; color:var(--ink); border-bottom:1px solid var(--line); }
+  .modal .bar { height:auto; padding:18px 20px; align-items:flex-start; }
+  .modal h2 { margin:0 0 2px; font-size:19px; letter-spacing:-.02em; }
+  .modal .sub { font-size:12px; color:var(--muted); }
+  .close { border:0; background:#f1f5f9; border-radius:8px; width:30px; height:30px; font-size:16px; cursor:pointer; color:#334155; }
+  #modal-body { padding:18px 20px; overflow:auto; display:flex; flex-direction:column; gap:16px; }
+  #modal-body p.summary { margin:0; font-size:14px; }
+  section h4 { margin:0 0 6px; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); }
+  .drow { display:flex; justify-content:space-between; gap:12px; border:1px solid var(--line); border-radius:9px; padding:8px 10px; font-size:13px; margin-bottom:6px; }
+  .drow:last-child { margin-bottom:0; }
+  .drow code { font-size:11px; color:var(--muted); }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .modal footer { border-top:1px solid var(--line); padding:14px 20px; display:flex; align-items:center; gap:10px; }
+  .modal footer .spacer { flex:1; }
+  .note { font-size:12px; color:var(--muted); }
+  footer.page { max-width:1120px; margin:0 auto; padding:0 20px 40px; color:var(--muted); font-size:12px; }
+  @media (max-width:640px) { .two { grid-template-columns:1fr; } .hero h1 { font-size:24px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">NMB <span>Marketplace</span></div>
+    <div class="spacer"></div>
+    <a id="signin" class="btn btn-light" href="/">Sign in to install</a>
+  </div>
+  <div class="hero">
+    <h1>Industry solution packs, ready to install</h1>
+    <p>Agents, workflows, knowledge and evaluations for banking, insurance, telecoms, government and more. Preview any pack before you sign in — nothing is installed while you browse.</p>
+    <div class="toolbar">
+      <input id="q" class="search" type="search" placeholder="Search packs…" aria-label="Search packs" />
+      <div id="industries" class="chips"></div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div id="status" class="muted">Loading the marketplace…</div>
+  <div id="grid" class="grid"></div>
+</main>
+
+<div id="modal" class="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <header>
+      <div class="bar">
+        <div>
+          <h2 id="modal-title">Pack</h2>
+          <div id="modal-sub" class="sub"></div>
+        </div>
+        <div class="spacer"></div>
+        <button class="close" id="close" aria-label="Close">✕</button>
+      </div>
+    </header>
+    <div id="modal-body"></div>
+    <footer>
+      <span class="note">Preview only — sign in to install and run sample cases.</span>
+      <div class="spacer"></div>
+      <a id="modal-signin" class="btn btn-primary" href="/">Sign in to install</a>
+    </footer>
+  </div>
+</div>
+
+<footer class="page">NMB Marketplace · sample packs ship with synthetic knowledge and test data. No customer data is shown here.</footer>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const INDUSTRY = { banking: "Banking", insurance: "Insurance", telecom: "Telecoms", government: "Government", healthcare: "Healthcare", ngo: "NGOs", corporate: "Corporate", education: "Education", retail: "Retail & commerce" };
+const DELIVERY = {
+  workflow: { label: "Back-office workflow", hint: "Runs behind the scenes: documents, approvals, system integrations" },
+  agent_kit: { label: "Agent-kit widget", hint: "A chat assistant embedded in your website or app" },
+  both: { label: "Widget + workflow", hint: "Customer-facing assistant plus back-office process" },
+};
+
+const signin = new URLSearchParams(location.search).get("signin") || "/";
+$("#signin").href = signin;
+$("#modal-signin").href = signin;
+
+let all = [], industry = "all", q = "";
+
+const section = (title, html) => (html ? `<section><h4>${esc(title)}</h4>${html}</section>` : "");
+const drow = (left, right = "") => `<div class="drow"><div>${left}</div><div class="muted">${esc(right)}</div></div>`;
+const minis = (items) => items.map((x) => `<span class="mini">${esc(x)}</span>`).join("");
+const many = (n, one, plural) => `${n} ${n === 1 ? one : plural || one + "s"}`;
+
+function card(p) {
+  const a = p.assets || {};
+  const d = DELIVERY[p.delivery] || { label: p.delivery };
+  const chips = [
+    many((a.agents || 0) + (a.supervisor ? 1 : 0), "agent"),
+    many(a.workflows || 0, "workflow"),
+    a.knowledge_docs ? many(a.knowledge_docs, "KB doc") : "",
+    a.eval_cases ? many(a.eval_cases, "eval case") : "",
+    a.samples ? many(a.samples, "sample") : "",
+  ].filter(Boolean);
+  return `<article class="card pack">
+    <div class="rowtop">
+      <div>
+        <h3>${esc(p.name)}</h3>
+        <div class="muted">${esc(INDUSTRY[p.industry] || p.industry)} · v${esc(p.version)} · ${esc(d.label)}</div>
+      </div>
+      <span class="badge ${esc(p.delivery)}">${esc(p.delivery === "workflow" ? "Workflow" : "Assistant")}</span>
+    </div>
+    <p>${esc(p.summary)}</p>
+    <div class="chips">${minis(chips)}</div>
+    <div class="fw">${minis((p.frameworks || []).slice(0, 4))}</div>
+    <button class="btn btn-primary" data-open="${esc(p.id)}">View contents</button>
+  </article>`;
+}
+
+function renderIndustries() {
+  const counts = {};
+  all.forEach((p) => { counts[p.industry] = (counts[p.industry] || 0) + 1; });
+  const items = [["all", `All (${all.length})`]].concat(
+    Object.keys(counts).sort().map((k) => [k, `${INDUSTRY[k] || k} (${counts[k]})`]),
+  );
+  $("#industries").innerHTML = items.map(([k, l]) =>
+    `<button class="chip ${k === industry ? "on" : ""}" data-ind="${esc(k)}">${esc(l)}</button>`).join("");
+}
+
+function render() {
+  const list = all.filter((p) =>
+    (industry === "all" || p.industry === industry) &&
+    (!q || `${p.name} ${p.summary}`.toLowerCase().includes(q)));
+  $("#grid").innerHTML = list.map(card).join("");
+  $("#status").hidden = list.length > 0;
+  if (!list.length) {
+    $("#status").hidden = false;
+    $("#status").textContent = "No packs match that filter.";
+  }
+}
+
+function detail(d) {
+  const a = d.agents || [];
+  const sup = d.supervisor;
+  const kpis = (d.kpis || []).map((k) =>
+    `<div class="drow"><div><b>${esc(k.name.replace(/_/g, " "))}</b>${k.formula ? ` <span class="muted">· ${esc(k.formula)}</span>` : ""}</div></div>`).join("");
+  const agents = a.map((x) =>
+    drow(`<b>${esc(x.name)}</b> <code>${esc(x.key)}</code>`, (x.tools || []).join(", ") || "no tools")).join("");
+  const workflows = (d.workflows || []).map((w) =>
+    drow(`<b>${esc(w.name)}</b> <code>${esc(w.key)}</code>`)).join("");
+  const knowledge = (d.knowledge || []).map((k) =>
+    drow(`<b>${esc(k.collection)}</b>${k.description ? ` <span class="muted">· ${esc(k.description)}</span>` : ""}`, `${k.documents} docs`)).join("");
+  const connectors = (d.connectors || []).map((c) =>
+    drow(`<code>${esc(c.name)}</code>`, c.type)).join("");
+  const evals = (d.evals || []).map((e) => drow(esc(e.name), `${e.cases} cases`)).join("") || `<div class="note">None</div>`;
+  const training = (d.training || []).map((t) => drow(esc(t.name || "dataset"), `${t.rows} rows`)).join("") || `<div class="note">None</div>`;
+  const samples = (d.samples || []).map((s) =>
+    `<div class="drow"><div><b>${esc(s.title)}</b>${s.expect ? `<div class="muted">Expected: ${esc(s.expect.replace(/_/g, " "))}</div>` : ""}</div></div>`).join("");
+  const models = (d.models || []).map((m) =>
+    drow(`<b>${esc(m.role)}</b> <code>${esc(m.recommended)}</code>`, m.tier)).join("");
+
+  return `
+    <p class="summary">${esc(d.summary)}</p>
+    <div class="fw">${minis([...(d.frameworks || []), ...(d.audience || [])])}</div>
+    ${sup ? section("Supervisor", drow(`<b>${esc(sup.name)}</b>`, (sup.delegates || []).join(", "))) : ""}
+    ${section("Agents", agents)}
+    ${section("Workflows", workflows)}
+    ${section("Knowledge", knowledge)}
+    ${section("Connector templates", connectors)}
+    <div class="two">${section("Evaluations", evals)}${section("Training data", training)}</div>
+    ${section("KPIs", kpis)}
+    ${section("Sample cases", samples)}
+    ${section("Recommended models", models)}
+    ${d.widget ? section("Widget", drow(`<b>${esc(d.widget.title || "Chat assistant")}</b>`, d.widget.greeting || "")) : ""}
+  `;
+}
+
+async function openPack(id) {
+  const modal = $("#modal");
+  modal.hidden = false;
+  document.body.classList.add("lock");
+  $("#modal-title").textContent = "Loading…";
+  $("#modal-sub").textContent = "Preview only, nothing is installed";
+  $("#modal-body").innerHTML = `<p class="muted">Loading pack contents…</p>`;
+  try {
+    const r = await fetch(`/v1/marketplace/${encodeURIComponent(id)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    $("#modal-title").textContent = d.name;
+    $("#modal-sub").textContent = `${INDUSTRY[d.industry] || d.industry} · v${d.version} · preview only`;
+    $("#modal-body").innerHTML = detail(d);
+  } catch (e) {
+    $("#modal-body").innerHTML = `<div class="error">Could not load this pack: ${esc(e.message)}</div>`;
+  }
+}
+
+function closePack() {
+  $("#modal").hidden = true;
+  document.body.classList.remove("lock");
+}
+
+$("#grid").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-open]");
+  if (b) openPack(b.dataset.open);
+});
+$("#industries").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ind]");
+  if (!b) return;
+  industry = b.dataset.ind;
+  renderIndustries();
+  render();
+});
+$("#q").addEventListener("input", (e) => { q = e.target.value.toLowerCase().trim(); render(); });
+$("#close").addEventListener("click", closePack);
+$("#modal").addEventListener("click", (e) => { if (e.target === $("#modal")) closePack(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#modal").hidden) closePack(); });
+
+(async function boot() {
+  try {
+    const r = await fetch("/v1/marketplace");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    all = data.packs || [];
+    $("#status").hidden = true;
+    renderIndustries();
+    render();
+  } catch (e) {
+    $("#status").innerHTML = `<div class="error">Could not load the marketplace: ${esc(e.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>

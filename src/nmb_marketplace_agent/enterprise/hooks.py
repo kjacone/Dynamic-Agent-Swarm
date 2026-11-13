@@ -19,14 +19,25 @@ log = logging.getLogger(__name__)
 _tasks: set[asyncio.Task] = set()
 
 
-async def enforce_chat(db: AsyncSession, *, tenant_id: str, agent_id: str, actor: str, message: str) -> str:
+OUTPUT_BLOCK_MESSAGE = (
+    "I can't share that response because it conflicts with this deployment's "
+    "data-protection policy. Please rephrase your request or contact support."
+)
+
+
+async def enforce_chat(db: AsyncSession, *, tenant_id: str, agent_id: str, actor: str, message: str,
+                       actor_type: str = "api_key", meter: bool = True) -> str:
     """Policy-check an inbound chat message, audit it (hash only, never content), meter it.
-    Returns the (possibly redacted) message or raises HTTP 400/429."""
+    Returns the (possibly redacted) message or raises HTTP 400/429.
+
+    ``meter=False`` screens the text (host-app context attached to the same turn)
+    without counting it as another agent run.
+    """
     engine = PolicyEngine(await load_policy(db, tenant_id))
     dec = engine.check_text(message, "input")
     digest = hashlib.sha256(message.encode()).hexdigest()[:16]
     if dec.blocked:
-        await audit.record(db, tenant_id=tenant_id, actor=actor, actor_type="api_key", action="chat.blocked",
+        await audit.record(db, tenant_id=tenant_id, actor=actor, actor_type=actor_type, action="chat.blocked",
                            resource_type="agent", resource_id=agent_id, outcome="denied",
                            details={"sha256_16": digest, **dec.as_dict()})
         await record_usage(db, tenant_id, "policy_blocks")
@@ -34,11 +45,56 @@ async def enforce_chat(db: AsyncSession, *, tenant_id: str, agent_id: str, actor
     q = await quota_status(db, tenant_id)
     if q.get("agent_runs", {}).get("exceeded") and os.environ.get("QUOTA_HARD_STOP", "false") == "true":
         raise HTTPException(429, "Monthly agent-run quota exceeded")
-    await audit.record(db, tenant_id=tenant_id, actor=actor, actor_type="api_key", action="chat.request",
-                       resource_type="agent", resource_id=agent_id,
-                       details={"sha256_16": digest, "chars": len(message), "pii_kinds": sorted({f.kind for f in dec.findings})})
-    await record_usage(db, tenant_id, "agent_runs", agent=agent_id)
+    if meter:
+        await audit.record(db, tenant_id=tenant_id, actor=actor, actor_type=actor_type, action="chat.request",
+                           resource_type="agent", resource_id=agent_id,
+                           details={"sha256_16": digest, "chars": len(message), "pii_kinds": sorted({f.kind for f in dec.findings})})
+        await record_usage(db, tenant_id, "agent_runs", agent=agent_id)
     return dec.text if dec.text is not None else message
+
+
+def _output_details(text: str, dec) -> dict:
+    return {"sha256_16": hashlib.sha256(text.encode()).hexdigest()[:16],
+            "rule_ids": dec.rule_ids, "kinds": sorted({f.kind for f in dec.findings})}
+
+
+async def _write_output_event(db: AsyncSession, *, tenant_id: str, agent_id: str, actor: str,
+                              actor_type: str, action: str, text: str, dec) -> None:
+    await audit.record(db, tenant_id=tenant_id, actor=actor, actor_type=actor_type, action=action,
+                       resource_type="agent", resource_id=agent_id,
+                       outcome="denied" if action.endswith("blocked") else "success",
+                       details=_output_details(text, dec))
+    if action.endswith("blocked"):
+        await record_usage(db, tenant_id, "policy_blocks")
+
+
+async def audit_output(*, tenant_id: str, agent_id: str, actor: str, actor_type: str,
+                       action: str, text: str, dec) -> None:
+    """Record an output-side decision on a fresh session (safe inside an SSE generator)."""
+    from nmb_marketplace_agent.config.database import async_session
+    async with async_session() as db:
+        await _write_output_event(db, tenant_id=tenant_id, agent_id=agent_id, actor=actor,
+                                  actor_type=actor_type, action=action, text=text, dec=dec)
+
+
+async def enforce_output(db: AsyncSession, *, tenant_id: str, agent_id: str, actor: str,
+                         actor_type: str = "api_key", text: str) -> tuple[str, bool]:
+    """Screen a completed reply. Returns ``(safe_text, blocked)``.
+
+    A block is replaced with a fixed refusal (the reasons are not echoed back to
+    the end user); redactions are audited with hashes and kinds only.
+    """
+    engine = PolicyEngine(await load_policy(db, tenant_id))
+    dec = engine.check_text(text, "output")
+    if dec.blocked:
+        await _write_output_event(db, tenant_id=tenant_id, agent_id=agent_id, actor=actor,
+                                  actor_type=actor_type, action="chat.output_blocked", text=text, dec=dec)
+        return OUTPUT_BLOCK_MESSAGE, True
+    out = dec.text if dec.text is not None else text
+    if out != text:
+        await _write_output_event(db, tenant_id=tenant_id, agent_id=agent_id, actor=actor,
+                                  actor_type=actor_type, action="chat.output_redacted", text=text, dec=dec)
+    return out, False
 
 
 async def guard_agent_tools(tools: list, tenant_id: str, agent_id: str) -> list:

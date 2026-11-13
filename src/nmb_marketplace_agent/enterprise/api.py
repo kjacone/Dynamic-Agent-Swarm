@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from nmb_marketplace_agent.api.deps import get_db
+from nmb_marketplace_agent.config.models import Handoff, HandoffMessage
 from nmb_marketplace_agent.enterprise import audit, compliance, metering
+from nmb_marketplace_agent.enterprise import handoff as handoff_service
+from nmb_marketplace_agent.enterprise import notifications as notification_service
+from nmb_marketplace_agent.enterprise import privacy as privacy_service
 from nmb_marketplace_agent.enterprise.connectors import (
     ConnectorError,
     EgressPolicy,
@@ -27,7 +31,11 @@ from nmb_marketplace_agent.enterprise.licensing import current_license, require_
 from nmb_marketplace_agent.enterprise.models import (
     Approval,
     ConnectorConfig,
+    InstalledSolution,
+    Notification,
+    NotificationRoute,
     PolicySet,
+    PrivacyRequest,
     UsageEvent,
     WorkflowDefinition,
     WorkflowRun,
@@ -36,6 +44,7 @@ from nmb_marketplace_agent.enterprise.models import (
 from nmb_marketplace_agent.enterprise.rbac import Principal, current_principal, requires
 from nmb_marketplace_agent.enterprise.runtime import build_runtime, load_policy
 from nmb_marketplace_agent.enterprise.solutions import loader as packs
+from nmb_marketplace_agent.enterprise.solutions import marketplace
 from nmb_marketplace_agent.enterprise.workflows.engine import (
     WorkflowEngine,
     WorkflowError,
@@ -324,7 +333,8 @@ def _run_view(r: WorkflowRun) -> dict:
     ctx = r.state.get("ctx", {})
     return {"id": r.id, "workflow": r.workflow_key, "version": r.workflow_version, "status": r.status,
             "initiator": r.initiator, "outcome": ctx.get("_outcome"), "error": r.error,
-            "history": r.state.get("history", []), "created_at": r.created_at, "updated_at": r.updated_at,
+            "current_step": r.state.get("cursor"), "history": r.state.get("history", []),
+            "created_at": r.created_at, "updated_at": r.updated_at,
             "delegations": ctx.get("_delegations", [])}  
             
 async def _run_view_with_delegations(db, r: WorkflowRun, tenant: str) -> dict:
@@ -531,24 +541,271 @@ async def approvals_sweep(p: Principal = Depends(requires("workflows:write")), d
     return await (await _engine(db, p.tenant_id)).sweep_overdue()
 
 
+# ── notification routes + outbox ──────────────────────────────────────
+class NotificationRouteIn(BaseModel):
+    role: str = Field(min_length=1, max_length=128)
+    channel: str = Field(pattern="^(webhook|email)$")
+    target: str = Field(min_length=1, max_length=2048)
+    enabled: bool = True
+
+
+@router.get("/notification-routes", dependencies=[Depends(require_module("approvals"))])
+async def notification_routes_list(p: Principal = Depends(requires("approvals:read")),
+                                   db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(NotificationRoute).where(
+        NotificationRoute.tenant_id == p.tenant_id,
+    ).order_by(NotificationRoute.role))).scalars().all()
+    return rows
+
+
+@router.post("/notification-routes", dependencies=[Depends(require_module("approvals"))])
+async def notification_route_create(body: NotificationRouteIn,
+                                    p: Principal = Depends(requires("workflows:write")),
+                                    db: AsyncSession = Depends(get_db)):
+    if body.channel == "webhook" and not body.target.startswith(("http://", "https://")):
+        raise HTTPException(422, "Webhook targets must be http(s) URLs")
+    if body.channel == "email" and "@" not in body.target:
+        raise HTTPException(422, "Email targets must be addresses")
+    route = NotificationRoute(id=str(uuid.uuid4()), tenant_id=p.tenant_id,
+                              role=body.role.strip(), channel=body.channel, target=body.target.strip(),
+                              enabled=body.enabled)
+    db.add(route)
+    try:
+        await db.commit()
+    except Exception as e:  # unique target
+        await db.rollback()
+        raise HTTPException(409, "That route already exists") from e
+    await audit.record(db, tenant_id=p.tenant_id, actor=p.sub, action="notification_route.created",
+                       resource_type="notification_route", resource_id=route.id,
+                       details={"role": route.role, "channel": route.channel})
+    return route
+
+
+@router.delete("/notification-routes/{route_id}", dependencies=[Depends(require_module("approvals"))])
+async def notification_route_delete(route_id: str, p: Principal = Depends(requires("workflows:write")),
+                                    db: AsyncSession = Depends(get_db)):
+    route = await db.get(NotificationRoute, route_id)
+    if not route or route.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Route not found")
+    await db.delete(route)
+    await db.commit()
+    await audit.record(db, tenant_id=p.tenant_id, actor=p.sub, action="notification_route.deleted",
+                       resource_type="notification_route", resource_id=route_id,
+                       details={"role": route.role, "channel": route.channel})
+    return {"deleted": route_id}
+
+
+@router.get("/notifications", dependencies=[Depends(require_module("approvals"))])
+async def notifications_list(status: str | None = None, limit: int = 100,
+                             p: Principal = Depends(requires("approvals:read")),
+                             db: AsyncSession = Depends(get_db)):
+    q = select(Notification).where(Notification.tenant_id == p.tenant_id)
+    if status:
+        q = q.where(Notification.status == status)
+    rows = (await db.execute(q.order_by(Notification.created_at.desc()).limit(min(limit, 500)))).scalars().all()
+    return rows
+
+
+@router.post("/notifications/dispatch", dependencies=[Depends(require_module("approvals"))])
+async def notifications_dispatch(p: Principal = Depends(requires("workflows:write"))):
+    return await notification_service.dispatch_due()
+
+
+class TestNotification(BaseModel):
+    channel: str = Field(pattern="^(webhook|email)$")
+    target: str = Field(min_length=1, max_length=2048)
+
+
+@router.post("/notifications/test", dependencies=[Depends(require_module("approvals"))])
+async def notification_test(body: TestNotification, p: Principal = Depends(requires("workflows:write")),
+                            db: AsyncSession = Depends(get_db)):
+    n = Notification(id=str(uuid.uuid4()), tenant_id=p.tenant_id, event="notification.test",
+                     approval_id="", channel=body.channel, target=body.target.strip(),
+                     subject="[NMB] Notification test",
+                     body="This is a test notification from the NMB approval channel.",
+                     status="pending", next_attempt_at=now_iso())
+    db.add(n)
+    await db.commit()
+    await notification_service.dispatch_due(limit=20)
+    await db.refresh(n)
+    return {"id": n.id, "status": n.status, "attempts": n.attempts, "error": n.last_error}
+
+
+# ── human handoff queue ───────────────────────────────────────────────
+class HandoffReplyIn(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class HandoffResolveIn(BaseModel):
+    note: str = Field(default="", max_length=2000)
+
+
+@router.get("/handoffs", dependencies=[Depends(require_module("approvals"))])
+async def handoffs_list(status: str | None = None, limit: int = 200,
+                        p: Principal = Depends(requires("handoffs:read")),
+                        db: AsyncSession = Depends(get_db)):
+    q = select(Handoff).where(Handoff.tenant_id == p.tenant_id)
+    if status:
+        q = q.where(Handoff.status == status)
+    rows = (await db.execute(q.order_by(Handoff.created_at.desc()).limit(min(limit, 500)))).scalars().all()
+
+    ids = [h.id for h in rows]
+    counts: dict[str, int] = {}
+    if ids:
+        counts = dict((await db.execute(
+            select(HandoffMessage.handoff_id, func.count(HandoffMessage.id))
+            .where(HandoffMessage.handoff_id.in_(ids)).group_by(HandoffMessage.handoff_id)
+        )).all())
+    return [handoff_service.view(h) | {"message_count": int(counts.get(h.id, 0))} for h in rows]
+
+
+@router.get("/handoffs/{handoff_id}", dependencies=[Depends(require_module("approvals"))])
+async def handoff_detail(handoff_id: str, p: Principal = Depends(requires("handoffs:read")),
+                         db: AsyncSession = Depends(get_db)):
+    h = await db.get(Handoff, handoff_id)
+    if not h or h.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Handoff not found")
+    rows = await handoff_service.messages(db, h.id)
+    return handoff_service.view(h) | {"messages": [handoff_service.message_view(m) for m in rows]}
+
+
+@router.post("/handoffs/{handoff_id}/claim", dependencies=[Depends(require_module("approvals"))])
+async def handoff_claim(handoff_id: str, p: Principal = Depends(requires("handoffs:write")),
+                        db: AsyncSession = Depends(get_db)):
+    h = await db.get(Handoff, handoff_id)
+    if not h or h.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Handoff not found")
+    try:
+        await handoff_service.claim(db, h, p.sub)
+    except handoff_service.HandoffError as e:
+        raise HTTPException(409, str(e)) from e
+    return handoff_service.view(h)
+
+
+@router.post("/handoffs/{handoff_id}/reply", dependencies=[Depends(require_module("approvals"))])
+async def handoff_reply(handoff_id: str, body: HandoffReplyIn,
+                        p: Principal = Depends(requires("handoffs:write")),
+                        db: AsyncSession = Depends(get_db)):
+    h = await db.get(Handoff, handoff_id)
+    if not h or h.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Handoff not found")
+    if h.status != "active":
+        raise HTTPException(409, "Claim the conversation before replying")
+    if h.assigned_to and h.assigned_to != p.sub and not p.has_role("tenant_admin"):
+        raise HTTPException(403, f"Conversation is assigned to {h.assigned_to}")
+    try:
+        text = await handoff_service.screen_reply(db, p.tenant_id, body.text)
+    except handoff_service.HandoffError as e:
+        raise HTTPException(422, str(e)) from e
+    m = await handoff_service.add_message(db, h, role="staff", author=p.sub, text=text)
+    return {"handoff": handoff_service.view(h), "message": handoff_service.message_view(m)}
+
+
+@router.post("/handoffs/{handoff_id}/resolve", dependencies=[Depends(require_module("approvals"))])
+async def handoff_resolve(handoff_id: str, body: HandoffResolveIn,
+                          p: Principal = Depends(requires("handoffs:write")),
+                          db: AsyncSession = Depends(get_db)):
+    h = await db.get(Handoff, handoff_id)
+    if not h or h.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Handoff not found")
+    if h.assigned_to and h.assigned_to != p.sub and not p.has_role("tenant_admin"):
+        raise HTTPException(403, f"Conversation is assigned to {h.assigned_to}")
+    await handoff_service.resolve(db, h, p.sub, body.note)
+    return handoff_service.view(h)
+
+
+# ── marketplace ───────────────────────────────────────────────────────
+@router.get("/marketplace", dependencies=[Depends(require_module("solutions"))])
+async def marketplace_catalog(p: Principal = Depends(requires("solutions:read")),
+                              db: AsyncSession = Depends(get_db)):
+    return await marketplace.catalog(db, p.tenant_id, current_license())
+
+
+@router.get("/marketplace/{solution_id}", dependencies=[Depends(require_module("solutions"))])
+async def marketplace_pack(solution_id: str,
+                           p: Principal = Depends(requires("solutions:read")),
+                           db: AsyncSession = Depends(get_db)):
+    try:
+        return await marketplace.detail(db, p.tenant_id, solution_id, current_license())
+    except packs.PackError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@router.post("/marketplace/{solution_id}/upgrade",
+             dependencies=[Depends(require_module("solutions"))])
+async def marketplace_upgrade(solution_id: str,
+                              p: Principal = Depends(requires("solutions:write")),
+                              db: AsyncSession = Depends(get_db)):
+    inst = await db.get(InstalledSolution, f"{p.tenant_id}:{solution_id}")
+    if not inst:
+        raise HTTPException(404, "Install the solution first.")
+    try:
+        pack = packs.load_pack(solution_id)
+    except packs.PackError as e:
+        raise HTTPException(404, str(e)) from e
+
+    from_version, before = inst.version, dict(inst.parameters)
+    latest = pack.get("version", "1.0.0")
+    if not marketplace.upgrade_available(latest, from_version):
+        raise HTTPException(
+            409,
+            f"Installed v{from_version} is already current (catalog v{latest}).",
+        )
+    if not current_license().has_solution(solution_id):
+        raise HTTPException(402, f"Solution '{solution_id}' is not included in your license")
+
+    try:
+        new = await packs.install_solution(db, p.tenant_id, solution_id, p.sub)
+    except (packs.PackError, WorkflowError) as e:
+        raise HTTPException(422, str(e)) from e
+    return {
+        "solution": solution_id,
+        "from_version": from_version,
+        "to_version": new.version,
+        "parameters": new.parameters,
+        "parameter_changes": marketplace.parameter_changes(
+            before, pack.get("parameters") or {},
+        ),
+        "created": new.created,
+    }
+
+
+class RollbackRequest(BaseModel):
+    version: str | None = None
+
+
+@router.post("/marketplace/{solution_id}/rollback",
+             dependencies=[Depends(require_module("solutions"))])
+async def marketplace_rollback(solution_id: str, body: RollbackRequest | None = None,
+                               p: Principal = Depends(requires("solutions:write")),
+                               db: AsyncSession = Depends(get_db)):
+    inst = await db.get(InstalledSolution, f"{p.tenant_id}:{solution_id}")
+    if not inst:
+        raise HTTPException(404, "Install the solution first.")
+    if not current_license().has_solution(solution_id):
+        raise HTTPException(402, f"Solution '{solution_id}' is not included in your license")
+    try:
+        applied, from_version = await packs.rollback_solution(
+            db, p.tenant_id, solution_id, p.sub, body.version if body else None,
+        )
+    except packs.NothingToRollBack as e:
+        raise HTTPException(409, str(e)) from e
+    except (packs.PackError, WorkflowError) as e:
+        raise HTTPException(422, str(e)) from e
+    return {
+        "solution": solution_id,
+        "from_version": from_version,
+        "to_version": applied.version,
+        "parameters": applied.parameters,
+        "created": applied.created,
+    }
+
+
 # ── solutions ─────────────────────────────────────────────────────────
 @router.get("/solutions", dependencies=[Depends(require_module("solutions"))])
 async def solutions(p: Principal = Depends(requires("solutions:read")),
                     db: AsyncSession = Depends(get_db)):
-    inst = {i.solution_id: i for i in await packs.installed(db, p.tenant_id)}
-    lic = current_license()
-    out: list[dict] = []
-    for d in packs.list_packs():
-        i = inst.get(d["id"])
-        out.append(d | {
-            "installed": i is not None,
-            "entitled": lic.has_solution(d["id"]),
-            "installed_version": i.version if i else None,
-            # Conformance is stored on InstalledSolution.created["conformance"] by
-            # install_solution when the pack declares a supervisor. Null until then.
-            "conformance": (i.created or {}).get("conformance") if i else None,
-        })
-    return out
+    return (await marketplace.catalog(db, p.tenant_id, current_license()))["packs"]
 
 
 class InstallRequest(BaseModel):
@@ -762,6 +1019,115 @@ async def upsert_connector(name: str, body: _ConnectorIn):
     # TODO: persist via your existing connector repo / write admin audit row.
     return {"name": name, "type": body.type, "ok": True}
 
+# ── privacy: retention, legal hold, subject rights ───────────────────
+class _RetentionIn(BaseModel):
+    settings: dict = Field(default_factory=dict)
+
+
+class _HoldIn(BaseModel):
+    scope: str = "tenant"
+    scope_id: str = Field(default="", max_length=256)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class _EraseIn(BaseModel):
+    customer_id: str | None = Field(default=None, max_length=128)
+    user_id: str | None = Field(default=None, max_length=128)
+    thread_ids: list[str] = Field(default_factory=list)
+    reason: str = Field(default="", max_length=2000)
+
+
+@router.get("/privacy/retention")
+async def get_retention(p: Principal = Depends(requires("privacy:read")),
+                        db: AsyncSession = Depends(get_db)):
+    return privacy_service.policy_view(await privacy_service.get_policy(db, p.tenant_id))
+
+
+@router.put("/privacy/retention")
+async def put_retention(body: _RetentionIn, p: Principal = Depends(requires("privacy:write")),
+                        db: AsyncSession = Depends(get_db)):
+    try:
+        policy = await privacy_service.set_policy(db, p.tenant_id, body.settings, p.sub)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return privacy_service.policy_view(policy)
+
+
+@router.get("/privacy/holds")
+async def get_holds(active: bool | None = True, p: Principal = Depends(requires("privacy:read")),
+                    db: AsyncSession = Depends(get_db)):
+    rows = await privacy_service.list_holds(db, p.tenant_id, active=active)
+    return {"holds": [privacy_service.hold_view(h) for h in rows]}
+
+
+@router.post("/privacy/holds")
+async def post_hold(body: _HoldIn, p: Principal = Depends(requires("privacy:write")),
+                    db: AsyncSession = Depends(get_db)):
+    try:
+        row = await privacy_service.create_hold(db, p.tenant_id, scope=body.scope,
+                                                scope_id=body.scope_id, reason=body.reason,
+                                                actor=p.sub)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return {"hold": privacy_service.hold_view(row)}
+
+
+@router.post("/privacy/holds/{hold_id}/release")
+async def release_legal_hold(hold_id: str, p: Principal = Depends(requires("privacy:write")),
+                             db: AsyncSession = Depends(get_db)):
+    try:
+        row = await privacy_service.release_hold(db, p.tenant_id, hold_id, p.sub)
+    except privacy_service.PrivacyError as e:
+        raise HTTPException(404, str(e)) from e
+    return {"hold": privacy_service.hold_view(row)}
+
+
+@router.post("/privacy/erase")
+async def erase_subject(body: _EraseIn, p: Principal = Depends(requires("privacy:write")),
+                        db: AsyncSession = Depends(get_db)):
+    try:
+        result = await privacy_service.erase_subject(
+            db, p.tenant_id, customer_id=body.customer_id, user_id=body.user_id,
+            thread_ids=body.thread_ids, reason=body.reason, actor=p.sub)
+    except privacy_service.PrivacyError as e:
+        raise HTTPException(422, str(e)) from e
+    if result.get("status") == "blocked":
+        raise HTTPException(409, detail=result)
+    return result
+
+
+@router.get("/privacy/requests")
+async def list_privacy_requests(limit: int = 50, p: Principal = Depends(requires("privacy:read")),
+                                db: AsyncSession = Depends(get_db)):
+    n = max(1, min(int(limit), 200))
+    rows = (await db.execute(select(PrivacyRequest).where(
+        PrivacyRequest.tenant_id == p.tenant_id)
+        .order_by(PrivacyRequest.created_at.desc()).limit(n))).scalars().all()
+    return {"requests": [privacy_service.request_view(r) for r in rows]}
+
+
+@router.get("/privacy/requests/{request_id}")
+async def get_privacy_request(request_id: str, p: Principal = Depends(requires("privacy:read")),
+                              db: AsyncSession = Depends(get_db)):
+    row = await db.get(PrivacyRequest, request_id)
+    if not row or row.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Privacy request not found")
+    return privacy_service.request_view(row)
+
+
+@router.get("/privacy/subject")
+async def subject_access(customer_id: str | None = None, user_id: str | None = None,
+                         include_transcript: bool = False,
+                         p: Principal = Depends(requires("privacy:read")),
+                         db: AsyncSession = Depends(get_db)):
+    try:
+        return await privacy_service.export_subject(
+            db, p.tenant_id, customer_id=customer_id, user_id=user_id,
+            include_transcript=include_transcript)
+    except privacy_service.PrivacyError as e:
+        raise HTTPException(422, str(e)) from e
+
+
 # ── compliance ────────────────────────────────────────────────────────
 @router.get("/compliance/readiness", dependencies=[Depends(require_module("compliance"))])
 async def readiness(frameworks: str | None = None, p: Principal = Depends(requires("compliance:read")), db: AsyncSession = Depends(get_db)):
@@ -880,15 +1246,30 @@ async def inbound_hook(tenant_id: str, key: str, request: Request, db: AsyncSess
 
 # ── background SLA sweeper ───────────────────────────────────────────
 async def sweeper_loop(interval_s: int | None = None):
-    """Started from the app lifespan; escalates/expires overdue approvals for every tenant."""
+    """Started from the app lifespan: escalates approvals and applies retention for every tenant."""
     from nmb_marketplace_agent.config.database import async_session
+    from nmb_marketplace_agent.config.models import Citation, Feedback, Handoff, ThreadOwner
+    from nmb_marketplace_agent.enterprise.models import RetentionPolicy
+
     interval = interval_s or int(os.environ.get("ENTERPRISE_SWEEP_INTERVAL_S", "300"))
     while True:
         await asyncio.sleep(interval)
         try:
             async with async_session() as db:
-                tenants = (await db.execute(select(Approval.tenant_id).where(Approval.status == "pending").distinct())).scalars().all()
+                approvals = set((await db.execute(select(Approval.tenant_id).where(
+                    Approval.status == "pending").distinct())).scalars().all())
+                tenants = set(approvals)
+                for model in (ThreadOwner, Handoff, Feedback, Citation, RetentionPolicy):
+                    tenants |= set((await db.execute(select(model.tenant_id).distinct())).scalars().all())
+                for t in approvals:
+                    try:
+                        await (await _engine(db, t)).sweep_overdue()
+                    except Exception:  # noqa: BLE001 - one tenant must not stop the sweep
+                        pass
                 for t in tenants:
-                    await (await _engine(db, t)).sweep_overdue()
+                    try:
+                        await privacy_service.retention_sweep(db, t)
+                    except Exception:  # noqa: BLE001
+                        await db.rollback()
         except Exception:  # noqa: BLE001
             pass

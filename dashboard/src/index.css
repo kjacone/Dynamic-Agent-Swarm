@@ -49,3 +49,61 @@
   --input: 217.2 32.6% 17.5%;
   --ring: 224.3 76.3% 48%;
 }
+
+/* Motion */
+@keyframes dlg-pop {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.98); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.dlg-overlay { animation: fade-in 0.15s ease-out; }
+.dlg-pop { animation: dlg-pop 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+.toast-in { animation: toast-in 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .dlg-overlay, .dlg-pop, .toast-in { animation: none; }
+}
+
+/* Friendlier scrollbars inside panels and dialogs */
+* { scrollbar-width: thin; scrollbar-color: hsl(var(--border)) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Workflow graph (React Flow) */
+.react-flow__background { opacity: 0.3; }
+.react-flow__edge.wf-edge .react-flow__edge-path { stroke: #94a3b8; }
+.react-flow__edge.wf-edge-branch .react-flow__edge-path { stroke: #818cf8; stroke-dasharray: 5 4; }
+.react-flow__edge.wf-edge-error .react-flow__edge-path { stroke: #f59e0b; stroke-dasharray: 5 4; }
+.react-flow__edge.wf-edge-reject .react-flow__edge-path { stroke: #ef4444; }
+.react-flow__edge.wf-edge-trail .react-flow__edge-path { stroke-width: 2.5; }
+.react-flow__edge.wf-edge-faded { opacity: 0.3; }
+.react-flow__edge:hover .react-flow__edge-path { stroke: hsl(var(--primary)); stroke-width: 2; }
+.react-flow__controls {
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+.react-flow__controls-button {
+  background: hsl(var(--card));
+  border-bottom: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+.react-flow__controls-button svg { fill: currentColor; }
+.react-flow__controls-button:hover { background: hsl(var(--muted)); }
+.react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+.react-flow__attribution { background: transparent; }
+.react-flow__attribution a { color: hsl(var(--muted-foreground)); }

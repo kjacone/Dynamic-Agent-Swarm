@@ -5,6 +5,12 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test-openai")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-test-anthropic")
 os.environ.setdefault("ADMIN_TOKEN", "test-admin-token")
 os.environ.setdefault("ENV", "test")
+os.environ.setdefault("NMB_JWT_SECRET", "test-session-secret-0123456789abcdef")
+
+# A malformed proxy in the developer's shell breaks httpx clients at import time.
+for _proxy in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+               "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+    os.environ.pop(_proxy, None)
 
 import pytest
 

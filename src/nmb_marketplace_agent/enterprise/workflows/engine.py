@@ -26,6 +26,7 @@ from nmb_marketplace_agent.enterprise.models import (
     WorkflowRun,
     now_iso,
 )
+from nmb_marketplace_agent.enterprise.notifications import notify
 from nmb_marketplace_agent.enterprise.rbac import Principal
 from nmb_marketplace_agent.enterprise.workflows.spec import (
     Step,
@@ -423,6 +424,7 @@ class WorkflowEngine:
                           details={"run": run.id, "step": step.id, "title": a.title,
                                    "roles": step.roles, "required": step.required_approvals})
         await self._meter("approvals")
+        await notify(self.db, a, "approval.requested", step.roles)
         return a
 
     async def decide(self, approval_id: str, principal: Principal, decision: str, comment: str = "") -> Approval:
@@ -463,6 +465,7 @@ class WorkflowEngine:
                           resource_type="approval", resource_id=a.id, actor_type="user",
                           details={"run": a.run_id, "comment": comment, "status": a.status})
         if a.status != "pending":
+            await notify(self.db, a, "approval.decided", [f"user:{a.requester}"])
             await self._resume(a)
         return a
 
@@ -506,6 +509,7 @@ class WorkflowEngine:
                 await self._audit(actor="sla-sweeper", action="approval.escalated",
                                   resource_type="approval", resource_id=a.id,
                                   details={"to": esc})
+                await notify(self.db, a, "approval.escalated", esc)
                 out["escalated"] += 1
             else:
                 a.status, a.decided_at = "expired", now_iso()
@@ -513,6 +517,7 @@ class WorkflowEngine:
                 await self.db.commit()
                 await self._audit(actor="sla-sweeper", action="approval.expired",
                                   resource_type="approval", resource_id=a.id)
+                await notify(self.db, a, "approval.expired", [f"user:{a.requester}"])
                 a.status = "rejected"
                 await self._resume(a)
                 out["expired"] += 1

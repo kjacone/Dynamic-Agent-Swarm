@@ -5,6 +5,10 @@ export { useAgent } from "./use-agent";
 export type { AgentState, SendInput } from "./use-agent";
 export { useAgentContext } from "./agent-context";
 export { useAgentTool, useAgentReadable, useAssistants, useThreads } from "./hooks";
+export { GatewayTransport, gatewayToken, requestHandoff, handoffSnapshot, sendFeedback } from "./gateway";
+export type {
+  GatewayConfig, GatewayEvent, GatewayHandoff, GatewaySource, GatewayStaffMessage,
+} from "./gateway";
 export type { ThreadSummary } from "./hooks";
 export { useFileUpload } from "./use-file-upload";
 

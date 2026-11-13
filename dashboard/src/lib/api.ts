@@ -145,6 +145,41 @@ export interface ApprovalItem {
   created_at: string; decided_at: string | null; context: Record<string, unknown>;
 }
 export interface WfInput { required: boolean; type: string; description: string }
+export interface HandoffItem {
+  id: string; agent_id: string; thread_id: string; status: "requested" | "active" | "resolved";
+  reason: string; requested_by: string; user_id: string | null; customer_id: string | null;
+  assigned_to: string | null; created_at: string; updated_at: string; resolved_at: string | null;
+  message_count?: number;
+}
+export interface HandoffMessage {
+  id: string; handoff_id: string; role: "customer" | "staff"; author: string; text: string; created_at: string;
+}
+export interface HandoffDetail extends HandoffItem { messages: HandoffMessage[] }
+export interface RetentionSettings {
+  threads_days: number | null; citations_days: number | null; feedback_days: number | null;
+  handoff_days: number | null; langfuse_days: number | null;
+}
+export interface RetentionPolicy {
+  settings: RetentionSettings; configured: Partial<RetentionSettings>;
+  updated_by: string; updated_at: string;
+}
+export interface LegalHold {
+  id: string; scope: "tenant" | "customer" | "user" | "thread"; scope_id: string; reason: string;
+  active: boolean; created_by: string; created_at: string;
+  released_by: string | null; released_at: string | null;
+}
+export interface PrivacyStoreResult { status: string; [k: string]: unknown }
+export interface EraseResult {
+  status: string; request_id: string; message?: string;
+  subject: { customer_id: string | null; user_id: string | null; thread_ids: string[]; unknown_thread_ids: string[] };
+  stores: Record<string, PrivacyStoreResult>;
+  holds?: LegalHold[]; note?: string;
+}
+export interface PrivacyRequestItem {
+  id: string; kind: string; subject_type: string; subject_id: string; thread_ids: string[];
+  reason: string; status: string; result: EraseResult | Record<string, unknown>;
+  requested_by: string; created_at: string; completed_at: string | null;
+}
 export interface WfSummary { key: string; version: number; name: string | null; steps: number; inputs: Record<string, WfInput> }
 export interface WfStep {
   id: string; type: string; name?: string; agent?: string; connector?: string; operation?: string; tool?: string;
@@ -153,6 +188,7 @@ export interface WfStep {
 export interface WfSpec { key: string; name: string; version: number; description: string; inputs: Record<string, WfInput>; steps: WfStep[]; start: string | null }
 export interface RunView {
   id: string; workflow: string; version: number; status: string; initiator: string; outcome: string | null; error: string | null;
+  current_step?: string | null;
   history: Array<{ step: string; status: string; ts: string; error?: string }>; created_at: string; updated_at: string;
   context?: Record<string, unknown>;
     delegations?: Array<{ delegate: string; task: string; n: number }>;
@@ -208,6 +244,43 @@ export interface Pack {
   entitled: boolean;
   installed_version: string | null;
   conformance: ConformanceReport | null;   // ← new
+  upgrade_available?: boolean;
+  installed_at?: string | null;
+  installed_by?: string | null;
+  parameter_changes?: { changed: string[]; added: string[]; removed: string[] };
+  upgraded_at?: string | null;
+  upgrade_history?: Array<{ from_version: string; to_version: string; at: string; by: string }>;
+  rollback_versions?: Array<{ version: string; created_at: string; created_by: string }>;
+}
+export interface MarketplaceCatalog {
+  license: {
+    customer: string; edition: string; state: string;
+    entitled_solutions: string[]; expires_at: number | null;
+  };
+  counts: { total: number; installed: number; upgrades: number; entitled: number };
+  packs: Pack[];
+}
+export interface MarketplacePackDetail {
+  id: string; name: string; industry: string; version: string; summary: string;
+  priority: string; delivery: Pack["delivery"]; audience: string[]; frameworks: string[];
+  kpis: Array<{ name: string; description?: string; formula?: string }>;
+  parameters: Pack["parameters"]; models: PackModel[]; widget: PackWidget | null;
+  samples: PackSample[];
+  agents: Array<{ key: string; name: string; tools: string[] }>;
+  supervisor: { key: string; name: string; delegates: string[]; limits: Record<string, unknown> } | null;
+  workflows: Array<{ key: string; name: string; description?: string | null }>;
+  knowledge: Array<{ collection: string; description?: string | null; documents: number; attach_to: string[] }>;
+  connectors: Array<{ name: string; type: string }>;
+  evals: Array<{ name: string; agent?: string | null; cases: number }>;
+  training: Array<{ name?: string | null; task?: string | null; rows: number }>;
+  policy: { rules: number; tool_rules: number };
+  installed: boolean; entitled: boolean; installed_version: string | null;
+  installed_at?: string | null; installed_by?: string | null; upgrade_available?: boolean;
+  parameter_changes?: { changed: string[]; added: string[]; removed: string[] };
+  conformance: ConformanceReport | null;
+  upgraded_at?: string | null;
+  upgrade_history?: Array<{ from_version: string; to_version: string; at: string; by: string }>;
+  rollback_versions?: Array<{ version: string; created_at: string; created_by: string }>;
 }
 export interface PostureCheck { id: string; title: string; status: "pass" | "warn" | "fail"; detail: string; remediation: string }
 export interface Readiness {
@@ -302,10 +375,15 @@ export interface WorkflowRuleInput {
 // ── API ────────────────────────────────────────────────────────────
 export const api = {
    
-  runSample: (_solution: string, _caseId: string): Promise<RunView & { expect?: string }> =>
-    Promise.reject(new ApiError(501, "Sample cases run in Phase B. Workflow is installed, sample path is not.")),
-  solutionEmbed: (_solution: string): Promise<{ agent_id: string; script: string; steps: string[] }> =>
-    Promise.reject(new ApiError(501, "This solution has no embeddable widget yet.")),
+  runSample: (solution: string, caseId: string) =>
+    request<RunView & { expect?: string }>(
+      `/enterprise/solutions/${encodeURIComponent(solution)}/samples/${encodeURIComponent(caseId)}/run`,
+      { method: "POST" },
+    ),
+  solutionEmbed: (solution: string) =>
+    request<{ agent_id: string; widget: Record<string, unknown>; script: string; steps: string[] }>(
+      `/enterprise/solutions/${encodeURIComponent(solution)}/embed`,
+    ),
 
   // system
   status: (tenant = "default") => request<SystemStatus>(`/system/status?tenant_id=${tenant}`),
@@ -546,6 +624,40 @@ export const api = {
   decideApproval: (id: string, decision: "approve" | "reject", comment = "") =>
     request<{ id: string; status: string }>(`/enterprise/approvals/${id}/decide`, { method: "POST", body: JSON.stringify({ decision, comment }) }),
   sweepApprovals: () => request<{ escalated: number; expired: number }>("/enterprise/approvals/sweep", { method: "POST" }),
+  listHandoffs: (status?: string) => request<HandoffItem[]>(`/enterprise/handoffs${status ? `?status=${status}` : ""}`),
+  getHandoff: (id: string) => request<HandoffDetail>(`/enterprise/handoffs/${id}`),
+  claimHandoff: (id: string) => request<HandoffItem>(`/enterprise/handoffs/${id}/claim`, { method: "POST" }),
+  replyHandoff: (id: string, text: string) =>
+    request<{ handoff: HandoffItem; message: HandoffMessage }>(`/enterprise/handoffs/${id}/reply`, {
+      method: "POST", body: JSON.stringify({ text }),
+    }),
+  resolveHandoff: (id: string, note = "") =>
+    request<HandoffItem>(`/enterprise/handoffs/${id}/resolve`, {
+      method: "POST", body: JSON.stringify({ note }),
+    }),
+  getRetention: () => request<RetentionPolicy>("/enterprise/privacy/retention"),
+  putRetention: (settings: Partial<RetentionSettings>) =>
+    request<RetentionPolicy>("/enterprise/privacy/retention", {
+      method: "PUT", body: JSON.stringify({ settings }),
+    }),
+  listHolds: (active = true) => request<{ holds: LegalHold[] }>(`/enterprise/privacy/holds?active=${active}`),
+  createHold: (scope: string, scope_id: string, reason: string) =>
+    request<{ hold: LegalHold }>("/enterprise/privacy/holds", {
+      method: "POST", body: JSON.stringify({ scope, scope_id, reason }),
+    }),
+  releaseHold: (id: string) =>
+    request<{ hold: LegalHold }>(`/enterprise/privacy/holds/${id}/release`, { method: "POST" }),
+  eraseSubject: (body: { customer_id?: string; user_id?: string; thread_ids?: string[]; reason?: string }) =>
+    request<EraseResult>("/enterprise/privacy/erase", { method: "POST", body: JSON.stringify(body) }),
+  listPrivacyRequests: (limit = 50) =>
+    request<{ requests: PrivacyRequestItem[] }>(`/enterprise/privacy/requests?limit=${limit}`),
+  exportSubject: (customer_id: string, user_id: string, include_transcript = false) => {
+    const q = new URLSearchParams();
+    if (customer_id) q.set("customer_id", customer_id);
+    if (user_id) q.set("user_id", user_id);
+    if (include_transcript) q.set("include_transcript", "true");
+    return request<Record<string, unknown>>(`/enterprise/privacy/subject?${q.toString()}`);
+  },
   listWorkflows: () => request<WfSummary[]>("/enterprise/workflows"),
   getWorkflow: (key: string, version?: number) =>
     request<WfSpec>(`/enterprise/workflows/${encodeURIComponent(key)}${version ? `?version=${version}` : ""}`),
@@ -561,7 +673,29 @@ export const api = {
   verifyAudit: () => request<{ ok: boolean; checked: number; first_bad_seq: number | null; reason: string }>("/enterprise/audit/verify"),
   auditCheckpoint: () => request<Record<string, unknown>>("/enterprise/audit/checkpoint"),
   exportAudit: () => download("/enterprise/audit/export", "audit-export.jsonl"),
-  listPacks: () => request<Pack[]>("/enterprise/solutions"),
+  marketplace: () => request<MarketplaceCatalog>("/enterprise/marketplace"),
+  marketplacePack: (id: string) =>
+    request<MarketplacePackDetail>(`/enterprise/marketplace/${encodeURIComponent(id)}`),
+  upgradePack: (id: string) =>
+    request<{
+      solution: string;
+      from_version: string;
+      to_version: string;
+      parameters: Record<string, unknown>;
+      parameter_changes: { changed: string[]; added: string[]; removed: string[] };
+      created: Record<string, unknown>;
+    }>(`/enterprise/marketplace/${encodeURIComponent(id)}/upgrade`, { method: "POST" }),
+  rollbackPack: (id: string, version: string) =>
+    request<{
+      solution: string;
+      from_version: string;
+      to_version: string;
+      parameters: Record<string, unknown>;
+      created: Record<string, unknown>;
+    }>(`/enterprise/marketplace/${encodeURIComponent(id)}/rollback`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    }),
   installPack: (id: string, parameters: Record<string, unknown>) =>
     request<{
       solution: string;

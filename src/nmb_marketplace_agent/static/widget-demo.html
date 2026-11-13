@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>NMB Service Assistant — client site demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { --teal:#0f766e; --teal-dark:#115e59; --ink:#0f172a; --muted:#52627a; --line:#dbe3ec; --bg:#f3f6fa; --card:#fff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:linear-gradient(135deg,var(--teal),var(--teal-dark)); color:#fff; }
+  .bar { max-width:1080px; margin:0 auto; padding:0 20px; height:64px; display:flex; align-items:center; gap:24px; }
+  .brand { font-weight:800; letter-spacing:-.02em; font-size:19px; }
+  .brand span { opacity:.75; font-weight:500; }
+  nav { display:flex; gap:18px; margin-left:auto; font-size:14px; }
+  nav a { color:#e7fffb; text-decoration:none; opacity:.85; }
+  nav a:hover { opacity:1; }
+  .who { width:34px; height:34px; border-radius:50%; background:#e7fffb; color:var(--teal-dark); display:grid; place-items:center; font-weight:700; }
+  main { max-width:1080px; margin:0 auto; padding:26px 20px 90px; display:grid; grid-template-columns:1.55fr .9fr; gap:22px; }
+  h1 { margin:6px 0 2px; font-size:26px; letter-spacing:-.02em; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:0 1px 2px rgb(15 23 42 / .04); }
+  .bill { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; flex-wrap:wrap; }
+  .amount { font-size:34px; font-weight:800; letter-spacing:-.03em; margin:6px 0 0; }
+  .amount small { font-size:14px; font-weight:500; color:var(--muted); letter-spacing:0; }
+  .due { color:var(--muted); font-size:13px; }
+  .btn { border:0; border-radius:9px; padding:9px 15px; font:inherit; font-weight:600; cursor:pointer; }
+  .btn-primary { background:var(--teal); color:#fff; }
+  .btn-primary:hover { background:var(--teal-dark); }
+  .btn-ghost { background:#fff; color:var(--teal-dark); border:1px solid var(--line); }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:18px; }
+  .stat { padding:14px; border:1px solid var(--line); border-radius:12px; background:#fbfdff; }
+  .stat b { display:block; font-size:19px; margin-top:4px; }
+  .stat span { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .meter { height:7px; background:#e7edf4; border-radius:99px; overflow:hidden; margin-top:9px; }
+  .meter i { display:block; height:100%; background:var(--teal); }
+  h2 { font-size:16px; margin:24px 0 10px; letter-spacing:-.01em; }
+  .rows { display:flex; flex-direction:column; }
+  .row { display:flex; justify-content:space-between; gap:14px; padding:11px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .row:last-child { border-bottom:0; }
+  .row span { color:var(--muted); }
+  aside .card { position:sticky; top:20px; }
+  aside h3 { margin:0 0 6px; font-size:15px; }
+  aside p { margin:0 0 14px; color:var(--muted); font-size:13px; }
+  pre { margin:0; background:#0b1220; color:#d6e2f5; border-radius:10px; padding:13px; overflow:auto; font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .pill { display:inline-flex; align-items:center; gap:6px; background:#e7fffb; color:var(--teal-dark); border-radius:999px; padding:3px 9px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+  .hint { color:var(--muted); font-size:12px; margin-top:10px; }
+  .copy { margin-top:8px; display:flex; gap:8px; align-items:center; }
+  .copy button { font-size:12px; padding:5px 10px; }
+  .ok { color:var(--teal-dark); font-size:12px; }
+  @media (max-width: 860px) { main { grid-template-columns:1fr; } aside .card { position:static; } .grid { grid-template-columns:1fr; } nav a:not(:first-child) { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">NMB <span>Customer Hub</span></div>
+    <nav><a href="#">Overview</a><a href="#">Bills</a><a href="#">Bundles</a><a href="#">Support</a></nav>
+    <div class="who" title="Signed in as Amina">A</div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <span class="pill">Demo site · a normal customer portal</span>
+    <h1>Karibu, Amina</h1>
+    <p class="sub">This page is an ordinary website. The assistant on the right is one script tag — no server changes, no iframe.</p>
+
+    <div class="card bill">
+      <div>
+        <div class="due">Current bill</div>
+        <p class="amount">KES 2,480 <small>due 28 Nov</small></p>
+        <div class="due">Account ···· 4821 · Fibre + Mobile</div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn btn-primary">Pay now</button>
+        <button class="btn btn-ghost">View statement</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="stat"><span>Data used</span><b>12.4 GB</b><div class="meter"><i style="width:62%"></i></div></div>
+      <div class="stat"><span>Voice</span><b>184 min</b><div class="meter"><i style="width:37%"></i></div></div>
+      <div class="stat"><span>Open tickets</span><b>1</b><div class="meter"><i style="width:100%; background:#e0a21a"></i></div></div>
+    </div>
+
+    <h2>Recent activity</h2>
+    <div class="card rows">
+      <div class="row"><span>Mobile bundle · 10 GB</span><b>KES 500</b></div>
+      <div class="row"><span>Fibre · November</span><b>KES 1,980</b></div>
+      <div class="row"><span>Support ticket #48213 · slow evening speeds</span><b>In progress</b></div>
+    </div>
+
+    <h2>Try the assistant</h2>
+    <div class="card" style="display:flex;flex-direction:column;gap:10px">
+      <div>Ask the same questions a customer would, for example:</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost" data-ask="Why is my bill higher this month?">Why is my bill higher?</button>
+        <button class="btn btn-ghost" data-ask="What is the status of ticket 48213?">Check my ticket</button>
+        <button class="btn btn-ghost" data-ask="I want to change my fibre plan">Change my plan</button>
+        <button class="btn btn-ghost" data-ask="Please connect me to a human">Talk to a human</button>
+      </div>
+      <div class="hint">The assistant sees the customer and page context through the session, answers from the service policy, cites its sources, and hands off to staff when it must.</div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h3>Drop-in widget</h3>
+      <p>The same assistant in your existing site. The browser only holds a publishable key.</p>
+      <pre id="snippet">&lt;script src="/embed.js"
+  data-key="pk_…"
+  data-title="NMB Service Assistant"
+  data-color="#0f766e"
+  data-greeting="Hi! How can I help?"&gt;&lt;/script&gt;</pre>
+      <div class="copy">
+        <button class="btn btn-ghost" id="copy">Copy snippet</button>
+        <span class="ok" id="copied" hidden>Copied</span>
+      </div>
+      <div class="hint">Add <code>data-api</code> when the gateway runs on another host.</div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Or keep your UI</h3>
+      <p>For a CopilotKit-style copilot, install the React kit and point it at the same gateway.</p>
+      <pre>npm i langgraph-kit
+
+&lt;LangGraphKitProvider gateway={{
+  baseUrl, publishableKey, userId
+}}&gt;
+  &lt;ChatPopup title="NMB Assist" /&gt;
+&lt;/LangGraphKitProvider&gt;</pre>
+      <div class="hint">The kit adds citations, human handoff, feedback, and <code>useAgentReadable</code> / <code>useAgentTool</code>.</div>
+    </div>
+  </aside>
+</main>
+
+<script>
+  (function () {
+    var qs = new URLSearchParams(location.search);
+    var key = qs.get("key") || "pk_demo_replace_me";
+    var api = qs.get("api") || location.origin;
+    var title = qs.get("title") || "NMB Service Assistant";
+    var color = qs.get("color") || "#0f766e";
+    var greeting = qs.get("greeting") || "Hi Amina! Ask about your bill, data, coverage or a service request.";
+
+    // Exactly what a client pastes into their site:
+    var s = document.createElement("script");
+    s.src = api.replace(/\/$/, "") + "/embed.js";
+    s.dataset.key = key;
+    s.dataset.api = api;
+    s.dataset.title = title;
+    s.dataset.color = color;
+    s.dataset.greeting = greeting;
+    document.body.appendChild(s);
+
+    if (key !== "pk_demo_replace_me") {
+      document.getElementById("snippet").textContent =
+        '<script src="' + api.replace(/\/$/, "") + '/embed.js"\n' +
+        '  data-key="' + key + '"\n' +
+        '  data-api="' + api + '"\n' +
+        '  data-title="' + title + '"\n' +
+        '  data-color="' + color + '"\n' +
+        '  data-greeting="' + greeting + '"><\/script>';
+    }
+
+    document.getElementById("copy").addEventListener("click", function () {
+      var text = document.getElementById("snippet").textContent;
+      navigator.clipboard.writeText(text).then(function () {
+        document.getElementById("copied").hidden = false;
+        setTimeout(function () { document.getElementById("copied").hidden = true; }, 1600);
+      });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-ask]"), function (btn) {
+      btn.addEventListener("click", function () {
+        if (!window.NMB) return;
+        window.NMB.open();
+        window.NMB.send(btn.dataset.ask);
+      });
+    });
+  })();
+</script>
+</body>
+</html>

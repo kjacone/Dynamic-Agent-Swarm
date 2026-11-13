@@ -97,6 +97,233 @@ function useArtifactContext() {
   return useSlots().context;
 }
 
+// src/gateway.ts
+function createGatewayEventBus() {
+  const listeners = /* @__PURE__ */ new Set();
+  return {
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => {
+        listeners.delete(fn);
+      };
+    },
+    emit(event) {
+      listeners.forEach((fn) => fn(event));
+    }
+  };
+}
+var trimBase = (url) => url.replace(/\/+$/, "");
+var sessions = /* @__PURE__ */ new Map();
+async function gatewayToken(cfg, force = false) {
+  const url = trimBase(cfg.baseUrl);
+  const key = `${url}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}`;
+  const hit = sessions.get(key);
+  if (!force && hit && hit.exp > Date.now() + 3e4) return hit.token;
+  const doFetch = cfg.fetch ?? fetch;
+  try {
+    const res = await doFetch(`${url}/v1/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.publishableKey}` },
+      body: JSON.stringify({
+        ...cfg.userId ? { user_id: cfg.userId } : {},
+        ...cfg.customerId ? { customer_id: cfg.customerId } : {}
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.token) {
+        sessions.set(key, { token: data.token, exp: Date.now() + (data.expires_in ?? 900) * 1e3 });
+        return data.token;
+      }
+    }
+  } catch {
+  }
+  return cfg.publishableKey;
+}
+async function gatewayFetch(cfg, path, init = {}, retried = false) {
+  const token = await gatewayToken(cfg, retried);
+  const doFetch = cfg.fetch ?? fetch;
+  const res = await doFetch(`${trimBase(cfg.baseUrl)}${path}`, {
+    ...init,
+    headers: { ...init.body ? { "Content-Type": "application/json" } : {}, ...init.headers, Authorization: `Bearer ${token}` }
+  });
+  if (res.status === 401 && !retried) {
+    sessions.delete(`${trimBase(cfg.baseUrl)}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}`);
+    return gatewayFetch(cfg, path, init, true);
+  }
+  return res;
+}
+async function requestHandoff(cfg, threadId, reason) {
+  const res = await gatewayFetch(cfg, "/v1/handoff", {
+    method: "POST",
+    body: JSON.stringify({ thread_id: threadId, ...cfg.userId ? { user_id: cfg.userId } : {}, ...reason ? { reason } : {} })
+  });
+  if (!res.ok) throw new Error(`handoff failed (${res.status})`);
+  return res.json();
+}
+async function handoffSnapshot(cfg, threadId) {
+  const qs = cfg.userId ? `?user_id=${encodeURIComponent(cfg.userId)}` : "";
+  const res = await gatewayFetch(cfg, `/v1/handoff/${encodeURIComponent(threadId)}${qs}`);
+  if (!res.ok) throw new Error(`handoff status failed (${res.status})`);
+  return res.json();
+}
+async function sendFeedback(cfg, body) {
+  const res = await gatewayFetch(cfg, "/v1/feedback", {
+    method: "POST",
+    body: JSON.stringify({ ...body, ...cfg.userId ? { user_id: cfg.userId } : {} })
+  });
+  if (!res.ok) throw new Error(`feedback failed (${res.status})`);
+}
+function lastUserText(input) {
+  const messages = input?.messages;
+  if (!Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m?.type !== "human" && m?.role !== "user") continue;
+    if (typeof m.content === "string") return m.content.trim();
+    if (Array.isArray(m.content)) {
+      return m.content.map((part) => part && typeof part === "object" && "text" in part ? String(part.text ?? "") : "").join("").trim();
+    }
+  }
+  return "";
+}
+async function* readSse(res) {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let cut = buf.indexOf("\n\n");
+      while (cut >= 0) {
+        const block = buf.slice(0, cut);
+        buf = buf.slice(cut + 2);
+        const data = block.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+        if (data === "[DONE]") return;
+        if (data) {
+          try {
+            yield { data: JSON.parse(data) };
+          } catch {
+          }
+        }
+        cut = buf.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+var GatewayTransport = class {
+  constructor(cfg, emit = () => {
+  }) {
+    this.boundThread = null;
+    this.serverThread = null;
+    this.cfg = cfg;
+    this.emit = emit;
+  }
+  get storeKey() {
+    const base2 = trimBase(this.cfg.baseUrl);
+    return `nmb_gw_threads:${this.cfg.persistKey || base2}:${this.cfg.publishableKey.slice(0, 10)}`;
+  }
+  restore(clientThread) {
+    try {
+      const raw = localStorage.getItem(this.storeKey);
+      const map = raw ? JSON.parse(raw) : {};
+      return map[clientThread] || null;
+    } catch {
+      return null;
+    }
+  }
+  remember(clientThread, serverThread) {
+    try {
+      const raw = localStorage.getItem(this.storeKey);
+      const map = raw ? JSON.parse(raw) : {};
+      map[clientThread] = serverThread;
+      const entries = Object.entries(map).slice(-20);
+      localStorage.setItem(this.storeKey, JSON.stringify(Object.fromEntries(entries)));
+    } catch {
+    }
+  }
+  async *stream(payload) {
+    if (payload.command) {
+      throw new Error("This assistant runs on the NMB gateway; resuming graph commands is not supported yet.");
+    }
+    const text = lastUserText(payload.input);
+    if (!text) throw new Error("The gateway transport needs a user message.");
+    const clientThread = payload.config?.configurable?.thread_id ?? null;
+    if (clientThread !== this.boundThread) {
+      this.boundThread = clientThread;
+      this.serverThread = clientThread ? this.restore(clientThread) : null;
+    }
+    const cfgurable = payload.config?.configurable;
+    const context = payload.context ?? cfgurable?.context ?? void 0;
+    const readables = cfgurable?.readables;
+    const token = await gatewayToken(this.cfg);
+    const res = await gatewayFetch(this.cfg, "/v1/chat", {
+      method: "POST",
+      headers: { Accept: "text/event-stream" },
+      signal: payload.signal,
+      body: JSON.stringify({
+        message: text,
+        thread_id: this.serverThread,
+        ...this.cfg.userId ? { user_id: this.cfg.userId } : {},
+        ...context !== void 0 ? { context } : {},
+        ...readables !== void 0 ? { readables } : {}
+      })
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(res.status === 429 ? "Too many messages. Please wait a moment." : `Gateway error (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+    }
+    void token;
+    const aiId = `ai_${crypto.randomUUID()}`;
+    for await (const frame of readSse(res)) {
+      const ev = frame.data;
+      switch (ev.type) {
+        case "thread": {
+          const threadId = String(ev.threadId || "");
+          if (!threadId) break;
+          this.serverThread = threadId;
+          if (this.boundThread) this.remember(this.boundThread, threadId);
+          this.emit({ type: "thread", threadId });
+          yield { event: "metadata", data: { thread_id: threadId } };
+          break;
+        }
+        case "token": {
+          const delta = String(ev.text || "");
+          if (delta) {
+            yield {
+              event: "messages",
+              data: [{ id: aiId, type: "AIMessageChunk", content: delta }, { langgraph_node: "agent" }]
+            };
+          }
+          break;
+        }
+        case "sources": {
+          const sources = Array.isArray(ev.sources) ? ev.sources : [];
+          this.emit({ type: "citations", sources });
+          yield { event: "custom", data: { type: "citations", sources } };
+          break;
+        }
+        case "handoff": {
+          if (!ev.handoff) break;
+          const handoff = ev.handoff;
+          this.emit({ type: "handoff", handoff, messageId: ev.messageId });
+          yield { event: "custom", data: { type: "handoff", handoff, messageId: ev.messageId } };
+          break;
+        }
+        case "error":
+          throw new Error(String(ev.error || "Something went wrong."));
+        default:
+          break;
+      }
+    }
+  }
+};
+
 // src/lib/storage.ts
 var origin = (url) => {
   try {
@@ -172,7 +399,8 @@ function LangGraphKitProvider({
   persistKey,
   branching = true,
   submitOptions,
-  apiUrl = "",
+  gateway,
+  apiUrl = gateway?.baseUrl ?? "",
   assistantId = "",
   token,
   authScheme = "bearer",
@@ -267,10 +495,28 @@ function LangGraphKitProvider({
     if (conn.authScheme === "agent-builder") out["X-Auth-Scheme"] = "langsmith-api-key";
     return { apiKey, headers: out };
   }, [conn.token, conn.authScheme, conn.headers]);
-  const isConfigured = !!conn.apiUrl && !!conn.assistantId;
+  const isConfigured = gateway ? !!gateway.baseUrl && !!gateway.publishableKey : !!conn.apiUrl && !!conn.assistantId;
   const client = useMemo(
     () => new Client({ apiUrl: conn.apiUrl || void 0, apiKey: auth.apiKey, defaultHeaders: auth.headers }),
     [conn.apiUrl, auth]
+  );
+  const gatewayEvents = useMemo(() => createGatewayEventBus(), []);
+  const gatewayBaseUrl = gateway?.baseUrl;
+  const gatewayKey = gateway?.publishableKey;
+  const gatewayUser = gateway?.userId;
+  const gatewayCustomer = gateway?.customerId;
+  const gatewayPersist = gateway?.persistKey;
+  const gatewayFetchImpl = gateway?.fetch;
+  const gatewayTransport = useMemo(
+    () => gatewayBaseUrl && gatewayKey ? new GatewayTransport({
+      baseUrl: gatewayBaseUrl,
+      publishableKey: gatewayKey,
+      userId: gatewayUser,
+      customerId: gatewayCustomer,
+      persistKey: gatewayPersist,
+      fetch: gatewayFetchImpl
+    }, gatewayEvents.emit) : null,
+    [gatewayBaseUrl, gatewayKey, gatewayUser, gatewayCustomer, gatewayPersist, gatewayFetchImpl, gatewayEvents]
   );
   const [status, setStatus] = useState3("idle");
   useEffect2(() => {
@@ -280,23 +526,27 @@ function LangGraphKitProvider({
     }
     let off = false;
     setStatus("checking");
-    const h = new Headers(auth.headers);
-    if (auth.apiKey) h.set("X-Api-Key", auth.apiKey);
     const fail = () => {
       if (off) return;
       setStatus("error");
       notifyRef.current({
         kind: "error",
-        title: "Can't reach the LangGraph server",
-        description: `Check that it is running at ${conn.apiUrl}, your token is right, and CORS allows this origin.`,
+        title: gatewayBaseUrl ? "Can't reach the agent gateway" : "Can't reach the LangGraph server",
+        description: gatewayBaseUrl ? `Check that ${gatewayBaseUrl} is up and CORS allows this origin.` : `Check that it is running at ${conn.apiUrl}, your token is right, and CORS allows this origin.`,
         duration: 1e4
       });
     };
-    fetch(`${conn.apiUrl.replace(/\/$/, "")}/info`, { headers: h }).then((r) => r.ok ? !off && setStatus("ok") : fail()).catch(fail);
+    if (gatewayBaseUrl) {
+      fetch(`${gatewayBaseUrl.replace(/\/$/, "")}/health`).then((r) => r.ok ? !off && setStatus("ok") : fail()).catch(fail);
+    } else {
+      const h = new Headers(auth.headers);
+      if (auth.apiKey) h.set("X-Api-Key", auth.apiKey);
+      fetch(`${conn.apiUrl.replace(/\/$/, "")}/info`, { headers: h }).then((r) => r.ok ? !off && setStatus("ok") : fail()).catch(fail);
+    }
     return () => {
       off = true;
     };
-  }, [isConfigured, conn.apiUrl, auth]);
+  }, [isConfigured, conn.apiUrl, auth, gatewayBaseUrl]);
   const [tools, setTools] = useState3({});
   const registerTool = useCallback3((def) => {
     setTools((p) => ({ ...p, [def.name]: def }));
@@ -322,6 +572,9 @@ function LangGraphKitProvider({
     status,
     client,
     auth,
+    gateway,
+    gatewayTransport,
+    gatewayEvents,
     threadId,
     setThreadId,
     configurable,
@@ -344,6 +597,9 @@ function LangGraphKitProvider({
     status,
     client,
     auth,
+    gateway,
+    gatewayTransport,
+    gatewayEvents,
     threadId,
     setThreadId,
     configurable,
@@ -380,7 +636,7 @@ import {
   isUIMessage,
   uiMessageReducer
 } from "@langchain/langgraph-sdk/react-ui";
-import { useCallback as useCallback4, useEffect as useEffect3, useMemo as useMemo2, useRef as useRef4 } from "react";
+import { useCallback as useCallback4, useEffect as useEffect3, useMemo as useMemo2, useRef as useRef4, useState as useState4 } from "react";
 
 // src/lib/partial-json.ts
 function parsePartialJson(input) {
@@ -482,7 +738,27 @@ var useTypedStream = useStream;
 function useAgent() {
   const kit = useKit();
   const { connection, auth, threadId, setThreadId, bumpThreads, branching } = kit;
-  const stream = useTypedStream({
+  const gateway = kit.gateway;
+  const gatewayTransport = kit.gatewayTransport;
+  const [sources, setSources] = useState4([]);
+  const [handoff, setHandoff] = useState4(null);
+  const [handoffMessages, setHandoffMessages] = useState4([]);
+  const [serverThreadId, setServerThreadId] = useState4(null);
+  const [feedbackSent, setFeedbackSent] = useState4(null);
+  const stream = useTypedStream(gateway && gatewayTransport ? {
+    transport: gatewayTransport,
+    threadId,
+    onThreadId: (id) => {
+      setThreadId(id);
+      bumpThreads();
+    },
+    onCustomEvent: (event, options) => {
+      if (isUIMessage(event) || isRemoveUIMessage(event)) {
+        options.mutate((prev) => ({ ...prev, ui: uiMessageReducer(prev.ui ?? [], event) }));
+      }
+    },
+    onFinish: () => bumpThreads()
+  } : {
     apiUrl: connection.apiUrl || void 0,
     apiKey: auth.apiKey,
     defaultHeaders: auth.headers,
@@ -501,6 +777,43 @@ function useAgent() {
     },
     onFinish: () => bumpThreads()
   });
+  useEffect3(() => {
+    if (!gateway) return;
+    return kit.gatewayEvents.subscribe((event) => {
+      if (event.type === "thread") setServerThreadId(event.threadId);
+      else if (event.type === "citations") setSources(event.sources);
+      else if (event.type === "handoff") setHandoff(event.handoff.status === "resolved" ? null : event.handoff);
+    });
+  }, [gateway, kit.gatewayEvents]);
+  useEffect3(() => {
+    if (threadId) return;
+    setSources([]);
+    setHandoff(null);
+    setHandoffMessages([]);
+    setFeedbackSent(null);
+    setServerThreadId(null);
+  }, [threadId]);
+  const handoffId = handoff?.id;
+  const handoffStatus = handoff?.status;
+  useEffect3(() => {
+    if (!gateway || !serverThreadId || !handoffId || handoffStatus === "resolved") return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const data = await handoffSnapshot(gateway, serverThreadId);
+        if (stopped) return;
+        setHandoff(data.handoff && data.handoff.status !== "resolved" ? data.handoff : null);
+        setHandoffMessages(data.messages ?? []);
+      } catch {
+      }
+    };
+    void tick();
+    const timer = setInterval(tick, 5e3);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [gateway, serverThreadId, handoffId, handoffStatus]);
   const latest = useRef4({ kit, stream });
   latest.current = { kit, stream };
   const runConfig = useCallback4(() => {
@@ -521,6 +834,8 @@ function useAgent() {
     const trimmed = text.trim();
     if (!trimmed && !blocks.length) return;
     const { stream: s } = latest.current;
+    setSources([]);
+    setFeedbackSent(null);
     const human = {
       id: newId(),
       type: "human",
@@ -582,6 +897,41 @@ function useAgent() {
     () => latest.current.stream.submit(null, opts({ command: { goto: "__end__" } })),
     [opts]
   );
+  const requestHuman = useCallback4(async (reason) => {
+    const gw = latest.current.kit.gateway;
+    if (!gw || !serverThreadId) {
+      latest.current.kit.notify({
+        kind: "info",
+        title: "Start the conversation first",
+        description: "Send a message, then ask for a colleague."
+      });
+      return;
+    }
+    try {
+      const data = await requestHandoff(gw, serverThreadId, reason);
+      setHandoff(data.handoff);
+    } catch (e) {
+      latest.current.kit.notify({
+        kind: "error",
+        title: "Can't reach a colleague",
+        description: e instanceof Error ? e.message : String(e)
+      });
+    }
+  }, [serverThreadId]);
+  const feedback = useCallback4((rating) => {
+    const gw = latest.current.kit.gateway;
+    if (!gw || !serverThreadId || feedbackSent) return;
+    const messages = latest.current.stream.messages ?? [];
+    const human = [...messages].reverse().find((m) => m.type === "human");
+    const ai = [...messages].reverse().find((m) => m.type === "ai");
+    void sendFeedback(gw, {
+      thread_id: serverThreadId,
+      rating,
+      ...human ? { user_message: messageText(human.content) } : {},
+      ...ai ? { reply: messageText(ai.content) } : {}
+    }).then(() => setFeedbackSent(rating)).catch(() => {
+    });
+  }, [serverThreadId, feedbackSent]);
   const raw = stream.values?.__interrupt__ ?? [];
   const pendingTools = useMemo2(() => (Array.isArray(raw) ? raw : []).flatMap((i) => {
     const p = parseHeadlessToolInterruptPayload(i.value);
@@ -646,6 +996,19 @@ function useAgent() {
     resolve,
     newThread: () => setThreadId(null),
     selectThread: (id) => setThreadId(id),
+    /** Gateway mode: citations for the current reply. */
+    sources,
+    /** Gateway mode: the open (or most recent) human handoff, if any. */
+    handoff,
+    handoffMessages,
+    /** Gateway mode: ask a human to join this conversation. */
+    requestHuman,
+    /** Gateway mode: rate the last reply. */
+    feedback,
+    feedbackSent,
+    /** Gateway mode: the server-side thread id (differs from the SDK client id). */
+    serverThreadId,
+    isGateway: !!gateway,
     /** Escape hatch to the raw SDK stream. */
     stream
   };
@@ -661,7 +1024,7 @@ function useAgentContext() {
 }
 
 // src/hooks.ts
-import { useCallback as useCallback5, useEffect as useEffect4, useId as useId2, useRef as useRef5, useState as useState4 } from "react";
+import { useCallback as useCallback5, useEffect as useEffect4, useId as useId2, useRef as useRef5, useState as useState5 } from "react";
 function useAgentTool(def) {
   const { registerTool } = useKit();
   const ref = useRef5(def);
@@ -685,10 +1048,10 @@ function useAgentReadable(description, value) {
 }
 function useAssistants() {
   const { client, connection, isConfigured } = useKit();
-  const [state, setState] = useState4(
+  const [state, setState] = useState5(
     { assistants: [], loading: isConfigured, error: null }
   );
-  const [tick, setTick] = useState4(0);
+  const [tick, setTick] = useState5(0);
   useEffect4(() => {
     if (!isConfigured) {
       setState({ assistants: [], loading: false, error: null });
@@ -707,8 +1070,8 @@ var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 var threadMetadata = (assistantId) => UUID.test(assistantId) ? { assistant_id: assistantId } : { graph_id: assistantId };
 function useThreads({ limit = 100 } = {}) {
   const { client, connection, isConfigured, threadsRevision, bumpThreads, threadId, setThreadId } = useKit();
-  const [threads, setThreads] = useState4([]);
-  const [loading, setLoading] = useState4(isConfigured);
+  const [threads, setThreads] = useState5([]);
+  const [loading, setLoading] = useState5(isConfigured);
   useEffect4(() => {
     if (!isConfigured) {
       setThreads([]);
@@ -745,7 +1108,7 @@ function useThreads({ limit = 100 } = {}) {
 }
 
 // src/use-file-upload.ts
-import { useCallback as useCallback6, useEffect as useEffect5, useRef as useRef6, useState as useState5 } from "react";
+import { useCallback as useCallback6, useEffect as useEffect5, useRef as useRef6, useState as useState6 } from "react";
 
 // src/lib/multimodal.ts
 var IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
@@ -782,10 +1145,10 @@ var isDuplicate = (f, blocks) => blocks.some((b) => {
   return b.mimeType === f.type && (meta.filename ?? meta.name) === f.name;
 });
 function useFileUpload({ enabled = true, onError } = {}) {
-  const [blocks, setBlocks] = useState5([]);
+  const [blocks, setBlocks] = useState6([]);
   const blocksRef = useRef6(blocks);
   blocksRef.current = blocks;
-  const [dragOver, setDragOver] = useState5(false);
+  const [dragOver, setDragOver] = useState6(false);
   const depth = useRef6(0);
   const onErrorRef = useRef6(onError);
   onErrorRef.current = onError;
@@ -860,15 +1223,15 @@ function useFileUpload({ enabled = true, onError } = {}) {
 }
 
 // src/components/Chat.tsx
-import { useEffect as useEffect8, useState as useState14 } from "react";
+import { useEffect as useEffect8, useState as useState15 } from "react";
 
 // src/use-stick-to-bottom.ts
-import { useCallback as useCallback7, useEffect as useEffect6, useRef as useRef7, useState as useState6 } from "react";
+import { useCallback as useCallback7, useEffect as useEffect6, useRef as useRef7, useState as useState7 } from "react";
 function useStickToBottom() {
   const scrollRef = useRef7(null);
   const contentRef = useRef7(null);
   const pinned = useRef7(true);
-  const [isAtBottom, setAtBottom] = useState6(true);
+  const [isAtBottom, setAtBottom] = useState7(true);
   const scrollToBottom = useCallback7((smooth = true) => {
     const el = scrollRef.current;
     if (!el) return;
@@ -901,7 +1264,7 @@ function useStickToBottom() {
 }
 
 // src/components/Composer.tsx
-import { useEffect as useEffect7, useRef as useRef8, useState as useState7 } from "react";
+import { useEffect as useEffect7, useRef as useRef8, useState as useState8 } from "react";
 
 // src/components/ui/icons.tsx
 import { jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
@@ -1001,7 +1364,7 @@ function ContentBlocksPreview({ blocks, onRemove }) {
 // src/components/Composer.tsx
 import { jsx as jsx6, jsxs as jsxs6 } from "react/jsx-runtime";
 function Composer({ placeholder, busy, disabled, upload, toolToggle, onSend, onStop, onError }) {
-  const [text, setText] = useState7("");
+  const [text, setText] = useState8("");
   const ref = useRef8(null);
   const files = useFileUpload({ enabled: upload && !disabled, onError });
   useEffect7(() => {
@@ -1102,10 +1465,10 @@ function buildDecision(action, allowed, draft) {
 }
 
 // src/components/interrupts/GenericInterrupt.tsx
-import { useState as useState9 } from "react";
+import { useState as useState10 } from "react";
 
 // src/components/ui/KeyValueTable.tsx
-import { useState as useState8 } from "react";
+import { useState as useState9 } from "react";
 import { Fragment as Fragment3, jsx as jsx7, jsxs as jsxs7 } from "react/jsx-runtime";
 var isComplex = (v) => Array.isArray(v) || typeof v === "object" && v !== null;
 var isUrl = (v) => typeof v === "string" && /^https?:\/\//.test(v);
@@ -1115,7 +1478,7 @@ function Value({ value }) {
   return /* @__PURE__ */ jsx7(Fragment3, { children: String(value) });
 }
 function KeyValueTable({ data, maxRows }) {
-  const [all, setAll] = useState8(false);
+  const [all, setAll] = useState9(false);
   const entries = Array.isArray(data) ? data.map((v, i) => [i, v]) : Object.entries(data);
   const limited = maxRows && !all ? entries.slice(0, maxRows) : entries;
   return /* @__PURE__ */ jsxs7(Fragment3, { children: [
@@ -1131,7 +1494,7 @@ function KeyValueTable({ data, maxRows }) {
   ] });
 }
 function ExpandableText({ text, maxLines = 4, maxChars = 500 }) {
-  const [open, setOpen] = useState8(false);
+  const [open, setOpen] = useState9(false);
   const lines = text.split("\n");
   const long = lines.length > maxLines || text.length > maxChars;
   const shown = !long || open ? text : text.length > maxChars ? `${text.slice(0, maxChars)}\u2026` : `${lines.slice(0, maxLines).join("\n")}
@@ -1150,7 +1513,7 @@ function ExpandableText({ text, maxLines = 4, maxChars = 500 }) {
 import { Fragment as Fragment4, jsx as jsx8, jsxs as jsxs8 } from "react/jsx-runtime";
 function GenericInterrupt({ value }) {
   const agent = useAgentContext();
-  const [text, setText] = useState9("");
+  const [text, setText] = useState10("");
   const breakpoint = value === void 0;
   const answer = () => {
     let v = text;
@@ -1180,7 +1543,7 @@ function GenericInterrupt({ value }) {
 }
 
 // src/components/interrupts/HitlReview.tsx
-import { useState as useState10 } from "react";
+import { useState as useState11 } from "react";
 import { jsx as jsx9, jsxs as jsxs9 } from "react/jsx-runtime";
 var pretty = (name) => {
   const s = name.replace(/[_-]+/g, " ");
@@ -1224,8 +1587,8 @@ function ActionReview({ action, allowed, draft, onChange }) {
 function HitlReview({ interrupts }) {
   const agent = useAgentContext();
   const { notify } = useKit();
-  const [active, setActive] = useState10(0);
-  const [drafts, setDrafts] = useState10({});
+  const [active, setActive] = useState11(0);
+  const [drafts, setDrafts] = useState11({});
   const current = interrupts[Math.min(active, interrupts.length - 1)];
   const request = current.value;
   const key = current.id ?? String(active);
@@ -1292,7 +1655,7 @@ function InterruptView({ interrupts, render }) {
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 
 // src/components/Markdown.tsx
-import { Children, memo, isValidElement, useState as useState11 } from "react";
+import { Children, memo, isValidElement, useState as useState12 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -1305,7 +1668,7 @@ function IconButton({ label, children, className = "", ...rest }) {
 // src/components/Markdown.tsx
 import { jsx as jsx12, jsxs as jsxs10 } from "react/jsx-runtime";
 function CodeBlock({ children }) {
-  const [copied, setCopied] = useState11(false);
+  const [copied, setCopied] = useState12(false);
   const child = Children.toArray(children)[0];
   let language = "";
   let code = "";
@@ -1346,7 +1709,7 @@ var Markdown = memo(function Markdown2({ children, remarkPlugins = [], rehypePlu
 });
 
 // src/components/messages/MessageControls.tsx
-import { useState as useState12 } from "react";
+import { useState as useState13 } from "react";
 import { jsx as jsx13, jsxs as jsxs11 } from "react/jsx-runtime";
 function BranchSwitcher({ branch, branchOptions, onSelect, disabled }) {
   if (!branch || !branchOptions || branchOptions.length < 2) return null;
@@ -1362,7 +1725,7 @@ function BranchSwitcher({ branch, branchOptions, onSelect, disabled }) {
   ] });
 }
 function CopyButton({ text, disabled }) {
-  const [copied, setCopied] = useState12(false);
+  const [copied, setCopied] = useState13(false);
   return /* @__PURE__ */ jsx13(
     IconButton,
     {
@@ -1456,7 +1819,9 @@ function AssistantMessage({
   branching = true,
   copy = true,
   uiComponents,
-  markdown
+  markdown,
+  sources,
+  feedback
 }) {
   const agent = useAgentContext();
   const text = messageText(message.content);
@@ -1472,6 +1837,15 @@ function AssistantMessage({
       /* @__PURE__ */ jsx15("p", { children: reasoning })
     ] }),
     text && /* @__PURE__ */ jsx15(Markdown, { ...markdown, children: text }),
+    sources && sources.length > 0 && /* @__PURE__ */ jsxs13("div", { className: "lgk-sources", "aria-label": "Sources", children: [
+      /* @__PURE__ */ jsx15("span", { className: "lgk-sources-label", children: "Sources" }),
+      sources.map((s, i) => /* @__PURE__ */ jsxs13("span", { className: "lgk-source", children: [
+        /* @__PURE__ */ jsx15("b", { children: s.id ?? i + 1 }),
+        " ",
+        s.title,
+        s.page ? ` \xB7 p. ${s.page}` : ""
+      ] }, `${s.id ?? i}`))
+    ] }),
     !hideToolCalls && calls.map((c, i) => {
       const res = c.id ? results.get(c.id) : void 0;
       const status = res ? res.status === "error" ? "error" : "done" : loading || c.id && agent.pendingToolCallIds.includes(c.id) ? "running" : "pending";
@@ -1481,18 +1855,30 @@ function AssistantMessage({
     text && !loading && /* @__PURE__ */ jsxs13("div", { className: "lgk-actions", children: [
       /* @__PURE__ */ jsx15(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
       copy && /* @__PURE__ */ jsx15(CopyButton, { text, disabled: busy }),
-      branching && parentCheckpoint && /* @__PURE__ */ jsx15(IconButton, { label: "Regenerate", disabled: busy, onClick: () => void agent.regenerate(parentCheckpoint), children: /* @__PURE__ */ jsx15(RefreshIcon, {}) })
+      branching && parentCheckpoint && /* @__PURE__ */ jsx15(IconButton, { label: "Regenerate", disabled: busy, onClick: () => void agent.regenerate(parentCheckpoint), children: /* @__PURE__ */ jsx15(RefreshIcon, {}) }),
+      feedback && /* @__PURE__ */ jsx15("span", { className: "lgk-feedback", "aria-label": "Rate this answer", children: feedback.sent ? /* @__PURE__ */ jsx15("span", { className: "lgk-feedback-thanks", children: "Thanks for the feedback" }) : ["up", "down"].map((rating) => /* @__PURE__ */ jsx15(
+        "button",
+        {
+          type: "button",
+          className: "lgk-icon-btn",
+          "aria-label": rating === "up" ? "Good answer" : "Bad answer",
+          disabled: busy,
+          onClick: () => feedback.onRate(rating),
+          children: rating === "up" ? "\u{1F44D}" : "\u{1F44E}"
+        },
+        rating
+      )) })
     ] })
   ] });
 }
 
 // src/components/messages/HumanMessage.tsx
-import { useState as useState13 } from "react";
+import { useState as useState14 } from "react";
 import { Fragment as Fragment7, jsx as jsx16, jsxs as jsxs14 } from "react/jsx-runtime";
 function HumanMessage({ message, branching = true, copy = true }) {
   const agent = useAgentContext();
-  const [editing, setEditing] = useState13(false);
-  const [draft, setDraft] = useState13("");
+  const [editing, setEditing] = useState14(false);
+  const [draft, setDraft] = useState14("");
   const text = messageText(message.content);
   const blocks = Array.isArray(message.content) ? message.content.filter(isMultimodalBlock) : [];
   const { branch, branchOptions } = branching ? agent.getBranch(message) : {};
@@ -1569,7 +1955,7 @@ function ChatView({
   const kit = useKit();
   const f = { upload: true, branching: true, copy: true, toolToggle: true, artifacts: true, connectionBadge: true, ...features };
   const branching = f.branching && kit.branching;
-  const [hideToolCalls, setHideToolCalls] = useState14(false);
+  const [hideToolCalls, setHideToolCalls] = useState15(false);
   const [artifactOpen, closeArtifact] = useArtifactOpen();
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom();
@@ -1584,6 +1970,7 @@ function ChatView({
     if (m.type === "tool") results.set(m.tool_call_id, m);
     for (const c of messageToolCalls(m)) if (c.id) knownCalls.add(c.id);
   }
+  const lastAi = [...visible].reverse().find((m) => m.type === "ai");
   const last = visible[visible.length - 1];
   const waiting = agent.isLoading && (!last || last.type === "human" || last.type === "ai" && !messageText(last.content) && !messageToolCalls(last).length);
   const empty = visible.length === 0 && !agent.interrupts.length;
@@ -1593,6 +1980,7 @@ function ChatView({
     const key = m.id ?? `${m.type}-${i}`;
     if (m.type === "human") return /* @__PURE__ */ jsx17(HumanMessage, { message: m, branching, copy: f.copy }, key);
     if (m.type === "ai") {
+      const isLast = m === lastAi && !agent.isLoading;
       return /* @__PURE__ */ jsx17(
         AssistantMessage,
         {
@@ -1603,7 +1991,9 @@ function ChatView({
           branching,
           copy: f.copy,
           uiComponents,
-          markdown
+          markdown,
+          sources: agent.isGateway && m === lastAi ? agent.sources : void 0,
+          feedback: agent.isGateway && isLast ? { sent: agent.feedbackSent, onRate: agent.feedback } : void 0
         },
         key
       );
@@ -1621,6 +2011,7 @@ function ChatView({
         f.connectionBadge && kit.isConfigured && /* @__PURE__ */ jsx17("span", { className: "lgk-host", "data-status": kit.status, title: `${kit.status === "error" ? "Can't reach" : "Connected to"} ${kit.connection.apiUrl}`, children: hostOf(kit.connection.apiUrl) })
       ] }),
       /* @__PURE__ */ jsxs15("div", { className: "lgk-chat-head-actions", children: [
+        kit.gateway && !agent.handoff && /* @__PURE__ */ jsx17("button", { type: "button", className: "lgk-hb-btn", onClick: () => void agent.requestHuman(), children: "Talk to a human" }),
         started && /* @__PURE__ */ jsx17(IconButton, { label: "New chat", onClick: agent.newThread, children: /* @__PURE__ */ jsx17(NewChatIcon, {}) }),
         headerActions
       ] })
@@ -1637,6 +2028,17 @@ function ChatView({
             /* @__PURE__ */ jsx17("i", {}),
             /* @__PURE__ */ jsx17("i", {}),
             /* @__PURE__ */ jsx17("i", {})
+          ] }),
+          agent.handoff && /* @__PURE__ */ jsxs15("div", { className: "lgk-handoff", "data-status": agent.handoff.status, role: "status", children: [
+            /* @__PURE__ */ jsxs15("div", { className: "lgk-handoff-head", children: [
+              /* @__PURE__ */ jsx17("strong", { children: agent.handoff.status === "active" ? "A colleague has joined" : "Waiting for a colleague" }),
+              /* @__PURE__ */ jsx17("span", { children: agent.handoff.status === "active" ? "You're chatting with our team. Replies appear here." : "Our team has been notified. You can keep typing here." })
+            ] }),
+            agent.handoffMessages.filter((m) => m.role === "staff").map((m) => /* @__PURE__ */ jsxs15("div", { className: "lgk-handoff-msg", children: [
+              /* @__PURE__ */ jsx17("b", { children: m.author || "Team" }),
+              " ",
+              m.text
+            ] }, m.id))
           ] }),
           /* @__PURE__ */ jsx17(InterruptView, { interrupts: agent.interrupts, render: renderInterrupt }),
           agent.error && /* @__PURE__ */ jsx17("div", { className: "lgk-error", role: "alert", children: agent.error })
@@ -1671,10 +2073,10 @@ function ChatView({
 }
 
 // src/components/ChatPopup.tsx
-import { useState as useState15 } from "react";
+import { useState as useState16 } from "react";
 import { jsx as jsx18, jsxs as jsxs16 } from "react/jsx-runtime";
 function ChatPopup({ defaultOpen = false, launcherLabel = "Ask the agent", title = "Assistant", features, ...chat }) {
-  const [open, setOpen] = useState15(defaultOpen);
+  const [open, setOpen] = useState16(defaultOpen);
   return /* @__PURE__ */ jsxs16("div", { className: "lgk lgk-popup-root", children: [
     /* @__PURE__ */ jsx18("div", { className: "lgk-popup", role: "dialog", "aria-label": title, hidden: !open, children: /* @__PURE__ */ jsx18(
       Chat,
@@ -1690,7 +2092,7 @@ function ChatPopup({ defaultOpen = false, launcherLabel = "Ask the agent", title
 }
 
 // src/components/ChatSidebar.tsx
-import { useState as useState16 } from "react";
+import { useState as useState17 } from "react";
 
 // src/components/ThreadHistory.tsx
 import { jsx as jsx19, jsxs as jsxs17 } from "react/jsx-runtime";
@@ -1779,8 +2181,8 @@ function ChatSidebar({
   features,
   ...chat
 }) {
-  const [open, setOpen] = useState16(defaultOpen);
-  const [view, setView] = useState16("chat");
+  const [open, setOpen] = useState17(defaultOpen);
+  const [view, setView] = useState17("chat");
   const style = { "--lgk-dock-w": `${width}px` };
   return /* @__PURE__ */ jsxs19("div", { className: "lgk lgk-dock", "data-mode": mode, "data-open": open, style, children: [
     /* @__PURE__ */ jsx21("div", { className: "lgk-dock-main", children }),
@@ -1807,17 +2209,17 @@ function ChatSidebar({
 }
 
 // src/components/Playground.tsx
-import { useEffect as useEffect9, useState as useState18 } from "react";
+import { useEffect as useEffect9, useState as useState19 } from "react";
 
 // src/components/ConnectionForm.tsx
-import { useState as useState17 } from "react";
+import { useState as useState18 } from "react";
 import { jsx as jsx22, jsxs as jsxs20 } from "react/jsx-runtime";
 function ConnectionForm({ defaultApiUrl = "http://localhost:2024", defaultAssistantId = "agent", onConnected }) {
   const { connection, setConnection } = useKit();
-  const [apiUrl, setApiUrl] = useState17(connection.apiUrl || defaultApiUrl);
-  const [assistantId, setAssistantId] = useState17(connection.assistantId || defaultAssistantId);
-  const [token, setToken] = useState17(connection.token ?? "");
-  const [scheme, setScheme] = useState17(connection.authScheme ?? "bearer");
+  const [apiUrl, setApiUrl] = useState18(connection.apiUrl || defaultApiUrl);
+  const [assistantId, setAssistantId] = useState18(connection.assistantId || defaultAssistantId);
+  const [token, setToken] = useState18(connection.token ?? "");
+  const [scheme, setScheme] = useState18(connection.authScheme ?? "bearer");
   const submit = (e) => {
     e.preventDefault();
     setConnection({ apiUrl: apiUrl.trim(), assistantId: assistantId.trim(), token: token.trim() || void 0, authScheme: scheme });
@@ -1866,7 +2268,7 @@ function ConnectionForm({ defaultApiUrl = "http://localhost:2024", defaultAssist
 // src/components/Playground.tsx
 import { Fragment as Fragment9, jsx as jsx23, jsxs as jsxs21 } from "react/jsx-runtime";
 function CommitInput({ value, onCommit, ...rest }) {
-  const [draft, setDraft] = useState18(value);
+  const [draft, setDraft] = useState19(value);
   useEffect9(() => setDraft(value), [value]);
   const commit = () => draft !== value && onCommit(draft.trim());
   return /* @__PURE__ */ jsx23(
@@ -1883,7 +2285,7 @@ function CommitInput({ value, onCommit, ...rest }) {
 function Playground(props) {
   const { connection, setConnection, setThreadId, isConfigured, status } = useKit();
   const { assistants, error, refresh } = useAssistants();
-  const [navOpen, setNavOpen] = useState18(false);
+  const [navOpen, setNavOpen] = useState19(false);
   if (!isConfigured) return /* @__PURE__ */ jsx23(ConnectionForm, {});
   const current = assistants.find((a) => a.assistant_id === connection.assistantId || a.graph_id === connection.assistantId);
   const known = assistants.some((a) => a.assistant_id === connection.assistantId);
@@ -1961,6 +2363,7 @@ export {
   ConnectionForm,
   DO_NOT_RENDER_ID_PREFIX,
   ExpandableText,
+  GatewayTransport,
   GenericInterrupt,
   HistoryPanel,
   HitlReview,
@@ -1974,10 +2377,14 @@ export {
   ToolCallCard,
   ToolOutput,
   ensureToolCallsHaveResponses,
+  gatewayToken,
+  handoffSnapshot,
   isHitlRequest,
   messageReasoning,
   messageText,
   messageToolCalls,
+  requestHandoff,
+  sendFeedback,
   useAgent,
   useAgentContext,
   useAgentReadable,

@@ -18,13 +18,17 @@ from fastapi import Header, HTTPException
 PERMISSIONS: dict[str, set[str]] = {
     "platform_admin": {"*"},
     "tenant_admin": {"agents:*", "workflows:*", "approvals:*", "solutions:*", "connectors:*", "policies:*",
-                     "audit:read", "usage:read", "compliance:read", "license:read"},
+                     "handoffs:*", "privacy:*", "audit:read", "usage:read", "compliance:read", "license:read"},
     "agent_builder": {"agents:*", "solutions:read", "policies:read", "connectors:read"},
     "workflow_designer": {"workflows:*", "solutions:read", "connectors:read", "policies:read"},
-    "operator": {"workflows:run", "workflows:read", "approvals:read", "agents:read"},
+    "operator": {"workflows:run", "workflows:read", "approvals:read", "agents:read",
+                 "handoffs:read", "handoffs:write"},
     "approver": {"approvals:read", "approvals:decide", "workflows:read"},
     "auditor": {"audit:read", "audit:export", "compliance:read", "usage:read", "workflows:read",
-                "approvals:read", "policies:read", "license:read"},
+                "approvals:read", "policies:read", "license:read", "handoffs:read", "privacy:read"},
+    "compliance_officer": {"approvals:read", "approvals:decide", "workflows:read", "audit:read",
+                           "compliance:read", "privacy:*", "handoffs:read"},
+    "data_protection_officer": {"privacy:*", "audit:read", "compliance:read", "handoffs:read"},
     "viewer": {"workflows:read", "agents:read", "solutions:read"},
 }
 
@@ -100,6 +104,9 @@ def principal_from_token(authorization: str, x_tenant_id: str = "") -> Principal
         raise HTTPException(503, f"SSO key endpoint unreachable: {e}") from e
     except jwt.PyJWTError as e:
         raise HTTPException(401, f"Invalid token: {e}") from e
+
+    if claims.get("aud") == "nmb-session":
+        raise HTTPException(401, "Chat session tokens cannot be used for admin access")
 
     roles = _roles(claims.get(rcl) or claims.get("role"))
     tenant = claims.get(tcl) or claims.get("tenant")

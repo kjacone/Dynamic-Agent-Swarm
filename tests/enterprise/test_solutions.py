@@ -27,11 +27,49 @@ ALL = ["banking-kyc", "insurance-claims", "telco-service-ops", "gov-document-wor
        "healthcare-admin", "ngo-procurement", "enterprise-automation", "education-admissions"]
 
 
+@pytest.fixture(autouse=True)
+def _offline_install(tmp_path, monkeypatch):
+    """Installing a pack must not call an embedding provider or a model in unit tests."""
+    monkeypatch.setattr(loader, "build_index", lambda *a, **k: 1)
+    monkeypatch.setattr(loader, "DOCS_ROOT", tmp_path / "docs")
+
+    async def _no_conformance(*_a, **_k):
+        return []
+
+    monkeypatch.setattr(loader.conformance, "run_conformance", _no_conformance)
+
+
 def test_catalogue_covers_every_target_market():
     packs = {p["id"]: p for p in loader.list_packs()}
     assert set(ALL) <= set(packs)
     assert {packs[i]["priority"] for i in ("banking-kyc", "insurance-claims")} == {"first"}
     assert {p["industry"] for p in packs.values()} >= {"banking", "insurance", "telecom", "government", "healthcare", "ngo", "corporate", "education"}
+
+
+def test_every_pack_has_demo_assets():
+    packs = {p["id"]: p for p in loader.list_packs()}
+    for sid in ALL:
+        assets = packs[sid]["assets"]
+        assert assets["supervisor"], sid
+        assert assets["agents"] >= 3, sid
+        assert assets["samples"] >= 3, sid
+        assert assets["models"] >= 2, sid
+        assert assets["eval_cases"] >= 4, sid
+        assert assets["knowledge_docs"] >= 1, sid
+        assert len(packs[sid]["samples"]) == assets["samples"], sid
+
+
+def test_conformance_cases_name_declared_delegates():
+    from nmb_marketplace_agent.enterprise.workflows import conformance
+
+    for sid in ALL:
+        pack = loader.load_pack(sid)
+        delegates = set(pack["supervisor"]["delegates"])
+        cases = conformance.load_cases(loader.PACK_DIR, sid)
+        assert len(cases) >= 3, sid
+        for case in cases:
+            names = set(case.expect_delegations) | set(case.must_not_call)
+            assert names - {"general-purpose"} <= delegates, (sid, case.id)
 
 
 @pytest.mark.parametrize("sid", ALL)

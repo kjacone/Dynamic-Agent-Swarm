@@ -50,6 +50,7 @@ class AgentCreate(BaseModel):
     rag_collection_ids: list[str] = []
     subagent_ids: list[str] = []
     tenant_id: str = "default"
+    limits: dict = {}
 
 
 class AgentPatch(BaseModel):
@@ -59,10 +60,25 @@ class AgentPatch(BaseModel):
     tool_ids: list[str] | None = None
     rag_collection_ids: list[str] | None = None
     subagent_ids: list[str] | None = None
+    limits: dict | None = None
+
+
+def _check_limits(limits: dict) -> dict:
+    """Validate/normalise presentation + budget settings; unknown keys pass through."""
+    from nmb_marketplace_agent.rag.citations import SOURCE_MODES
+
+    out = dict(limits)
+    if "sources" in out:
+        mode = str(out["sources"]).strip().lower()
+        if mode not in SOURCE_MODES:
+            raise HTTPException(422, "limits.sources must be one of: off, labels, full")
+        out["sources"] = mode
+    return out
 
 
 @router.post("")
 async def create_agent(body: AgentCreate, db: AsyncSession = Depends(get_db)):
+    body.limits = _check_limits(body.limits)
     agent = AgentConfig(id=str(uuid.uuid4()), **body.model_dump())
     await _check_refs(db, body.tenant_id,
                       tool_ids=body.tool_ids,
@@ -93,7 +109,11 @@ async def patch_agent(agent_id: str, body: AgentPatch, tenant_id: str = "default
     agent = await db.get(AgentConfig, agent_id)
     if not agent or agent.tenant_id != tenant_id:
         raise HTTPException(404, "Agent not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    limits = data.pop("limits", None)
+    if limits is not None:
+        agent.limits = {**(agent.limits or {}), **_check_limits(limits)}
+    for k, v in data.items():
         setattr(agent, k, v)
     if body.tool_ids is not None:
         await _check_refs(db, tenant_id, tool_ids=body.tool_ids)

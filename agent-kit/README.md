@@ -46,6 +46,25 @@ Full Next.js examples are in `examples/next-app`.
 ### Provider props
 `apiUrl`, `assistantId` (UUID or graph id), `token` + `authScheme` (`"bearer"` default or `"api-key"` for `X-Api-Key`), `headers`, `threadId` / `onThreadIdChange` (controlled thread, e.g. for URL sync), `configurable` (extra `config.configurable` on every run), `persistKey` (remember connection in localStorage).
 
+### NMB gateway mode (no LangGraph server)
+
+```tsx
+<LangGraphKitProvider
+  gateway={{ baseUrl: "https://agents.bank.co", publishableKey: "pk_live_…", userId: currentUser.id }}
+>
+  <ChatPopup title="NMB Assist" />
+</LangGraphKitProvider>
+```
+
+The kit exchanges the publishable key for a short-lived session at `/v1/session`, streams `/v1/chat` over SSE through the SDK's custom transport, and adds:
+
+- `agent.sources` — citations rendered under the last reply.
+- `agent.handoff`, `agent.requestHuman(reason?)`, `agent.handoffMessages` — human handoff and staff replies.
+- `agent.feedback("up" | "down")` — sends `/v1/feedback`.
+- `useAgentReadable` values and per-send `context` are forwarded as fenced host-app context; the gateway screens them with the tenant policy.
+
+Gateway mode does not support graph commands (frontend-tool resumes), thread history or branching yet. Only ever ship a `pk_` key to the browser; allow your site origin in the gateway's `CORS_ORIGINS` and in `connect-src` / `script-src`.
+
 ### Custom tool UI
 ```tsx
 useAgentTool({ name: "get_weather", render: ({ args, status, result }) => <WeatherCard {...} /> });

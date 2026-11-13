@@ -5,8 +5,12 @@ import {
   isRemoveUIMessage, isUIMessage, uiMessageReducer,
   type RemoveUIMessage, type UIMessage,
 } from "@langchain/langgraph-sdk/react-ui";
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { newId } from "./content";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { messageText, newId } from "./content";
+import {
+  handoffSnapshot, requestHandoff, sendFeedback,
+  type GatewayHandoff, type GatewaySource, type GatewayStaffMessage,
+} from "./gateway";
 import { ensureToolCallsHaveResponses } from "./lib/ensure-tool-responses";
 import type { Decision } from "./lib/hitl";
 import type { MultimodalBlock } from "./lib/multimodal";
@@ -51,23 +55,80 @@ export interface SendInput {
 export function useAgent() {
   const kit = useKit();
   const { connection, auth, threadId, setThreadId, bumpThreads, branching } = kit;
+  const gateway = kit.gateway;
+  const gatewayTransport = kit.gatewayTransport;
 
-  const stream = useTypedStream({
-    apiUrl: connection.apiUrl || undefined,
-    apiKey: auth.apiKey,
-    defaultHeaders: auth.headers,
-    assistantId: connection.assistantId,
-    threadId,
-    onThreadId: (id) => { setThreadId(id); bumpThreads(); },
-    // Needed for edit / regenerate / branch switcher.
-    fetchStateHistory: branching,
-    onCustomEvent: (event, options) => {
-      if (isUIMessage(event) || isRemoveUIMessage(event)) {
-        options.mutate((prev) => ({ ...prev, ui: uiMessageReducer(prev.ui ?? [], event) }));
+  const [sources, setSources] = useState<GatewaySource[]>([]);
+  const [handoff, setHandoff] = useState<GatewayHandoff | null>(null);
+  const [handoffMessages, setHandoffMessages] = useState<GatewayStaffMessage[]>([]);
+  const [serverThreadId, setServerThreadId] = useState<string | null>(null);
+  const [feedbackSent, setFeedbackSent] = useState<"up" | "down" | null>(null);
+
+  const stream = useTypedStream((gateway && gatewayTransport
+    ? {
+        transport: gatewayTransport,
+        threadId,
+        onThreadId: (id: string | null) => { setThreadId(id); bumpThreads(); },
+        onCustomEvent: (event: unknown, options: { mutate: (fn: (prev: AgentState) => AgentState) => void }) => {
+          if (isUIMessage(event) || isRemoveUIMessage(event)) {
+            options.mutate((prev) => ({ ...prev, ui: uiMessageReducer(prev.ui ?? [], event) }));
+          }
+        },
+        onFinish: () => bumpThreads(),
       }
-    },
-    onFinish: () => bumpThreads(),
-  });
+    : {
+        apiUrl: connection.apiUrl || undefined,
+        apiKey: auth.apiKey,
+        defaultHeaders: auth.headers,
+        assistantId: connection.assistantId,
+        threadId,
+        onThreadId: (id: string | null) => { setThreadId(id); bumpThreads(); },
+        // Needed for edit / regenerate / branch switcher.
+        fetchStateHistory: branching,
+        onCustomEvent: (event: unknown, options: { mutate: (fn: (prev: AgentState) => AgentState) => void }) => {
+          if (isUIMessage(event) || isRemoveUIMessage(event)) {
+            options.mutate((prev) => ({ ...prev, ui: uiMessageReducer(prev.ui ?? [], event) }));
+          }
+        },
+        onFinish: () => bumpThreads(),
+      }) as never);
+
+  useEffect(() => {
+    if (!gateway) return;
+    return kit.gatewayEvents.subscribe((event) => {
+      if (event.type === "thread") setServerThreadId(event.threadId);
+      else if (event.type === "citations") setSources(event.sources);
+      else if (event.type === "handoff") setHandoff(event.handoff.status === "resolved" ? null : event.handoff);
+    });
+  }, [gateway, kit.gatewayEvents]);
+
+  useEffect(() => {
+    if (threadId) return;
+    // A new chat: forget the previous server-side thread and its side data.
+    setSources([]);
+    setHandoff(null);
+    setHandoffMessages([]);
+    setFeedbackSent(null);
+    setServerThreadId(null);
+  }, [threadId]);
+
+  const handoffId = handoff?.id;
+  const handoffStatus = handoff?.status;
+  useEffect(() => {
+    if (!gateway || !serverThreadId || !handoffId || handoffStatus === "resolved") return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const data = await handoffSnapshot(gateway, serverThreadId);
+        if (stopped) return;
+        setHandoff(data.handoff && data.handoff.status !== "resolved" ? data.handoff : null);
+        setHandoffMessages(data.messages ?? []);
+      } catch { /* transient network error; keep polling */ }
+    };
+    void tick();
+    const timer = setInterval(tick, 5000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [gateway, serverThreadId, handoffId, handoffStatus]);
 
   // Always read the latest state at call time (effects and callbacks outlive renders).
   const latest = useRef({ kit, stream });
@@ -95,6 +156,8 @@ export function useAgent() {
     const trimmed = text.trim();
     if (!trimmed && !blocks.length) return;
     const { stream: s } = latest.current;
+    setSources([]);
+    setFeedbackSent(null);
 
     const human: Message = {
       id: newId(),
@@ -177,6 +240,43 @@ export function useAgent() {
     [opts],
   );
 
+  // ---- gateway-only: human handoff + feedback ------------------------------
+  const requestHuman = useCallback(async (reason?: string) => {
+    const gw = latest.current.kit.gateway;
+    if (!gw || !serverThreadId) {
+      latest.current.kit.notify({
+        kind: "info",
+        title: "Start the conversation first",
+        description: "Send a message, then ask for a colleague.",
+      });
+      return;
+    }
+    try {
+      const data = await requestHandoff(gw, serverThreadId, reason);
+      setHandoff(data.handoff);
+    } catch (e) {
+      latest.current.kit.notify({
+        kind: "error",
+        title: "Can't reach a colleague",
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, [serverThreadId]);
+
+  const feedback = useCallback((rating: "up" | "down") => {
+    const gw = latest.current.kit.gateway;
+    if (!gw || !serverThreadId || feedbackSent) return;
+    const messages = (latest.current.stream.messages ?? []) as Message[];
+    const human = [...messages].reverse().find((m) => m.type === "human");
+    const ai = [...messages].reverse().find((m) => m.type === "ai");
+    void sendFeedback(gw, {
+      thread_id: serverThreadId,
+      rating,
+      ...(human ? { user_message: messageText(human.content) } : {}),
+      ...(ai ? { reply: messageText(ai.content) } : {}),
+    }).then(() => setFeedbackSent(rating)).catch(() => { /* non-critical */ });
+  }, [serverThreadId, feedbackSent]);
+
   // ---- frontend tools -------------------------------------------------------
   // `stream.interrupts` only holds user-facing interrupts; frontend-tool requests
   // stay in the raw state values.
@@ -252,6 +352,19 @@ export function useAgent() {
     resolve,
     newThread: () => setThreadId(null),
     selectThread: (id: string | null) => setThreadId(id),
+    /** Gateway mode: citations for the current reply. */
+    sources,
+    /** Gateway mode: the open (or most recent) human handoff, if any. */
+    handoff,
+    handoffMessages,
+    /** Gateway mode: ask a human to join this conversation. */
+    requestHuman,
+    /** Gateway mode: rate the last reply. */
+    feedback,
+    feedbackSent,
+    /** Gateway mode: the server-side thread id (differs from the SDK client id). */
+    serverThreadId,
+    isGateway: !!gateway,
     /** Escape hatch to the raw SDK stream. */
     stream,
   };

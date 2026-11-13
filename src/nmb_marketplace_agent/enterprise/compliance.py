@@ -31,8 +31,8 @@ CAPABILITIES: dict[str, tuple[str, str]] = {
     "tenant_isolation": ("Tenant-scoped data, keys and threads", "available"),
     "ai_oversight": ("Human-in-the-loop for high-risk tool calls and decisions; eval datasets", "available"),
     "offline_licensing": ("Air-gap-capable signed licensing", "available"),
-    "data_retention": ("Configurable retention and legal hold", "roadmap"),
-    "subject_rights": ("Data-subject access/erasure across stores", "roadmap"),
+    "data_retention": ("Per-tenant retention windows with legal hold across threads, traces and derived data", "available"),
+    "subject_rights": ("Data-subject access export and erasure across LangGraph, registry, vector stores and Langfuse", "available"),
     "encryption_at_rest_kms": ("Envelope encryption with customer-managed keys (BYOK)", "roadmap"),
 }
 

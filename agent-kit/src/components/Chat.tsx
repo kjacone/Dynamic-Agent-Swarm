@@ -86,6 +86,7 @@ function ChatView({
     for (const c of messageToolCalls(m)) if (c.id) knownCalls.add(c.id);
   }
 
+  const lastAi = [...visible].reverse().find((m) => m.type === "ai");
   const last = visible[visible.length - 1];
   const waiting = agent.isLoading && (!last || last.type === "human" ||
     (last.type === "ai" && !messageText(last.content) && !messageToolCalls(last).length));
@@ -97,10 +98,13 @@ function ChatView({
     const key = m.id ?? `${m.type}-${i}`;
     if (m.type === "human") return <HumanMessage key={key} message={m} branching={branching} copy={f.copy} />;
     if (m.type === "ai") {
+      const isLast = m === lastAi && !agent.isLoading;
       return (
         <AssistantMessage
           key={key} message={m} results={results} loading={agent.isLoading && i === visible.length - 1}
           hideToolCalls={hideToolCalls} branching={branching} copy={f.copy} uiComponents={uiComponents} markdown={markdown}
+          sources={agent.isGateway && m === lastAi ? agent.sources : undefined}
+          feedback={agent.isGateway && isLast ? { sent: agent.feedbackSent, onRate: agent.feedback } : undefined}
         />
       );
     }
@@ -123,6 +127,11 @@ function ChatView({
           )}
         </div>
         <div className="lgk-chat-head-actions">
+          {kit.gateway && !agent.handoff && (
+            <button type="button" className="lgk-hb-btn" onClick={() => void agent.requestHuman()}>
+              Talk to a human
+            </button>
+          )}
           {started && <IconButton label="New chat" onClick={agent.newThread}><NewChatIcon /></IconButton>}
           {headerActions}
         </div>
@@ -148,6 +157,25 @@ function ChatView({
               {visible.map(renderMessage)}
 
               {waiting && <div className="lgk-typing" role="status" aria-label="Agent is working"><i /><i /><i /></div>}
+              {agent.handoff && (
+                <div className="lgk-handoff" data-status={agent.handoff.status} role="status">
+                  <div className="lgk-handoff-head">
+                    <strong>
+                      {agent.handoff.status === "active" ? "A colleague has joined" : "Waiting for a colleague"}
+                    </strong>
+                    <span>
+                      {agent.handoff.status === "active"
+                        ? "You're chatting with our team. Replies appear here."
+                        : "Our team has been notified. You can keep typing here."}
+                    </span>
+                  </div>
+                  {agent.handoffMessages.filter((m) => m.role === "staff").map((m) => (
+                    <div className="lgk-handoff-msg" key={m.id}>
+                      <b>{m.author || "Team"}</b> {m.text}
+                    </div>
+                  ))}
+                </div>
+              )}
               <InterruptView interrupts={agent.interrupts} render={renderInterrupt} />
               {agent.error && <div className="lgk-error" role="alert">{agent.error}</div>}
             </div>

@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
+import { FileText, Play, Sparkles, Tag } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/common/PageHeader";
+import { EmptyState, LoadingBlock } from "@/components/common/AsyncState";
 import { AsyncButton } from "@/components/common/AsyncButton";
+import { FilterTabs } from "@/components/common/FilterTabs";
+import { StatusBadge } from "@/components/common/StatusBadge";
 import { useToast } from "@/components/ui/toast";
-import { truncate } from "@/lib/utils";
 
 const VAR_RE = /\{\{\s*([\w.\-]+)\s*\}\}/g;
 function varsOf(text: string): string[] {
@@ -23,9 +26,9 @@ function varsOf(text: string): string[] {
 export function Prompts() {
   return (
     <div>
-      <PageHeader title="Prompts" description="Prompt registry backed by Langfuse." />
+      <PageHeader icon={FileText} title="Prompts" description="Prompt registry backed by Langfuse." />
       <Tabs defaultValue="registry">
-        <TabsList>
+        <TabsList className="h-10 rounded-xl p-1">
           <TabsTrigger value="registry">Registry</TabsTrigger>
           <TabsTrigger value="playground">Playground</TabsTrigger>
         </TabsList>
@@ -37,7 +40,7 @@ export function Prompts() {
 }
 
 function Registry() {
-  const [rows, setRows] = useState<Array<Record<string, any>>>([]);
+  const [rows, setRows] = useState<Array<Record<string, any>> | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [labelFor, setLabelFor] = useState<Record<string, any> | null>(null);
@@ -48,43 +51,51 @@ function Registry() {
     try {
       const r = await api.listPrompts();
       setRows((r as any).data || []);
-    } catch (e: any) { setErr(e.message); }
+    } catch (e: any) { setErr(e.message); setRows([]); }
   }
   useEffect(() => { refresh(); }, []);
 
   if (err) {
     return (
-      <Card><CardContent className="py-6 text-sm">
-        <div className="text-destructive">{err}</div>
+      <Card><CardContent className="py-8 text-center text-sm">
+        <div className="font-medium text-destructive">{err}</div>
         <div className="mt-1 text-xs text-muted-foreground">Connect Langfuse in Settings → Connections.</div>
       </CardContent></Card>
     );
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex justify-end">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">Versioned prompts with labels — production, staging or any name your workflows resolve.</p>
         <Button onClick={() => setCreating(true)}>New prompt</Button>
       </div>
-      <Card>
-        {rows.length === 0 ? (
-          <div className="p-6 text-center text-sm text-muted-foreground">No prompts yet.</div>
+      {rows === null ? <LoadingBlock rows={4} />
+        : rows.length === 0 ? (
+          <EmptyState icon={FileText} title="No prompts yet" body="Create a prompt to version it and use labels to promote changes." />
         ) : (
-          <div className="divide-y">
-            {rows.map((p) => (
-              <div key={p.name} className="flex items-center justify-between p-3">
-                <div>
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {p.type} · {p.versions?.length || 0} version(s) · labels: {(p.labels || []).join(", ") || "—"}
+          <Card>
+            <div className="divide-y">
+              {rows.map((p) => (
+                <div key={p.name} className="flex items-center justify-between gap-3 p-3.5 transition-colors hover:bg-muted/30">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><FileText className="h-4 w-4" /></span>
+                    <div className="min-w-0">
+                      <div className="truncate font-medium">{p.name}</div>
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{p.type}</span>
+                        <span>{p.versions?.length || 0} version(s)</span>
+                        <span>·</span>
+                        <span className="truncate">{(p.labels || []).join(", ") || "no labels"}</span>
+                      </div>
+                    </div>
                   </div>
+                  <Button size="sm" variant="outline" onClick={() => setLabelFor(p)}><Tag className="h-3.5 w-3.5" /> Labels</Button>
                 </div>
-                <Button size="sm" variant="outline" onClick={() => setLabelFor(p)}>Manage labels</Button>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </Card>
         )}
-      </Card>
       {creating && <CreatePrompt onClose={() => { setCreating(false); refresh(); }} />}
       {labelFor && <ManageLabels prompt={labelFor} onClose={() => { setLabelFor(null); refresh(); }} />}
     </div>
@@ -97,6 +108,7 @@ function CreatePrompt({ onClose }: { onClose: () => void }) {
   const [text, setText] = useState("");
   const [labelInput, setLabelInput] = useState("production");
   const toast = useToast();
+  const detected = useMemo(() => varsOf(text), [text]);
 
   async function save() {
     try {
@@ -105,33 +117,39 @@ function CreatePrompt({ onClose }: { onClose: () => void }) {
         prompt: type === "text" ? text : [{ role: "system", content: text }],
         labels: labelInput.split(",").map((s) => s.trim()).filter(Boolean),
       });
-      toast.push("Created", "success"); onClose();
+      toast.push("Prompt created", "success"); onClose();
     } catch (e: any) { toast.push(e.message, "error"); }
   }
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-xl">
-        <DialogHeader><DialogTitle>New prompt</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>New prompt</DialogTitle>
+          <DialogDescription>Use <code className="rounded bg-muted px-1">{"{{variable}}"}</code> syntax; detected variables are listed below.</DialogDescription>
+        </DialogHeader>
         <div className="space-y-3">
-          <div><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
-          <div>
+          <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="refunds-triage" /></div>
+          <div className="space-y-1.5">
             <Label>Type</Label>
-            <select value={type} onChange={(e) => setType(e.target.value as any)}
-              className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm">
-              <option value="text">text</option>
-              <option value="chat">chat</option>
-            </select>
+            <FilterTabs value={type} onChange={setType} options={[{ id: "text", label: "Text" }, { id: "chat", label: "Chat" }]} />
           </div>
-          <div><Label>Prompt content</Label>
-            <Textarea rows={8} value={text} onChange={(e) => setText(e.target.value)}
-              placeholder="Use {{variables}} for templating" />
+          <div className="space-y-1.5"><Label>Prompt content</Label>
+            <Textarea rows={8} className="font-mono text-xs leading-relaxed" value={text} onChange={(e) => setText(e.target.value)}
+              placeholder="You are a bank support agent. Customer: {{customer_name}}…" />
+            {detected.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                Variables:
+                {detected.map((v) => <span key={v} className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{v}</span>)}
+              </div>
+            )}
           </div>
-          <div><Label>Labels (comma-separated)</Label><Input value={labelInput} onChange={(e) => setLabelInput(e.target.value)} /></div>
+          <div className="space-y-1.5"><Label>Labels (comma-separated)</Label>
+            <Input value={labelInput} onChange={(e) => setLabelInput(e.target.value)} /></div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <AsyncButton onRun={save} disabled={!name || !text}>Create</AsyncButton>
+          <AsyncButton onRun={save} disabled={!name || !text}>Create prompt</AsyncButton>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -148,19 +166,24 @@ function ManageLabels({ prompt, onClose }: { prompt: Record<string, any>; onClos
   async function save(v: number) {
     try {
       await api.setPromptLabels(prompt.name, v, labels[v].split(",").map((s) => s.trim()).filter(Boolean));
-      toast.push(`v${v} labels saved`, "success");
+      toast.push(`Labels for v${v} saved`, "success");
     } catch (e: any) { toast.push(e.message, "error"); }
   }
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Labels · {prompt.name}</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>Labels · {prompt.name}</DialogTitle>
+          <DialogDescription>Point a label (e.g. production) at a version. Workflows resolve prompts by label.</DialogDescription>
+        </DialogHeader>
         <div className="space-y-2">
+          {versions.length === 0 && <div className="text-sm text-muted-foreground">No versions recorded yet.</div>}
           {versions.map((v) => (
             <div key={v.version} className="flex items-center gap-2">
-              <Badge variant="secondary" className="w-16 justify-center">v{v.version}</Badge>
-              <Input value={labels[v.version] ?? ""} onChange={(e) => setLabels((prev) => ({ ...prev, [v.version]: e.target.value }))} />
+              <span className="w-14 shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-center font-mono text-xs">v{v.version}</span>
+              <Input value={labels[v.version] ?? ""} placeholder="production, staging"
+                onChange={(e) => setLabels((prev) => ({ ...prev, [v.version]: e.target.value }))} />
               <Button size="sm" variant="outline" onClick={() => save(v.version)}>Save</Button>
             </div>
           ))}
@@ -216,57 +239,55 @@ function Playground() {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Card>
-        <CardHeader><CardTitle>Prompt</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-sm">Prompt</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid grid-cols-[1fr,120px,80px] gap-2">
-            <select value={promptName} onChange={(e) => setPromptName(e.target.value)}
-              className="rounded-md border bg-background px-2 py-1 text-sm">
+          <div className="grid grid-cols-[1fr,110px,auto] gap-2">
+            <select value={promptName} onChange={(e) => setPromptName(e.target.value)} className="h-9 rounded-lg border bg-background px-2 text-sm">
               <option value="">Select a prompt…</option>
               {prompts.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
             </select>
             <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" />
-            <Button size="sm" onClick={load} disabled={!promptName}>Load</Button>
+            <Button onClick={load} disabled={!promptName}>Load</Button>
           </div>
 
           {prompt && Object.entries(variables).map(([k, v]) => (
-            <div key={k}>
-              <Label>{k}</Label>
+            <div key={k} className="space-y-1.5">
+              <Label className="font-mono text-xs">{k}</Label>
               <Input value={v} onChange={(e) => setVariables((prev) => ({ ...prev, [k]: e.target.value }))} />
             </div>
           ))}
-          <div><Label>User input (optional)</Label>
+          <div className="space-y-1.5"><Label>User input (optional)</Label>
             <Textarea rows={3} value={userInput} onChange={(e) => setUserInput(e.target.value)} />
           </div>
-          <div><Label>Models (comma-separated, max 4)</Label>
-            <Input value={modelsInput} onChange={(e) => setModelsInput(e.target.value)}
+          <div className="space-y-1.5"><Label>Models (comma-separated, max 4)</Label>
+            <Input className="font-mono text-xs" value={modelsInput} onChange={(e) => setModelsInput(e.target.value)}
               placeholder="ollama:llama3.2, ollama:llama3.1:8b" />
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={trace} onChange={(e) => setTrace(e.target.checked)} /> Trace to Langfuse
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <Checkbox checked={trace} onCheckedChange={(v) => setTrace(v === true)} /> Trace to Langfuse
           </label>
-          {err && <div className="text-xs text-destructive">{err}</div>}
-          <AsyncButton onRun={run} disabled={!prompt || busy}>Run</AsyncButton>
+          {err && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-700 dark:text-red-400">{err}</div>}
+          <AsyncButton onRun={run} disabled={!prompt || busy}><Sparkles className="h-4 w-4" /> Run</AsyncButton>
         </CardContent>
       </Card>
       <Card>
-        <CardHeader><CardTitle>Results</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-sm">Results</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          {!result && <div className="text-sm text-muted-foreground">Run the prompt to see outputs.</div>}
+          {!result && (
+            <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 rounded-xl border border-dashed text-center text-sm text-muted-foreground">
+              <Play className="h-7 w-7 opacity-40" />
+              Run the prompt to compare models.
+            </div>
+          )}
           {result?.results?.map((r: any, i: number) => (
-            <div key={i} className="rounded-md border p-3">
-              <div className="mb-1 flex items-center justify-between text-xs">
-                <span className="font-mono">{r.model}</span>
-                <span className={r.ok ? "text-emerald-700" : "text-destructive"}>
-                  {r.ok ? `${r.latency_ms}ms` : "error"}
-                </span>
+            <div key={i} className="rounded-xl border p-3">
+              <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+                <span className="truncate font-mono">{r.model}</span>
+                <StatusBadge value={r.ok ? "pass" : "fail"} label={r.ok ? `${r.latency_ms}ms` : "error"} />
               </div>
-              <div className="whitespace-pre-wrap text-sm">
-                {r.ok ? r.output : r.error}
-              </div>
+              <div className="whitespace-pre-wrap text-sm leading-relaxed">{r.ok ? r.output : r.error}</div>
               {r.usage && Object.keys(r.usage).length > 0 && (
-                <div className="mt-1 text-xs text-muted-foreground">
-                  tokens: {JSON.stringify(r.usage)}
-                </div>
+                <div className="mt-2 text-[11px] text-muted-foreground">tokens: {JSON.stringify(r.usage)}</div>
               )}
             </div>
           ))}

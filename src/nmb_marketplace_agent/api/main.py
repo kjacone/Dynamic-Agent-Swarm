@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from nmb_marketplace_agent.api.auth import require_admin, verify_api_key
 from nmb_marketplace_agent.api.routes import (
     agents,
+    catalog,
     evals,
     feedback,
     inference,
@@ -40,6 +41,7 @@ from nmb_marketplace_agent.config.database import init_db
 from nmb_marketplace_agent.enterprise import models as _enterprise_models  # noqa: F401 (register tables)
 from nmb_marketplace_agent.enterprise.api import router as enterprise_router
 from nmb_marketplace_agent.enterprise.api import sweeper_loop
+from nmb_marketplace_agent.enterprise.notifications import dispatcher_loop
 
 PKG_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PKG_DIR / "static"
@@ -51,9 +53,12 @@ admin = [Depends(require_admin)]
 async def lifespan(app: FastAPI):
     await init_db()
     sweeper = asyncio.create_task(sweeper_loop()) if os.environ.get("ENTERPRISE_SWEEPER", "on") == "on" else None
+    notifier = asyncio.create_task(dispatcher_loop()) if os.environ.get("ENTERPRISE_NOTIFY", "on") == "on" else None
     yield
     if sweeper:
         sweeper.cancel()
+    if notifier:
+        notifier.cancel()
 
 
 app = FastAPI(title="NMB Marketplace Agent", lifespan=lifespan)
@@ -103,7 +108,7 @@ app.include_router(enterprise_router, prefix="/enterprise", tags=["enterprise"])
 app.include_router(manifest.router, prefix="/agents",
                    tags=["manifest"], dependencies=[Depends(verify_api_key)])
 app.include_router(public.router, prefix="/v1", tags=["public"])
-app.include_router(feedback.public_router, prefix="/v1", tags=["public"])
+app.include_router(catalog.router, prefix="/v1", tags=["public"])
 app.include_router(lg_proxy.config_router, prefix="/v1", tags=["public"])
 app.include_router(lg_proxy.router, prefix="/v1/lg", tags=["langgraph-proxy"])
 
@@ -137,6 +142,18 @@ async def legacy_app():
 @app.get("/demo", include_in_schema=False)
 async def demo():
     return _serve("demo.html")
+
+
+@app.get("/marketplace", include_in_schema=False)
+async def marketplace_page():
+    """Anonymous catalogue: prospective customers browse packs before signing in."""
+    return _serve("marketplace.html")
+
+
+@app.get("/widget-demo", include_in_schema=False)
+async def widget_demo():
+    """A simulated client site that embeds the chat widget."""
+    return _serve("widget-demo.html")
 
 
 @app.get("/embed.js", include_in_schema=False)

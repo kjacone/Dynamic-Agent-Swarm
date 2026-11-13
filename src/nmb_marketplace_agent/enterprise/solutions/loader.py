@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import uuid
@@ -35,6 +36,7 @@ from nmb_marketplace_agent.enterprise.models import (
     ConnectorConfig,
     InstalledSolution,
     PolicySet,
+    SolutionSnapshot,
     now_iso,
 )
 from nmb_marketplace_agent.enterprise.workflows.engine import Runtime, WorkflowEngine
@@ -51,6 +53,7 @@ DOCS_ROOT = Path("data/docs")
 _NS = uuid.UUID("6f1c2f0e-7d1a-4d57-9b0e-3c4f5a6b7c8d")
 _VAR = re.compile(r"\$\{(\w+)\}")
 BUILTIN_TOOLS = {"calculator", "tavily_search"}
+TOOL_TYPES = {"builtin", "python", "http"}
 DELIVERY_VALUES = {"workflow", "agent_kit", "both"}
 
 # Prepended to every supervisor prompt so the contract is enforced in every pack.
@@ -66,6 +69,10 @@ SUPERVISOR_PREAMBLE = """You are a supervisor. You coordinate specialists; you d
 
 class PackError(Exception):
     pass
+
+
+class NothingToRollBack(PackError):
+    """No snapshot differs from the installed version."""
 
 
 # ── paths and substitutions ──────────────────────────────────────────
@@ -277,6 +284,77 @@ def _validate_supervisor(pack: dict) -> None:
             ) from e
         if v < 0:
             raise PackError("supervisor.limits.max_cost_usd must be >= 0")
+
+
+# ── tools ────────────────────────────────────────────────────────────
+def _declared_tools(pack: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for spec in pack.get("tools", []) or []:
+        name = (spec or {}).get("name")
+        if not name or not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", str(name)):
+            raise PackError(f"tools must have a valid name, got {name!r}")
+        if name in out:
+            raise PackError(f"Duplicate tool '{name}'")
+        out[name] = spec
+    return out
+
+
+def _used_tools(pack: dict) -> set[str]:
+    used = {t for a in pack.get("agents", []) for t in a.get("tools", []) or []}
+    sup = pack.get("supervisor") or {}
+    for tools in (sup.get("allowed_tools") or {}).values():
+        used.update(tools or [])
+    used.update(sup.get("tools") or [])
+    return used
+
+
+def _python_prefixes() -> list[str]:
+    return [x.strip() for x in os.environ.get(
+        "PYTHON_TOOL_PREFIXES", "nmb_marketplace_agent.custom_tools.").split(",") if x.strip()]
+
+
+def _validate_tools(pack: dict) -> None:
+    """Every referenced tool must be declared (or a builtin) and its config usable."""
+    declared = _declared_tools(pack)
+    for name in _used_tools(pack):
+        if name not in declared and name not in BUILTIN_TOOLS:
+            raise PackError(
+                f"Tool '{name}' is referenced by an agent but not declared in 'tools' "
+                f"(declared: {sorted(declared) or 'none'})"
+            )
+    for name, spec in declared.items():
+        ttype = spec.get("type", "builtin")
+        if ttype not in TOOL_TYPES:
+            raise PackError(f"Tool '{name}' has unknown type '{ttype}'")
+        config = spec.get("config") or {}
+        if ttype == "python":
+            dotted = config.get("dotted_path")
+            if not dotted:
+                raise PackError(f"Python tool '{name}' needs config.dotted_path")
+            prefixes = _python_prefixes()
+            if not any(dotted.startswith(p) for p in prefixes):
+                raise PackError(f"Tool '{name}' dotted_path must start with one of {prefixes}")
+        elif ttype == "http" and not config.get("endpoint"):
+            raise PackError(f"HTTP tool '{name}' needs config.endpoint")
+        elif ttype == "builtin" and name not in BUILTIN_TOOLS:
+            raise PackError(f"Unknown builtin tool '{name}'")
+
+
+async def _install_tools(db: AsyncSession, tenant_id: str, pack: dict) -> dict[str, str]:
+    declared = _declared_tools(pack)
+    tool_ids: dict[str, str] = {}
+    for name in sorted(_used_tools(pack)):
+        spec = declared.get(name) or {"type": "builtin"}
+        tid = str(uuid.uuid5(_NS, f"{tenant_id}/tool/{name}"))
+        row = await db.get(ToolConfig, tid) or ToolConfig(id=tid, tenant_id=tenant_id, name=name)
+        row.type = spec.get("type", "builtin")
+        row.description = spec.get("description") or name
+        row.config = dict(spec.get("config") or {})
+        db.add(row)
+        tool_ids[name] = tid
+    await db.commit()
+    return tool_ids
+
 # ── install ──────────────────────────────────────────────────────────
 async def install_solution(
     db: AsyncSession,
@@ -284,21 +362,34 @@ async def install_solution(
     solution_id: str,
     actor: str,
     overrides: dict | None = None,
+    *,
+    pack_override: dict | None = None,
+    parameters: dict | None = None,
+    audit_action: str | None = None,
 ) -> InstalledSolution:
+    """Install, reconfigure or upgrade a pack.
+
+    ``pack_override`` + ``parameters`` replay a snapshot on rollback instead of reading
+    the current file from disk.
+    """
     if not current_license().has_solution(solution_id):
         raise PackError(f"Solution '{solution_id}' is not included in your license")
-    pack = load_pack(solution_id)
-    declared = pack.get("parameters", {})
+    raw = pack_override or load_pack(solution_id)
+    declared = raw.get("parameters", {})
     params = {k: v.get("default") for k, v in declared.items()}
     params.setdefault("model", settings.main_model)
     prev = await db.get(InstalledSolution, f"{tenant_id}:{solution_id}")
-    if prev:
-        params.update({k: v for k, v in prev.parameters.items() if k in params})
-    for k, v in (overrides or {}).items():
-        if k not in declared and k != "model":
-            raise PackError(f"Unknown parameter '{k}'")
-        params[k] = v
-    pack = _subst(pack, params)
+    if parameters is not None:
+        # Snapshot replay: keep exactly the recorded values.
+        params.update({k: v for k, v in parameters.items() if k in declared or k == "model"})
+    else:
+        if prev:
+            params.update({k: v for k, v in prev.parameters.items() if k in params})
+        for k, v in (overrides or {}).items():
+            if k not in declared and k != "model":
+                raise PackError(f"Unknown parameter '{k}'")
+            params[k] = v
+    pack = _subst(raw, params)
 
     # Validate before any writes.
     delivery = pack.get("delivery", "workflow")
@@ -310,18 +401,12 @@ async def install_solution(
         if not pack.get("widget"):
             raise PackError(f"delivery '{delivery}' requires a widget block")
     _validate_supervisor(pack)
+    _validate_tools(pack)
 
     created: dict[str, Any] = {"agents": {}, "workflows": [], "connectors": [], "tools": {}}
 
-    # ── tools (builtins) ──────────────────────────────────────────────
-    tool_ids: dict[str, str] = {}
-    for name in sorted({t for a in pack.get("agents", []) for t in a.get("tools", [])}):
-        if name not in BUILTIN_TOOLS:
-            continue
-        tid = str(uuid.uuid5(_NS, f"{tenant_id}/tool/{name}"))
-        if not await db.get(ToolConfig, tid):
-            db.add(ToolConfig(id=tid, name=name, type="builtin", description=name, tenant_id=tenant_id))
-        tool_ids[name] = tid
+    # ── tools (builtins and pack-declared python/http tools) ─────────
+    tool_ids = await _install_tools(db, tenant_id, pack)
     created["tools"] = tool_ids
 
     # ── agents ────────────────────────────────────────────────────────
@@ -348,6 +433,7 @@ async def install_solution(
             + "\n\n"
             + sup["system_prompt"].strip()
         )
+        row.tool_ids = [tool_ids[t] for t in sup.get("tools", []) if t in tool_ids]
         row.subagent_ids = [
             created["agents"][k] for k in sup.get("delegates", [])
             if k in created["agents"]
@@ -495,16 +581,38 @@ async def install_solution(
     inst = await db.get(InstalledSolution, inst_id) or InstalledSolution(
         id=inst_id, tenant_id=tenant_id, solution_id=solution_id,
     )
-    inst.version, inst.parameters, inst.created, inst.installed_by, inst.installed_at = (
-        pack.get("version", "1.0.0"), params, created, actor, now_iso(),
+    previous_version = inst.version if prev else None
+    stamp = now_iso()
+    inst.version, inst.parameters, inst.created = (
+        pack.get("version", "1.0.0"), params, created,
     )
+    # An upgrade keeps the original install date and who installed it.
+    inst.installed_by = inst.installed_by or actor
+    inst.installed_at = inst.installed_at if prev else stamp
+    if prev:
+        created["upgraded_at"], created["upgraded_by"] = stamp, actor
+        history = list((prev.created or {}).get("upgrades") or [])
+        history.append({
+            "from_version": previous_version,
+            "to_version": inst.version,
+            "at": stamp,
+            "by": actor,
+        })
+        created["upgrades"] = history[-10:]
+    await _save_snapshot(db, tenant_id, solution_id, pack, params, actor)
     db.add(inst)
     await db.commit()
+    action = audit_action or (
+        "solution.installed" if not prev
+        else "solution.upgraded" if previous_version != inst.version
+        else "solution.reconfigured"
+    )
     await audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="solution.installed",
+        db, tenant_id=tenant_id, actor=actor, action=action,
         resource_type="solution", resource_id=solution_id,
         details={
             "version": inst.version,
+            **({"from_version": previous_version} if prev else {}),
             "parameters": params,
             "knowledge": len(created["knowledge"]),
             "training": len(created["training"]),
@@ -616,3 +724,73 @@ async def installed(db: AsyncSession, tenant_id: str) -> list[InstalledSolution]
         (await db.execute(select(InstalledSolution).where(InstalledSolution.tenant_id == tenant_id)))
         .scalars().all()
     )
+
+
+# ── snapshots / rollback ─────────────────────────────────────────────
+MAX_SNAPSHOTS = 10
+
+
+async def snapshots(
+    db: AsyncSession, tenant_id: str, solution_id: str,
+) -> list[SolutionSnapshot]:
+    """Newest first. One row per applied version; re-installing a version overwrites it."""
+    return list((await db.execute(
+        select(SolutionSnapshot)
+        .where(
+            SolutionSnapshot.tenant_id == tenant_id,
+            SolutionSnapshot.solution_id == solution_id,
+        )
+        .order_by(SolutionSnapshot.created_at.desc())
+    )).scalars().all())
+
+
+async def _save_snapshot(
+    db: AsyncSession, tenant_id: str, solution_id: str,
+    pack: dict, params: dict, actor: str,
+) -> SolutionSnapshot:
+    version = pack.get("version", "1.0.0")
+    sid = f"{tenant_id}:{solution_id}:{version}"
+    snap = await db.get(SolutionSnapshot, sid) or SolutionSnapshot(
+        id=sid, tenant_id=tenant_id, solution_id=solution_id, version=version,
+    )
+    snap.parameters, snap.pack, snap.created_by, snap.created_at = (
+        params, pack, actor, now_iso(),
+    )
+    db.add(snap)
+    rows = await snapshots(db, tenant_id, solution_id)
+    for old in rows[MAX_SNAPSHOTS:]:
+        await db.delete(old)
+    return snap
+
+
+async def rollback_solution(
+    db: AsyncSession,
+    tenant_id: str,
+    solution_id: str,
+    actor: str,
+    version: str | None = None,
+) -> tuple[InstalledSolution, str]:
+    """Re-apply a stored pack snapshot. Returns (installed, from_version)."""
+    inst = await db.get(InstalledSolution, f"{tenant_id}:{solution_id}")
+    if not inst:
+        raise PackError("Install the solution first.")
+    rows = await snapshots(db, tenant_id, solution_id)
+    if version:
+        snap = next((s for s in rows if s.version == version), None)
+        if not snap:
+            raise NothingToRollBack(f"No snapshot of '{solution_id}' v{version}")
+    else:
+        snap = next((s for s in rows if s.version != inst.version), None)
+        if not snap:
+            raise NothingToRollBack(
+                f"No earlier version of '{solution_id}' to roll back to"
+            )
+    if snap.version == inst.version:
+        raise NothingToRollBack(f"Already on v{inst.version}")
+    from_version = inst.version
+    applied = await install_solution(
+        db, tenant_id, solution_id, actor,
+        pack_override=snap.pack, parameters=snap.parameters,
+        audit_action="solution.rolled_back",
+    )
+    return applied, from_version

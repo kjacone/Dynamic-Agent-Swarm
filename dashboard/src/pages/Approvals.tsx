@@ -1,18 +1,22 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, X } from "lucide-react";
+import {
+  AlertTriangle, Check, CheckCircle2, Clock, FlaskConical, GitBranch, Inbox, ShieldCheck, TimerOff, X, XCircle,
+} from "lucide-react";
 import { api, can, EvalDataset, type ApprovalItem, type Me } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/common/PageHeader";
-import { EmptyState } from "@/components/common/AsyncState";
+import { EmptyState, LoadingBlock } from "@/components/common/AsyncState";
 import { AsyncButton } from "@/components/common/AsyncButton";
 import { JsonView } from "@/components/common/JsonView";
 import { Chip, StatusBadge, dueLabel } from "@/components/common/StatusBadge";
+import { FilterTabs } from "@/components/common/FilterTabs";
+import { StatCard } from "@/components/common/StatCard";
 import { useToast } from "@/components/ui/toast";
-import { fmtDate } from "@/lib/utils";
+import { cn, fmtDate } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 
 const FILTERS = ["pending", "approved", "rejected", "expired"] as const;
@@ -31,43 +35,68 @@ function blocker(a: ApprovalItem, me: Me | null): string | null {
 export function Approvals({ me, onChanged }: { me: Me | null; onChanged?: () => void }) {
   const [status, setStatus] = useState<(typeof FILTERS)[number]>("pending");
   const [items, setItems] = useState<ApprovalItem[] | null>(null);
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const [acting, setActing] = useState<{ a: ApprovalItem; decision: "approve" | "reject" } | null>(null);
   const toast = useToast();
 
   async function load() {
     try { setItems(await api.listApprovals(status)); } catch (e: any) { toast.push(e.message, "error"); setItems([]); }
   }
+  async function loadCounts() {
+    try {
+      const lists = await Promise.all(FILTERS.map((f) => api.listApprovals(f)));
+      setCounts(Object.fromEntries(FILTERS.map((f, i) => [f, lists[i].length])));
+    } catch { /* counts are decorative; the list itself surfaces errors */ }
+  }
   useEffect(() => { setItems(null); load(); }, [status]);
   useEffect(() => { const id = setInterval(load, 10000); return () => clearInterval(id); }, [status]);
+  useEffect(() => { loadCounts(); const id = setInterval(loadCounts, 15000); return () => clearInterval(id); }, []);
+
+  const pendingItems = status === "pending" ? items ?? [] : [];
+  const overdue = pendingItems.filter((a) => dueLabel(a.due_at, true).overdue).length;
+  const escalated = pendingItems.filter((a) => a.escalated).length;
 
   return (
     <div>
-      <PageHeader title="Approvals" description="Human decisions requested by workflows and policy. Every decision is written to the audit trail."
+      <PageHeader icon={ShieldCheck} title="Approvals" description="Human decisions requested by workflows and policy. Every decision is written to the audit trail."
         actions={can(me, "workflows:write") ? (
           <AsyncButton variant="outline" onRun={async () => {
             const r = await api.sweepApprovals();
-            toast.push(`SLA sweep: ${r.escalated} escalated, ${r.expired} expired`, "success"); load(); onChanged?.();
-          }}>Run SLA sweep</AsyncButton>) : undefined} />
+            toast.push(`SLA sweep: ${r.escalated} escalated, ${r.expired} expired`, "success"); load(); loadCounts(); onChanged?.();
+          }}><TimerOff className="h-4 w-4" /> Run SLA sweep</AsyncButton>) : undefined} />
+
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard icon={Clock} tone="amber" label="Awaiting decision" value={counts.pending ?? "—"} hint={status === "pending" && overdue ? `${overdue} past SLA` : "Maker-checker queue"} />
+        <StatCard icon={CheckCircle2} tone="emerald" label="Approved" value={counts.approved ?? "—"} />
+        <StatCard icon={XCircle} tone="red" label="Rejected" value={counts.rejected ?? "—"} />
+        <StatCard icon={TimerOff} tone="slate" label="Expired" value={counts.expired ?? "—"} hint={escalated ? `${escalated} escalated` : undefined} />
+      </div>
 
       {me?.auth === "admin_token" && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-          <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-600" />
+        <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
           <span>You are signed in with the shared admin token. You can view approvals but not decide them — segregation of duties requires a named approver account (SSO or tenant JWT).</span>
         </div>
       )}
 
-      <div className="mb-4 flex gap-1">
-        {FILTERS.map((f) => (
-          <button key={f} onClick={() => setStatus(f)}
-            className={`rounded-md px-3 py-1.5 text-sm capitalize ${status === f ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60"}`}>{f}</button>
-        ))}
-      </div>
+      <FilterTabs
+        className="mb-4"
+        value={status}
+        onChange={setStatus}
+        options={FILTERS.map((f) => ({ id: f, label: f, count: counts[f] }))}
+      />
 
-      {items === null ? <div className="p-6 text-sm text-muted-foreground animate-pulse">Loading…</div>
-        : items.length === 0 ? <EmptyState title={`No ${status} approvals`} body={status === "pending" ? "You're all caught up." : undefined} />
+      {items === null ? <LoadingBlock rows={3} />
+        : items.length === 0 ? (
+          <EmptyState
+            icon={status === "pending" ? CheckCircle2 : Inbox}
+            title={`No ${status} approvals`}
+            body={status === "pending" ? "You're all caught up — new requests will appear here automatically." : "Nothing has been decided in this state yet."}
+          />
+        )
         : <div className="space-y-3">{items.map((a) => <ApprovalCard key={a.id} a={a} me={me} onAct={(decision) => setActing({ a, decision })} />)}</div>}
 
-      {acting && <DecideDialog {...acting} onClose={(changed) => { setActing(null); if (changed) { load(); onChanged?.(); } }} />}
+      {acting && <DecideDialog {...acting} onClose={(changed) => { setActing(null); if (changed) { load(); loadCounts(); onChanged?.(); } }} />}
     </div>
   );
 }
@@ -79,19 +108,28 @@ function ApprovalCard({ a, me, onAct }: { a: ApprovalItem; me: Me | null; onAct:
   const [asEval, setAsEval] = useState(false);
   const decided = a.status === "approved" || a.status === "rejected";
     const [asRule, setAsRule] = useState(false);
-    
+  const accent = a.status === "approved" ? "border-l-emerald-500"
+    : a.status === "rejected" ? "border-l-red-500"
+      : a.escalated || due.overdue ? "border-l-amber-500"
+        : "border-l-sky-500";
+
   return (
-    <Card>
+    <Card className={cn("overflow-hidden border-l-4 transition-shadow hover:shadow-md", accent)}>
       <CardContent className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <div className="font-medium">{a.title || a.step_id}</div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              Requested by <b>{a.requester || "system"}</b> · {fmtDate(a.created_at)}
-              {due.text && <> · <span className={due.overdue ? "font-medium text-red-600" : ""}>{due.text}</span></>}
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+              <span>Requested by <b>{a.requester || "system"}</b> · {fmtDate(a.created_at)}</span>
+              {due.text && (
+                <span className={cn(
+                  "rounded-full border px-1.5 py-0.5 text-[10px]",
+                  due.overdue ? "border-red-500/30 bg-red-500/10 font-medium text-red-600 dark:text-red-400" : "bg-muted/70",
+                )}>{due.text}</span>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {a.escalated && <StatusBadge value="escalated" />}
             <StatusBadge value={a.status} />
           </div>
@@ -121,20 +159,22 @@ function ApprovalCard({ a, me, onAct }: { a: ApprovalItem; me: Me | null; onAct:
         )}
 
         {a.status === "pending" && (
-          <div className="flex items-center gap-2 pt-1">
-            <Button size="sm" disabled={!!why} onClick={() => onAct("approve")}><Check className="h-4 w-4" /> Approve</Button>
-            <Button size="sm" variant="outline" disabled={!!why} onClick={() => onAct("reject")}><X className="h-4 w-4" /> Reject</Button>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button size="sm" disabled={!!why} onClick={() => onAct("approve")}><Check className="h-3.5 w-3.5" /> Approve</Button>
+            <Button size="sm" variant="outline" className="text-red-600 hover:text-red-600 dark:text-red-400" disabled={!!why} onClick={() => onAct("reject")}>
+              <X className="h-3.5 w-3.5" /> Reject
+            </Button>
             {why && <span className="text-xs text-muted-foreground">{why}</span>}
           </div>
         )}
 
-              {decided && (
-          <div className="flex flex-wrap items-center gap-2 pt-1">
+        {decided && (
+          <div className="flex flex-wrap items-center gap-2 border-t pt-2">
             <Button size="sm" variant="outline" onClick={() => setAsEval(true)}>
-              Add to eval set
+              <FlaskConical className="h-3.5 w-3.5" /> Add to eval set
             </Button>
             <Button size="sm" variant="outline" onClick={() => setAsRule(true)}>
-              Turn into rule
+              <GitBranch className="h-3.5 w-3.5" /> Turn into rule
             </Button>
             <span className="text-xs text-muted-foreground">
               Capture this decision as a reusable test case, or a workflow rule.
@@ -187,7 +227,10 @@ function AddEvalDialog({ approval: a, onClose }: { approval: ApprovalItem; onClo
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader><DialogTitle>Add “{a.title || a.step_id}” to an eval set</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>Add “{a.title || a.step_id}” to an eval set</DialogTitle>
+          <DialogDescription>Turn this human decision into a regression case the LLM judge can score future runs against.</DialogDescription>
+        </DialogHeader>
         <div className="space-y-3">
           <div>
             <Label>Dataset</Label>
@@ -241,10 +284,15 @@ function DecideDialog({ a, decision, onClose }: { a: ApprovalItem; decision: "ap
   return (
     <Dialog open onOpenChange={(v) => !v && onClose(false)}>
       <DialogContent>
-        <DialogHeader><DialogTitle>{decision === "approve" ? "Approve" : "Reject"}: {a.title}</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>{decision === "approve" ? "Approve" : "Reject"}: {a.title || a.step_id}</DialogTitle>
+          <DialogDescription>
+            {a.summary || `${a.requester || "system"} requested a decision on step “${a.step_id}”.`}
+          </DialogDescription>
+        </DialogHeader>
         <div className="space-y-2">
           <Label>{needReason ? "Reason (required)" : "Comment (optional)"}</Label>
-          <Textarea rows={3} value={comment} onChange={(e) => setComment(e.target.value)}
+          <Textarea rows={3} autoFocus value={comment} onChange={(e) => setComment(e.target.value)}
             placeholder={needReason ? "Why is this being rejected?" : "Evidence reviewed, conditions, etc."} />
           <p className="text-xs text-muted-foreground">Your name, decision and comment become part of the tamper-evident audit trail.</p>
         </div>
@@ -310,6 +358,7 @@ function TurnIntoRuleDialog({ approval: a, onClose }: { approval: ApprovalItem; 
           <DialogTitle>
             Turn “{a.title || a.step_id}” into a workflow rule
           </DialogTitle>
+          <DialogDescription>Future runs will be routed or blocked automatically when the expression matches.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           {!workflowKey && <div className="text-sm text-muted-foreground">Loading workflow…</div>}

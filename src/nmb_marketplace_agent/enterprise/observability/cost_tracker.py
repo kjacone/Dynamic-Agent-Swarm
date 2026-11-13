@@ -5,8 +5,7 @@ API call across the *whole callback tree* — supervisor and every subagent nest
 `task` tool. This is the only accounting path that survives deepagents#6555 (which discards
 subagent `usage_metadata` at the `task` boundary) because it bypasses agent state entirely.
 
-Buffers usage in memory and flushes once after the run, so we don't serialise the graph's
-own async loop with DB writes.
+Buffers usage in memory and flushes once after the run.
 """
 from __future__ import annotations
 
@@ -17,11 +16,13 @@ from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
+from nmb_marketplace_agent.enterprise.observability import pricing
+
 log = logging.getLogger(__name__)
 
 
 class CostTracker(BaseCallbackHandler):
-    """Accumulate token usage across an entire agent invocation (supervisor + subagents)."""
+    """Accumulate token usage and USD cost across an agent invocation."""
 
     def __init__(self, *, tenant_id: str, run_id: str, step_id: str) -> None:
         self.tenant_id = tenant_id
@@ -50,11 +51,24 @@ class CostTracker(BaseCallbackHandler):
             bucket["cache_read"] += int(details.get("cache_read") or 0)
             bucket["cache_creation"] += int(details.get("cache_creation") or 0)
             bucket["calls"] += 1
-        except Exception:  # noqa: BLE001 — never fail a run because the tracker tripped
+        except Exception:  # noqa: BLE001
             log.exception("cost tracker: on_llm_end failed")
 
+    def usd(self) -> float:
+        """Total USD spent across all model calls seen so far."""
+        total = 0.0
+        for model, t in self._totals.items():
+            total += pricing.usd(
+                model,
+                input_tokens=t["input"],
+                output_tokens=t["output"],
+                cache_read=t["cache_read"],
+                cache_creation=t["cache_creation"],
+            )
+        return total
+
     async def flush(self, db) -> None:
-        """Write one `llm_tokens` metering row per (model) into the workflow engine's session."""
+        """Write one `llm_tokens` metering row per model into the workflow engine's session."""
         from nmb_marketplace_agent.enterprise import metering
 
         for model, t in self._totals.items():
@@ -73,6 +87,13 @@ class CostTracker(BaseCallbackHandler):
                     cache_read=t["cache_read"],
                     cache_creation=t["cache_creation"],
                     calls=t["calls"],
+                    usd=pricing.usd(
+                        model,
+                        input_tokens=t["input"],
+                        output_tokens=t["output"],
+                        cache_read=t["cache_read"],
+                        cache_creation=t["cache_creation"],
+                    ),
                 )
             except Exception:  # noqa: BLE001 — metering must not fail a completed step
                 log.exception("cost tracker: flush failed for model %s", model)

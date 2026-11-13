@@ -91,13 +91,28 @@ export interface EvalDataset {
 export interface EvalCase {
   id: string; dataset_id: string; input: string;
   expected_contains: string | null; criteria: string | null;
+  expect_delegations: string[] | null;
+}
+
+export interface EvalSummary {
+  cases?: number;
+  scored?: number;
+  avg?: number | null;
+  pass_rate?: number | null;
+  errors?: number;
+  orchestration_checked?: number;
+  orchestration_passed?: number;
+  orchestration_rate?: number | null;
+  langfuse?: string;
 }
 export interface EvalRun {
   id: string; dataset_id: string; agent_id: string;
   target: "draft" | "published"; agent_version: number | null;
   status: string; results: Array<Record<string, unknown>>;
-  summary: Record<string, unknown>; created_at: string;
+  summary: EvalSummary; created_at: string;
 }
+
+
 export interface TrainingJob {
   id: string; name: string; status: string;
   params: Record<string, unknown>;
@@ -203,6 +218,15 @@ export interface Readiness {
     controls: Array<{ id: string; title: string; supported: boolean; gaps: string[]; roadmap: string[] }>
   }>;
 }
+export interface CostPerCase {
+  workflow: string;
+  cases: number;
+  total_usd: number;
+  avg_usd: number;
+  total_calls: number;
+  total_tokens: number;
+}
+
 export interface UsageView {
   period: string; usage: Record<string, number>;
   quotas: Record<string, { used: number; limit: number; pct: number | null; exceeded: boolean }>;
@@ -231,6 +255,50 @@ export interface ConnectorDetail {
   config: Record<string, any>; egress_allowed_hosts: string[]
 }
 
+export interface ToEvalCaseRequest {
+  dataset_id: string;
+  input?: string | null;
+  criteria?: string | null;
+  expect_delegations?: string[] | null;
+}
+export interface ShadowReport {
+  workflow: string;
+  version: number;
+  window_days: number;
+  total: number;
+  matched: number;
+  agreement: number | null;
+  matrix: Record<string, Record<string, number>>;
+  results: Array<{
+    original_id: string; original_shape: string;
+    shadow_shape: string; matches: boolean; error: string | null;
+  }>;
+}
+
+export interface WorkflowRule {
+  id: string;
+  tenant_id: string;
+  workflow_key: string;
+  name: string;
+  when_expr: string;
+  action: "route_to" | "block";
+  target_step: string | null;
+  enabled: boolean;
+  created_by: string;
+  created_from_approval_id: string | null;
+  created_at: string;
+  fired_count: number;
+  last_fired_at: string | null;
+}
+export interface WorkflowRuleInput {
+  name?: string;
+  when_expr: string;
+  action?: "route_to" | "block";
+  target_step?: string | null;
+  enabled?: boolean;
+  created_from_approval_id?: string | null;
+}
+
 // ── API ────────────────────────────────────────────────────────────
 export const api = {
    
@@ -246,7 +314,8 @@ export const api = {
     request(`/system/connections/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   testConnection: (name: string) =>
     request<ServiceStatus>(`/system/connections/${name}/test`, { method: "POST" }),
-
+  governanceCost: (days = 30) =>
+    request<CostPerCase[]>(`/enterprise/governance/cost?days=${days}`),
 
   listConnectors: () => request<ConnectorSummary[]>("/enterprise/connectors"),
   getConnector: (name: string) => request<ConnectorDetail>(`/enterprise/connectors/${encodeURIComponent(name)}`),
@@ -261,11 +330,24 @@ export const api = {
       { method: "POST", body: JSON.stringify(params) }),
 
 
+
+  approvalToEvalCase: (approvalId: string, body: ToEvalCaseRequest) =>
+    request<{ case_id: string; dataset_id: string; decision: string; input: string; criteria: string }>(
+      `/enterprise/approvals/${approvalId}/to-eval-case`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  workflowShadow: (key: string, body: { days?: number; limit?: number } = {}) =>
+    request<ShadowReport>(
+      `/enterprise/workflows/${encodeURIComponent(key)}/shadow`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),   
   // Admin token (legacy) or a named SSO/JWT user: either is a valid console login.
   authCheck: async () => {
     try { return await request<{ ok: boolean }>("/auth/check"); }
     catch { await request("/enterprise/me"); return { ok: true }; }
   },
+
+  
 
   // agents
   listAgents: (tenant = "default") => request<Agent[]>(`/agents?tenant_id=${tenant}`),
@@ -275,8 +357,23 @@ export const api = {
   patchAgent: (id: string, body: Partial<Agent>) =>
     request<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteAgent: (id: string) => request(`/agents/${id}`, { method: "DELETE" }),
-  publishAgent: (id: string, note = "") =>
-    request(`/agents/${id}/publish`, { method: "POST", body: JSON.stringify({ note }) }),
+  publishAgent: (id: string, note = "", override_reason = "") =>
+    request<{
+      agent_id: string;
+      version: number;
+      published: boolean;
+      conformance: { passed: number; total: number; override: true } | null;
+      eval: {
+        pass_rate: number | null;
+        threshold: number | null;
+        failures: Array<{ dimension: string; pass_rate: number | null; threshold: number }>;
+        override: true;
+      } | null;
+      provenance: Record<string, unknown>;
+    }>(`/agents/${id}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ note, override_reason }),
+    }),
   listVersions: (id: string) => request<Array<Record<string, unknown>>>(`/agents/${id}/versions`),
   rollback: (id: string, version: number, restore = false) =>
     request(`/agents/${id}/versions/${version}/rollback?restore_draft=${restore}`, { method: "POST" }),
@@ -428,6 +525,22 @@ export const api = {
   }) => request<ApiKey>("/keys", { method: "POST", body: JSON.stringify(body) }),
   revokeKey: (id: string) => request(`/keys/${id}`, { method: "DELETE" }),
   // ── enterprise ──
+
+   listWorkflowRules: (key: string) =>
+    request<WorkflowRule[]>(`/enterprise/workflows/${encodeURIComponent(key)}/rules`),
+  createWorkflowRule: (key: string, body: WorkflowRuleInput) =>
+    request<WorkflowRule>(`/enterprise/workflows/${encodeURIComponent(key)}/rules`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  patchWorkflowRule: (key: string, id: string, body: Partial<WorkflowRuleInput>) =>
+    request<WorkflowRule>(`/enterprise/workflows/${encodeURIComponent(key)}/rules/${id}`, {
+      method: "PATCH", body: JSON.stringify(body),
+    }),
+  deleteWorkflowRule: (key: string, id: string) =>
+    request<{ deleted: string }>(`/enterprise/workflows/${encodeURIComponent(key)}/rules/${id}`, {
+      method: "DELETE",
+    }),
+    
   me: () => request<Me>("/enterprise/me"),
   listApprovals: (status = "pending") => request<ApprovalItem[]>(`/enterprise/approvals?status=${status}`),
   decideApproval: (id: string, decision: "approve" | "reject", comment = "") =>

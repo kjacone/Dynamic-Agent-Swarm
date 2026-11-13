@@ -66,7 +66,6 @@ async def make_graph(config: RunnableConfig):
 
         cfg, version = await effective_config(agent, bool(cfgurable.get("use_draft")))
 
-        # Langfuse prompt-ref support: `langfuse:name:label` / `langfuse:name@version`
         system_prompt = await resolve_system_prompt(
             cfg.get("system_prompt") or "", MAIN_SYSTEM_PROMPT
         )
@@ -78,13 +77,9 @@ async def make_graph(config: RunnableConfig):
             except Exception as e:
                 log.warning("Skipping RAG collection %s: %s", rag_id, e)
 
-        # Enterprise guardrails: every tool call is policy-checked, audited, and can pause
-        # for human approval.
         from nmb_marketplace_agent.enterprise.hooks import guard_agent_tools
         tools = await guard_agent_tools(tools, tenant_id, agent.id)
 
-        # One shared middleware instance so nested `task` calls at any depth share the
-        # same per-run delegation counter.
         delegation_mw = DelegationMiddleware()
 
         subagents = await build_subagents(
@@ -93,11 +88,8 @@ async def make_graph(config: RunnableConfig):
             middleware=[delegation_mw],
         )
 
-        # Replace the auto-added `general-purpose` subagent (which has filesystem tools
-        # by default) with an inert stub so it cannot bypass the pack's declared
-        # delegates. This is the per-call equivalent of disabling it globally; keeping a
-        # named stub means a model that tries to delegate there is visible in the audit
-        # trail instead of silently succeeding.
+        # Replace the auto-added `general-purpose` subagent with an inert stub so it
+        # cannot bypass the pack's declared delegates.
         if not any(
             (s.get("name") if isinstance(s, dict) else getattr(s, "name", None)) == "general-purpose"
             for s in subagents
@@ -113,6 +105,7 @@ async def make_graph(config: RunnableConfig):
                     "escalate.'"
                 ),
                 "tools": [],
+                "middleware": [delegation_mw],
             }]
 
         model = await resolve_model(cfg["model"] or settings.main_model, tenant_id)
@@ -126,9 +119,6 @@ async def make_graph(config: RunnableConfig):
             middleware=[delegation_mw],
             name=f"supervisor:{agent.id}",
         )
-        # recursion_limit is a standalone config key (not inside `configurable`) and
-        # applies per invocation. deepagents defaults to 1000, far too high for a
-        # supervisor. Bind a lower default; runtime.py can override per call.
         graph = graph.with_config({
             "recursion_limit": int(limits.get("max_steps", 100)),
         })

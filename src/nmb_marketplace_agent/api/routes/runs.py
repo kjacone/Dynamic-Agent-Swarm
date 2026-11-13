@@ -22,12 +22,9 @@ def final_text(result: dict) -> str:
     return ""
 
 
-async def invoke_agent(agent_id, tenant_id, message, thread_id=None, user_id=None, use_draft=False) -> dict:
-    cfg = {"agent_id": agent_id, "tenant_id": tenant_id}
-    if user_id:
-        cfg["user_id"] = user_id
-    if use_draft:
-        cfg["use_draft"] = True
+async def invoke_agent(
+    agent_id, tenant_id, message, thread_id=None, user_id=None, use_draft=False,
+) -> dict:
     created = False
     try:
         async with httpx.AsyncClient(timeout=300) as client:
@@ -37,6 +34,17 @@ async def invoke_agent(agent_id, tenant_id, message, thread_id=None, user_id=Non
                     raise HTTPException(t.status_code, t.text)
                 thread_id = t.json()["thread_id"]
                 created = True
+
+            # `run_id` lets DelegationMiddleware key `agent.delegated` audit rows by
+            # thread, so orchestration scoring in the eval runner can query per-case
+            # delegations. Without it the middleware falls back to "anonymous" and
+            # cross-thread contamination is possible.
+            cfg = {"agent_id": agent_id, "tenant_id": tenant_id, "run_id": thread_id}
+            if user_id:
+                cfg["user_id"] = user_id
+            if use_draft:
+                cfg["use_draft"] = True
+
             payload = {
                 "assistant_id": "supervisor",
                 "input": {"messages": [{"role": "user", "content": message}]},
@@ -53,8 +61,6 @@ async def invoke_agent(agent_id, tenant_id, message, thread_id=None, user_id=Non
             "Check `docker compose logs agent-server`.",
         ) from e
 
-    # Record ownership so /v1/feedback and the lg_proxy don't 404 later.
-    # Failure here must not fail the invoke.
     if created:
         try:
             from nmb_marketplace_agent.config.database import async_session

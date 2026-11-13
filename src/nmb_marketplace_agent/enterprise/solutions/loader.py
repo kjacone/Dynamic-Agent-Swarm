@@ -216,31 +216,67 @@ def _training_name(tenant_id: str, solution_id: str, pack_name: str) -> str:
     return s[:64]
 
 def _validate_supervisor(pack: dict) -> None:
+    """Validate supervisor structure, tool allowlists, and numeric limits.
+
+    Runs before any DB writes, so a bad pack fails cleanly without partial state.
+    """
+    # publish_gate params can exist without a supervisor too (regular agent packs).
+    for key in ("publish_gate_min_pass_rate", "publish_gate_min_orchestration_rate"):
+        v = (pack.get("parameters") or {}).get(key, {}).get("default")
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError) as e:
+            raise PackError(f"parameters.{key}.default must be a number") from e
+        if not 0.0 <= f <= 1.0:
+            raise PackError(f"parameters.{key}.default must be in [0, 1]")
+
     sup = pack.get("supervisor")
     if not sup:
         return
+
     declared_agents = {a["key"]: a for a in pack.get("agents", [])}
     delegates = sup.get("delegates", [])
     if not delegates:
         raise PackError("supervisor.delegates must name at least one specialist")
 
-    allowed_tools = sup.get("allowed_tools", {})
     for d in delegates:
         if d not in declared_agents:
             raise PackError(f"supervisor.delegates references unknown agent '{d}'")
 
+    allowed_tools = sup.get("allowed_tools", {})
     for key, tools in allowed_tools.items():
         if key not in declared_agents:
             raise PackError(f"allowed_tools references unknown agent '{key}'")
         want = set(tools or [])
         have = set(declared_agents[key].get("tools", []) or [])
         if not want.issubset(have):
-            # The declared allowlist can be narrower than the delegate's tools, never wider.
             raise PackError(
                 f"allowed_tools['{key}'] includes tools not granted to the delegate: "
                 f"{sorted(want - have)}"
             )
 
+    # Numeric limits
+    limits = sup.get("limits", {}) or {}
+    for name in ("max_delegations", "max_depth", "max_steps"):
+        if name in limits:
+            try:
+                v = int(limits[name])
+            except (TypeError, ValueError) as e:
+                raise PackError(f"supervisor.limits.{name} must be an integer") from e
+            if v < 1:
+                raise PackError(f"supervisor.limits.{name} must be >= 1")
+    if "max_cost_usd" in limits:
+        try:
+            v = float(limits["max_cost_usd"])
+        except (TypeError, ValueError) as e:
+            raise PackError(
+                f"supervisor.limits.max_cost_usd must be a number, "
+                f"got {limits['max_cost_usd']!r}"
+            ) from e
+        if v < 0:
+            raise PackError("supervisor.limits.max_cost_usd must be >= 0")
 # ── install ──────────────────────────────────────────────────────────
 async def install_solution(
     db: AsyncSession,
@@ -252,7 +288,6 @@ async def install_solution(
     if not current_license().has_solution(solution_id):
         raise PackError(f"Solution '{solution_id}' is not included in your license")
     pack = load_pack(solution_id)
-    _validate_supervisor(pack)
     declared = pack.get("parameters", {})
     params = {k: v.get("default") for k, v in declared.items()}
     params.setdefault("model", settings.main_model)
@@ -265,7 +300,7 @@ async def install_solution(
         params[k] = v
     pack = _subst(pack, params)
 
-    # validate delivery before any writes
+    # Validate before any writes.
     delivery = pack.get("delivery", "workflow")
     if delivery not in DELIVERY_VALUES:
         raise PackError(f"Unknown delivery '{delivery}'")
@@ -274,10 +309,11 @@ async def install_solution(
             raise PackError(f"delivery '{delivery}' requires a supervisor block")
         if not pack.get("widget"):
             raise PackError(f"delivery '{delivery}' requires a widget block")
+    _validate_supervisor(pack)
 
     created: dict[str, Any] = {"agents": {}, "workflows": [], "connectors": [], "tools": {}}
 
-    # tools (builtins only)
+    # ── tools (builtins) ──────────────────────────────────────────────
     tool_ids: dict[str, str] = {}
     for name in sorted({t for a in pack.get("agents", []) for t in a.get("tools", [])}):
         if name not in BUILTIN_TOOLS:
@@ -288,7 +324,7 @@ async def install_solution(
         tool_ids[name] = tid
     created["tools"] = tool_ids
 
-    # agents (idempotent upsert)
+    # ── agents ────────────────────────────────────────────────────────
     for a in pack.get("agents", []):
         aid = agent_id(tenant_id, solution_id, a["key"])
         row = await db.get(AgentConfig, aid) or AgentConfig(id=aid, tenant_id=tenant_id, name="")
@@ -300,32 +336,36 @@ async def install_solution(
         created["agents"][a["key"]] = aid
     await db.commit()
 
-    # supervisor (v2): one entry agent that delegates to specialists
+    # ── supervisor + dual-registered delegates ────────────────────────
     if sup := pack.get("supervisor"):
         sid = agent_id(tenant_id, solution_id, sup["key"])
         row = await db.get(AgentConfig, sid) or AgentConfig(id=sid, tenant_id=tenant_id, name="")
         row.name = f"{pack['name']} · {sup['name']}"
         row.model = sup.get("model") or params["model"]
-        max_del = int(sup.get("limits", {}).get("max_delegations", 8))
+        max_del = int((sup.get("limits") or {}).get("max_delegations", 8))
         row.system_prompt = (
-            SUPERVISOR_PREAMBLE.format(max_delegations=max_del) + "\n\n" + sup["system_prompt"].strip()
+            SUPERVISOR_PREAMBLE.format(max_delegations=max_del)
+            + "\n\n"
+            + sup["system_prompt"].strip()
         )
-        row.subagent_ids = [created["agents"][k] for k in sup.get("delegates", []) if k in created["agents"]]
+        row.subagent_ids = [
+            created["agents"][k] for k in sup.get("delegates", [])
+            if k in created["agents"]
+        ]
+        sup_limits = sup.get("limits") or {}
         row.limits = {
-            "max_delegations": int(sup.get("limits", {}).get("max_delegations", 8)),
-            "max_depth": int(sup.get("limits", {}).get("max_depth", 2)),
-            "max_steps": int(sup.get("limits", {}).get("max_steps", 100)),
-            # allowed_tools is enforced at install time (see _validate_supervisor) and is
-            # not read at runtime; it is a schema-level assertion, not a runtime boundary.
+            "max_delegations": int(sup_limits.get("max_delegations", 8)),
+            "max_depth": int(sup_limits.get("max_depth", 2)),
+            "max_steps": int(sup_limits.get("max_steps", 100)),
             "allowed_tools": dict(sup.get("allowed_tools", {})),
         }
+        if "max_cost_usd" in sup_limits:
+            row.limits["max_cost_usd"] = float(sup_limits["max_cost_usd"])
         db.add(row)
         created["supervisor"] = sid
         await db.commit()
 
-        # Dual-register delegates as SubAgentConfig (same id) so build_subagents can load them.
-        # The pack's `agents:` already created AgentConfig rows; subagent_ids must resolve to
-        # SubAgentConfig rows, so we mirror the fields here.
+        # Mirror each delegate as a SubAgentConfig row so `build_subagents` finds it.
         for key in sup.get("delegates", []):
             aid = created["agents"].get(key)
             if not aid:
@@ -333,10 +373,10 @@ async def install_solution(
                 continue
             spec = next((a for a in pack.get("agents", []) if a["key"] == key), {})
             sub = await db.get(SubAgentConfig, aid) or SubAgentConfig(
-                id=aid, tenant_id=tenant_id, name=spec.get("name", key),
+                id=aid, tenant_id=tenant_id, name=key,
             )
-            sub.name = spec.get("name", key)
-            sub.description = spec.get("description", spec.get("name", key))
+            sub.name = key
+            sub.description = spec.get("name", key)
             sub.system_prompt = spec.get("system_prompt", "").strip()
             sub.tool_ids = [tool_ids[t] for t in spec.get("tools", []) if t in tool_ids]
             sub.model = spec.get("model")
@@ -344,14 +384,14 @@ async def install_solution(
             db.add(sub)
         await db.commit()
 
-    # workflows
+    # ── workflows ─────────────────────────────────────────────────────
     engine = WorkflowEngine(db, Runtime(agent_runner=_unused), tenant_id)
     for wf in pack.get("workflows", []):
         wf = _bind_agents(wf, created["agents"])
         d = await engine.save_definition(wf, actor)
         created["workflows"].append({"key": d.key, "version": d.version})
 
-    # policy = regulated baseline + pack rules
+    # ── policy ────────────────────────────────────────────────────────
     pol = pack.get("policy") or {}
     merged = Policy(
         name=f"{solution_id}",
@@ -363,7 +403,7 @@ async def install_solution(
     ps.spec, ps.version, ps.updated_at = merged.model_dump(), (ps.version or 0) + 1, now_iso()
     db.add(ps)
 
-    # connector templates (disabled until the customer supplies endpoints/secrets)
+    # ── connectors ────────────────────────────────────────────────────
     for c in pack.get("connectors", []):
         cid = str(uuid.uuid5(_NS, f"{tenant_id}/{solution_id}/conn/{c['name']}"))
         if not await db.get(ConnectorConfig, cid):
@@ -373,35 +413,84 @@ async def install_solution(
             ))
         created["connectors"].append(c["name"])
 
-    # evaluation datasets (reuses the platform's eval runner)
+    # ── evals (may reference agents OR the supervisor by key) ─────────
+    agent_map: dict[str, str] = dict(created["agents"])
+    sup = pack.get("supervisor")
+    if sup and created.get("supervisor"):
+        agent_map[sup["key"]] = created["supervisor"]
+
     for ds in pack.get("evals", []):
         did = str(uuid.uuid5(_NS, f"{tenant_id}/{solution_id}/eval/{ds['name']}"))
-        if not await db.get(EvalDataset, did):
-            db.add(EvalDataset(
-                id=did, name=ds["name"],
-                agent_id=created["agents"][ds["agent"]],
-                tenant_id=tenant_id,
+        if await db.get(EvalDataset, did):
+            continue
+        agent_ref = ds.get("agent")
+        if agent_ref not in agent_map:
+            log.warning(
+                "Eval dataset %s references unknown agent %s; skipping",
+                ds["name"], agent_ref,
+            )
+            continue
+        db.add(EvalDataset(
+            id=did, name=ds["name"],
+            agent_id=agent_map[agent_ref],
+            tenant_id=tenant_id,
+        ))
+        for i, c in enumerate(ds.get("cases", [])):
+            db.add(EvalCase(
+                id=str(uuid.uuid5(_NS, f"{did}/{i}")),
+                dataset_id=did,
+                input=c["input"],
+                expected_contains=c.get("expected_contains"),
+                criteria=c.get("criteria"),
+                expect_delegations=c.get("expect_delegations"),
             ))
-            for i, c in enumerate(ds.get("cases", [])):
-                db.add(EvalCase(
-                    id=str(uuid.uuid5(_NS, f"{did}/{i}")),
-                    dataset_id=did, input=c["input"],
-                    expected_contains=c.get("expected_contains"),
-                    criteria=c.get("criteria"),
-                ))
     created["kpis"] = pack.get("kpis", [])
 
-    # knowledge (v2): ingest sample documents into a RAG collection and attach to named agents
+    # ── knowledge ─────────────────────────────────────────────────────
     created["knowledge"] = await _install_knowledge(db, tenant_id, solution_id, pack, created["agents"])
 
-    # training (v2): convert sample files to alpaca and register in the training store
+    # ── training ──────────────────────────────────────────────────────
     created["training"] = _install_training(tenant_id, solution_id, pack)
 
-    # v2 passthrough fields the dashboard renders
+    # ── v2 passthrough ────────────────────────────────────────────────
     created["models"] = pack.get("models", [])
     created["samples"] = pack.get("samples", {}).get("cases", [])
     created["widget"] = pack.get("widget")
 
+    # ── conformance (warn-only) ───────────────────────────────────────
+    created["conformance"] = None
+    if pack.get("supervisor") and (cases := conformance.load_cases(PACK_DIR, solution_id)):
+        try:
+            from nmb_marketplace_agent.graph_factory import make_graph
+            agent_cfg = await db.get(AgentConfig, created["supervisor"])
+            graph = await make_graph({
+                "configurable": {
+                    "agent_id": created["supervisor"],
+                    "tenant_id": tenant_id,
+                    "max_delegations": int((agent_cfg.limits or {}).get("max_delegations", 8)),
+                }
+            })
+            results = await conformance.run_conformance(graph, cases)
+            created["conformance"] = {
+                "passed": sum(1 for r in results if r.passed),
+                "total": len(results),
+                "cases": [
+                    {
+                        "id": r.case_id,
+                        "passed": r.passed,
+                        "expected": r.expected,
+                        "actual": r.actual,
+                        "notes": r.notes,
+                        "error": r.error,
+                    }
+                    for r in results
+                ],
+            }
+        except Exception as e:  # noqa: BLE001 — advisory at install time
+            log.warning("Conformance run failed for %s: %s", solution_id, e)
+            created["conformance"] = {"error": str(e)[:300]}
+
+    # ── InstalledSolution + audit ─────────────────────────────────────
     inst_id = f"{tenant_id}:{solution_id}"
     inst = await db.get(InstalledSolution, inst_id) or InstalledSolution(
         id=inst_id, tenant_id=tenant_id, solution_id=solution_id,
@@ -419,10 +508,10 @@ async def install_solution(
             "parameters": params,
             "knowledge": len(created["knowledge"]),
             "training": len(created["training"]),
+            "supervisor": bool(created.get("supervisor")),
         },
     )
     return inst
-
 
 async def _install_knowledge(
     db: AsyncSession, tenant_id: str, solution_id: str, pack: dict, agents: dict[str, str],

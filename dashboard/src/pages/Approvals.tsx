@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Check, X } from "lucide-react";
-import { api, can, type ApprovalItem, type Me } from "@/lib/api";
+import { api, can, EvalDataset, type ApprovalItem, type Me } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,6 +13,7 @@ import { JsonView } from "@/components/common/JsonView";
 import { Chip, StatusBadge, dueLabel } from "@/components/common/StatusBadge";
 import { useToast } from "@/components/ui/toast";
 import { fmtDate } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 
 const FILTERS = ["pending", "approved", "rejected", "expired"] as const;
 
@@ -75,6 +76,10 @@ function ApprovalCard({ a, me, onAct }: { a: ApprovalItem; me: Me | null; onAct:
   const why = blocker(a, me);
   const due = dueLabel(a.due_at, a.status === "pending");
   const approvals = a.decisions.filter((d) => d.decision === "approve").length;
+  const [asEval, setAsEval] = useState(false);
+  const decided = a.status === "approved" || a.status === "rejected";
+    const [asRule, setAsRule] = useState(false);
+    
   return (
     <Card>
       <CardContent className="space-y-3 p-4">
@@ -122,8 +127,103 @@ function ApprovalCard({ a, me, onAct }: { a: ApprovalItem; me: Me | null; onAct:
             {why && <span className="text-xs text-muted-foreground">{why}</span>}
           </div>
         )}
+
+              {decided && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button size="sm" variant="outline" onClick={() => setAsEval(true)}>
+              Add to eval set
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setAsRule(true)}>
+              Turn into rule
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Capture this decision as a reusable test case, or a workflow rule.
+            </span>
+          </div>
+        )}
       </CardContent>
+      {asEval && <AddEvalDialog approval={a} onClose={() => setAsEval(false)} />}
+      {asRule && <TurnIntoRuleDialog approval={a} onClose={() => setAsRule(false)} />}
     </Card>
+  );
+}
+
+function AddEvalDialog({ approval: a, onClose }: { approval: ApprovalItem; onClose: () => void }) {
+  const [datasets, setDatasets] = useState<EvalDataset[] | null>(null);
+  const [datasetId, setDatasetId] = useState("");
+  const [input, setInput] = useState("");
+  const [criteria, setCriteria] = useState("");
+  const [expect, setExpect] = useState("");
+  const toast = useToast();
+
+  useEffect(() => {
+    api.listEvalDatasets().then(setDatasets).catch((e: any) => toast.push(e.message, "error"));
+    // Reasonable defaults derived from the approval's case data.
+    const ctx = a.context || {};
+    const inputDefault = Object.keys(ctx).length ? JSON.stringify(ctx, null, 2) : "";
+    setInput(inputDefault);
+    setCriteria(
+      `A human ${a.status === "approved" ? "approved" : "rejected"} this case. The agent must produce an answer consistent with that decision.`
+    );
+  }, []);
+
+  async function save() {
+    try {
+      if (!datasetId) { toast.push("Choose a dataset", "error"); return; }
+      const delegations = expect.trim()
+        ? expect.split(",").map((s) => s.trim()).filter(Boolean)
+        : null;
+      const r = await api.approvalToEvalCase(a.id, {
+        dataset_id: datasetId,
+        input: input.trim() || null,
+        criteria: criteria.trim() || null,
+        expect_delegations: delegations,
+      });
+      toast.push(`Added case to dataset (${r.decision})`, "success");
+      onClose();
+    } catch (e: any) { toast.push(e.message, "error"); }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader><DialogTitle>Add “{a.title || a.step_id}” to an eval set</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label>Dataset</Label>
+            <select
+              value={datasetId}
+              onChange={(e) => setDatasetId(e.target.value)}
+              className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm"
+            >
+              <option value="">Select dataset…</option>
+              {(datasets ?? []).map((d) => (
+                <option key={d.id} value={d.id}>{d.name} ({d.cases} cases)</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <Label>Input</Label>
+            <Textarea rows={4} value={input} onChange={(e) => setInput(e.target.value)} />
+          </div>
+          <div>
+            <Label>Criteria</Label>
+            <Textarea rows={3} value={criteria} onChange={(e) => setCriteria(e.target.value)} />
+          </div>
+          <div>
+            <Label>Expected delegations (optional)</Label>
+            <Input value={expect} onChange={(e) => setExpect(e.target.value)} placeholder="document-analyst, risk-analyst" />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            The reviewer's decision ({a.status}) and comment are captured in the criteria so the LLM judge knows what "correct" means.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <AsyncButton onRun={save} disabled={!datasetId}>Add case</AsyncButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -152,6 +252,124 @@ function DecideDialog({ a, decision, onClose }: { a: ApprovalItem; decision: "ap
           <Button variant="outline" onClick={() => onClose(false)}>Cancel</Button>
           <AsyncButton variant={needReason ? "destructive" : "default"} onRun={submit} disabled={needReason && !comment.trim()}>
             {decision === "approve" ? "Confirm approval" : "Confirm rejection"}
+          </AsyncButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+function TurnIntoRuleDialog({ approval: a, onClose }: { approval: ApprovalItem; onClose: () => void }) {
+  const [workflowKey, setWorkflowKey] = useState<string | null>(null);
+  const [steps, setSteps] = useState<Array<{ id: string; type: string; name?: string }>>([]);
+  const [name, setName] = useState("");
+  const [when, setWhen] = useState("");
+  const [action, setAction] = useState<"route_to" | "block">("route_to");
+  const [target, setTarget] = useState("");
+  const toast = useToast();
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const run = await api.getRun(a.run_id);
+        setWorkflowKey(run.workflow);
+        const spec = await api.getWorkflow(run.workflow, run.version);
+        setSteps(spec.steps.map((s) => ({ id: s.id, type: s.type, name: s.name })));
+        setName(`${a.status === "approved" ? "Approve" : "Escalate"} when ...`);
+      } catch (e: any) { toast.push(e.message, "error"); }
+    })();
+  }, [a.run_id]);
+
+  const TEMPLATES: Array<[string, string]> = [
+    ["High score", "risk.score > 70"],
+    ["Low confidence", "risk.confidence < 0.7"],
+    ["High-risk country", 'country in ["IR", "KP"]'],
+    ["Sanctions hit", "sanctions.hit == true"],
+  ];
+
+  async function save() {
+    try {
+      if (!workflowKey) return;
+      await api.createWorkflowRule(workflowKey, {
+        name: name || when,
+        when_expr: when,
+        action,
+        target_step: action === "route_to" ? target : null,
+        created_from_approval_id: a.id,
+      });
+      toast.push("Rule created", "success");
+      onClose();
+    } catch (e: any) { toast.push(e.message, "error"); }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>
+            Turn “{a.title || a.step_id}” into a workflow rule
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          {!workflowKey && <div className="text-sm text-muted-foreground">Loading workflow…</div>}
+          {workflowKey && (
+            <>
+              <div className="rounded-md bg-muted/40 p-2 text-xs">
+                <b>Case data:</b>
+                <JsonView data={a.context} className="mt-1" />
+              </div>
+              <div>
+                <Label>Name</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+              <div>
+                <Label>When</Label>
+                <Textarea rows={2} value={when} onChange={(e) => setWhen(e.target.value)}
+                  placeholder='risk.score > 70 and risk.confidence < 0.7' />
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {TEMPLATES.map(([label, expr]) => (
+                    <button key={label} onClick={() => setWhen(expr)}
+                      className="rounded-md border px-2 py-1 text-xs hover:bg-muted">
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <Label>Action</Label>
+                <select value={action} onChange={(e) => setAction(e.target.value as any)}
+                  className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm">
+                  <option value="route_to">route_to — skip to a step</option>
+                  <option value="block">block — fail the run</option>
+                </select>
+              </div>
+              {action === "route_to" && (
+                <div>
+                  <Label>Target step</Label>
+                  <select value={target} onChange={(e) => setTarget(e.target.value)}
+                    className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm">
+                    <option value="">Select step…</option>
+                    {steps.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.id} ({s.type}{s.name ? ` · ${s.name}` : ""})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                The rule is attributed to approval <code>{a.id.slice(0, 8)}</code> in the audit trail.
+                It will fire on future runs of <code>{workflowKey}</code> whenever its expression matches.
+              </p>
+            </>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <AsyncButton onRun={save}
+            disabled={!when || (action === "route_to" && !target) || !workflowKey}>
+            Create rule
           </AsyncButton>
         </DialogFooter>
       </DialogContent>

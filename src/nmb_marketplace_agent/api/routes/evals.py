@@ -19,6 +19,7 @@ from nmb_marketplace_agent.config.models import (
 )
 from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.config.versioning import published_version
+from nmb_marketplace_agent.enterprise import audit as audit_mod
 from nmb_marketplace_agent.llm.registry import resolve_model
 
 router = APIRouter()
@@ -34,10 +35,11 @@ class CaseIn(BaseModel):
     input: str
     expected_contains: str | None = None
     criteria: str | None = None
+    expect_delegations: list[str] | None = None
 
 
 class RunIn(BaseModel):
-    target: str = "published"  # draft | published
+    target: str = "published"
 
 
 async def _ds(db, ds_id, tenant_id):
@@ -62,7 +64,9 @@ async def create_dataset(body: DatasetIn, db: AsyncSession = Depends(get_db)):
 @router.get("/datasets")
 async def list_datasets(tenant_id: str = "default", db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(EvalDataset).where(EvalDataset.tenant_id == tenant_id))).scalars().all()
-    counts = dict((await db.execute(select(EvalCase.dataset_id, func.count(EvalCase.id)).group_by(EvalCase.dataset_id))).all())
+    counts = dict((await db.execute(
+        select(EvalCase.dataset_id, func.count(EvalCase.id)).group_by(EvalCase.dataset_id)
+    )).all())
     return [{**r.model_dump(), "cases": counts.get(r.id, 0)} for r in rows]
 
 
@@ -144,6 +148,18 @@ async def _judge(question: str, answer: str, criteria: str, tenant_id: str) -> d
     return {"score": max(0.0, min(1.0, float(d["score"]))), "reason": str(d.get("reason", ""))[:300]}
 
 
+async def _delegations_for(s: AsyncSession, tenant_id: str, thread_id: str) -> list[str]:
+    """Delegations the middleware recorded for this thread, in first-seen order.
+
+    Reads from the audit chain — the same source the run view and conformance report
+    use — so eval and provenance are never inconsistent about what happened.
+    """
+    rows = await audit_mod.query(
+        s, tenant_id, action="agent.delegated", resource_id=thread_id, limit=200,
+    )
+    return [r.details.get("delegate") for r in rows if r.details and r.details.get("delegate")]
+
+
 async def _execute(run_id: str):
     from nmb_marketplace_agent.config.database import async_session
 
@@ -151,12 +167,15 @@ async def _execute(run_id: str):
         run = await s.get(EvalRun, run_id)
         cases = (await s.execute(select(EvalCase).where(EvalCase.dataset_id == run.dataset_id))).scalars().all()
         results: list = []
+        orch_checked = 0
+        orch_passed = 0
         for c in cases:
             r: dict = {"case_id": c.id, "input": c.input}
             try:
                 out = await invoke_agent(run.agent_id, run.tenant_id, c.input,
                                          use_draft=run.target == "draft")
-                r["thread_id"] = out.get("thread_id")
+                thread_id = out.get("thread_id")
+                r["thread_id"] = thread_id
                 reply = final_text(out["result"])
                 r["reply"] = reply
                 parts = []
@@ -169,6 +188,19 @@ async def _execute(run_id: str):
                     r["judge_score"], r["judge_reason"] = j["score"], j["reason"]
                     parts.append(j["score"])
                 r["score"] = sum(parts) / len(parts) if parts else None
+
+                # Orchestration dimension: only when the case declares expectations.
+                if c.expect_delegations is not None and thread_id:
+                    orch_checked += 1
+                    actual = await _delegations_for(s, run.tenant_id, thread_id)
+                    expected = list(c.expect_delegations)
+                    missing = [d for d in expected if d not in actual]
+                    r["delegations_expected"] = expected
+                    r["delegations_actual"] = actual
+                    r["orchestration_missing"] = missing
+                    r["orchestration_passed"] = not missing
+                    if not missing:
+                        orch_passed += 1
             except Exception as e:
                 r["error"] = f"{type(e).__name__}: {e}"[:300]
             results.append(r)
@@ -178,16 +210,19 @@ async def _execute(run_id: str):
 
         scored = [x["score"] for x in results if x.get("score") is not None]
         run.summary = {
-            "cases": len(results), "scored": len(scored),
+            "cases": len(results),
+            "scored": len(scored),
             "avg": round(sum(scored) / len(scored), 3) if scored else None,
             "pass_rate": round(sum(1 for x in scored if x >= 0.7) / len(scored), 3) if scored else None,
             "errors": sum(1 for x in results if "error" in x),
+            "orchestration_checked": orch_checked,
+            "orchestration_passed": orch_passed,
+            "orchestration_rate": round(orch_passed / orch_checked, 3) if orch_checked else None,
         }
         run.status = "done"
         s.add(run)
         await s.commit()
 
-        # Sync to Langfuse — never fail the eval run if this is down.
         try:
             from nmb_marketplace_agent.integrations.langfuse import push_eval_run
             ds = await s.get(EvalDataset, run.dataset_id)

@@ -111,6 +111,10 @@ class EvalCase(SQLModel, table=True):
     input: str = Field(default="", sa_column=Column(Text))
     expected_contains: Optional[str] = Field(default=None)
     criteria: Optional[str] = Field(default=None, sa_column=Column(Text))
+    # Optional orchestration expectation for supervisor agents. When set, the eval
+    # runner queries the audit chain for `agent.delegated` rows on this thread and
+    # checks that each name appears. Null means "don't check orchestration".
+    expect_delegations: Optional[list[str]] = Field(default=None, sa_column=Column(JSON))
 
 
 class EvalRun(SQLModel, table=True):

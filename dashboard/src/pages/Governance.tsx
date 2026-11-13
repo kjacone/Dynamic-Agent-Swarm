@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, can, type Me, type PolicyDecision, type Readiness, type UsageView } from "@/lib/api";
+import { api, can, CostPerCase, type Me, type PolicyDecision, type Readiness, type UsageView } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +10,21 @@ import { JsonView } from "@/components/common/JsonView";
 import { Chip, Meter, StatusBadge } from "@/components/common/StatusBadge";
 import { useToast } from "@/components/ui/toast";
 
-const TABS = [["compliance", "Compliance & posture"], ["license", "Licence & usage"], ["policy", "Policy tester"], ["caps", "Capabilities"]] as const;
+import { type WfSummary, type WorkflowRule } from "@/lib/api";
+import { EmptyState } from "@/components/common/AsyncState";
+import { DialogHeader, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogTitle } from "@radix-ui/react-dialog";
+import { Label } from "@radix-ui/react-label";
+
+
+const TABS = [
+  ["compliance", "Compliance & posture"],
+  ["rules", "Workflow rules"],
+  ["license", "Licence & usage"],
+  ["policy", "Policy tester"],
+  ["caps", "Capabilities"],
+] as const;
 type Tab = (typeof TABS)[number][0];
 
 export function Governance({ me }: { me: Me | null }) {
@@ -29,10 +43,12 @@ export function Governance({ me }: { me: Me | null }) {
         {TABS.map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === id ? "border-primary font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{label}</button>))}
       </div>
-      {tab === "compliance" && <Compliance />}
-      {tab === "license" && <LicenseUsage />}
-      {tab === "policy" && <PolicyTester />}
-      {tab === "caps" && <Capabilities />}
+    
+   {tab === "compliance" && <><Compliance /><CostPerCaseCard /><ShadowMatrixCard /></>}
+{tab === "rules" && <WorkflowRules me={me} />}
+{tab === "license" && <LicenseUsage />}
+{tab === "policy" && <PolicyTester />}
+{tab === "caps" && <Capabilities />}
     </div>
   );
 }
@@ -164,5 +180,445 @@ function Capabilities() {
       {Object.entries(data).map(([k, v]) => (
         <TR key={k}><TD><div className="font-medium">{k.replace(/_/g, " ")}</div><div className="text-xs text-muted-foreground">{v.description}</div></TD>
           <TD><StatusBadge value={v.status} /></TD></TR>))}</TBody></Table></CardContent></Card>
+  );
+}
+
+
+export function CostPerCaseCard({ days = 30 }: { days?: number }) {
+  const [rows, setRows] = useState<CostPerCase[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const toast = useToast();
+
+  useEffect(() => {
+    api.governanceCost(days)
+      .then(setRows)
+      .catch((e: any) => {
+        setErr(e.message);
+        toast.push(`Cost per case: ${e.message}`, "error");
+      });
+  }, [days]);
+
+  const total = (rows ?? []).reduce((n, r) => n + r.total_usd, 0);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-baseline justify-between text-sm">
+          <span>Cost per case · last {days} days</span>
+          <span className="text-xs font-normal text-muted-foreground">
+            total ${total.toFixed(4)}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        {err ? (
+          <div className="p-4 text-sm text-destructive">{err}</div>
+        ) : rows === null ? (
+          <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="p-4 text-sm text-muted-foreground">
+            No cost data yet — run a workflow with the in-process supervisor
+            (<code>SUPERVISOR_RUNTIME=inprocess</code>) to record token usage.
+          </div>
+        ) : (
+          <Table>
+            <THead>
+              <TR>
+                <TH>Workflow</TH>
+                <TH className="text-right">Cases</TH>
+                <TH className="text-right">Avg $/case</TH>
+                <TH className="text-right">Total $</TH>
+                <TH className="text-right">Tokens</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {rows.map((r) => (
+                <TR key={r.workflow}>
+                  <TD className="font-mono text-xs">{r.workflow}</TD>
+                  <TD className="text-right tabular-nums">{r.cases}</TD>
+                  <TD className="text-right tabular-nums">${r.avg_usd.toFixed(4)}</TD>
+                  <TD className="text-right tabular-nums">${r.total_usd.toFixed(4)}</TD>
+                  <TD className="text-right tabular-nums">{r.total_tokens.toLocaleString()}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ShadowMatrixCard() {
+  const [keys, setKeys] = useState<{ key: string; name: string | null }[] | null>(null);
+  const [key, setKey] = useState<string>("");
+  const [days, setDays] = useState(30);
+  const [report, setReport] = useState<import("@/lib/api").ShadowReport | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    api.listWorkflows()
+      .then((rows) => {
+        setKeys(rows.map((r) => ({ key: r.key, name: r.name })));
+        setKey((k) => k || rows[0]?.key || "");
+      })
+      .catch((e: any) => toast.push(e.message, "error"));
+  }, []);
+
+  async function run() {
+    if (!key) return;
+    setBusy(true); setReport(null);
+    try {
+      setReport(await api.workflowShadow(key, { days, limit: 100 }));
+    } catch (e: any) {
+      toast.push(`Shadow: ${e.message}`, "error");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-baseline justify-between text-sm">
+          <span>Shadow mode — replay historical runs</span>
+          {report?.agreement != null && (
+            <span className="text-xs font-normal text-muted-foreground">
+              agreement {Math.round(report.agreement * 100)}% · {report.matched}/{report.total}
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <select value={key} onChange={(e) => setKey(e.target.value)}
+            className="rounded-md border bg-background px-2 py-1 text-sm">
+            {(keys ?? []).map((k) => (
+              <option key={k.key} value={k.key}>{k.name || k.key}</option>
+            ))}
+          </select>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+            className="rounded-md border bg-background px-2 py-1 text-sm">
+            {[7, 30, 90].map((d) => <option key={d} value={d}>last {d} days</option>)}
+          </select>
+          <AsyncButton onRun={run} disabled={!key || busy}>Run replay</AsyncButton>
+          {report && <span className="text-xs text-muted-foreground">v{report.version} · {report.total} runs replayed</span>}
+        </div>
+
+        {report && report.total === 0 && (
+          <div className="text-sm text-muted-foreground">No historical runs in that window.</div>
+        )}
+
+        {report && report.total > 0 && (
+          <>
+            <MatrixTable matrix={report.matrix} />
+            <details className="text-xs">
+              <summary className="cursor-pointer text-muted-foreground">Per-run details</summary>
+              <div className="mt-2 max-h-72 overflow-auto rounded-md border">
+                <Table>
+                  <THead>
+                    <TR><TH>Original</TH><TH>Historical shape</TH><TH>Shadow shape</TH><TH>Match</TH></TR>
+                  </THead>
+                  <TBody>
+                    {report.results.map((r) => (
+                      <TR key={r.original_id}>
+                        <TD className="font-mono text-xs">{r.original_id.slice(0, 8)}</TD>
+                        <TD>{r.original_shape}</TD>
+                        <TD>{r.shadow_shape}</TD>
+                        <TD>{r.matches
+                          ? <StatusBadge value="pass" label="match" />
+                          : <StatusBadge value="warn" label="differs" />}
+                          {r.error && <span className="ml-2 text-xs text-destructive">{r.error}</span>}
+                        </TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            </details>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MatrixTable({ matrix }: { matrix: Record<string, Record<string, number>> }) {
+  const rows = Object.keys(matrix).sort();
+  const cols = new Set<string>();
+  Object.values(matrix).forEach((r) => Object.keys(r).forEach((c) => cols.add(c)));
+  const colList = [...cols].sort();
+  const cell = (r: string, c: string) => matrix[r]?.[c] ?? 0;
+  return (
+    <div className="overflow-auto rounded-md border">
+      <Table>
+        <THead>
+          <TR>
+            <TH className="text-xs">historical ↓ / shadow →</TH>
+            {colList.map((c) => <TH key={c} className="text-xs">{c}</TH>)}
+          </TR>
+        </THead>
+        <TBody>
+          {rows.map((r) => (
+            <TR key={r}>
+              <TD className="text-xs font-medium">{r}</TD>
+              {colList.map((c) => {
+                const n = cell(r, c);
+                const isDiagonal = r === c;
+                return (
+                  <TD key={c} className={`tabular-nums ${isDiagonal ? "bg-emerald-500/10 font-medium" : n > 0 ? "bg-amber-500/10" : ""}`}>
+                    {n || ""}
+                  </TD>
+                );
+              })}
+            </TR>
+          ))}
+        </TBody>
+      </Table>
+    </div>
+  );
+}
+
+
+
+function WorkflowRules({ me }: { me: Me | null }) {
+  const [workflows, setWorkflows] = useState<WfSummary[] | null>(null);
+  const [rules, setRules] = useState<Record<string, WorkflowRule[]>>({});
+  const [creating, setCreating] = useState<string | null>(null);
+  const toast = useToast();
+  const writer = can(me, "workflows:write");
+
+  async function load() {
+    try {
+      const wfs = await api.listWorkflows();
+      setWorkflows(wfs);
+      const byKey: Record<string, WorkflowRule[]> = {};
+      await Promise.all(wfs.map(async (w) => {
+        byKey[w.key] = await api.listWorkflowRules(w.key);
+      }));
+      setRules(byKey);
+    } catch (e: any) { toast.push(e.message, "error"); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function toggle(key: string, r: WorkflowRule) {
+    try {
+      await api.patchWorkflowRule(key, r.id, { enabled: !r.enabled });
+      load();
+    } catch (e: any) { toast.push(e.message, "error"); }
+  }
+  async function remove(key: string, r: WorkflowRule) {
+    if (!confirm(`Delete rule "${r.name || r.when_expr}"?`)) return;
+    try { await api.deleteWorkflowRule(key, r.id); load(); }
+    catch (e: any) { toast.push(e.message, "error"); }
+  }
+
+  if (!workflows) return <Loading err={null} />;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-muted-foreground/20 bg-muted/20 p-3 text-xs text-muted-foreground">
+        Rules layer on top of a workflow. After each step the engine evaluates every enabled
+        rule's <code>when</code> expression against the run context; the first match fires —
+        routing to another step or blocking the run. Rules fire at most once per run.
+        They're keyed on the workflow, not its version, so a fix to a prompt doesn't
+        invalidate an established rule.
+      </div>
+      {workflows.length === 0 ? (
+        <EmptyState title="No workflows" body="Install a solution pack to create one." />
+      ) : (
+        <div className="space-y-4">
+          {workflows.map((w) => {
+            const rs = rules[w.key] || [];
+            return (
+              <Card key={w.key}>
+                <CardHeader className="flex-row items-center justify-between space-y-0">
+                  <CardTitle className="text-sm">
+                    {w.name || w.key}{" "}
+                    <span className="text-xs font-normal text-muted-foreground">v{w.version}</span>
+                  </CardTitle>
+                  {writer && (
+                    <Button size="sm" variant="outline" onClick={() => setCreating(w.key)}>
+                      New rule
+                    </Button>
+                  )}
+                </CardHeader>
+                <CardContent className="p-0">
+                  {rs.length === 0 ? (
+                    <div className="p-4 text-sm text-muted-foreground">
+                      No rules yet. Rules can be created here, or from a decided approval
+                      (“Turn into rule”).
+                    </div>
+                  ) : (
+                    <Table>
+                      <THead>
+                        <TR>
+                          <TH>Name</TH>
+                          <TH>When</TH>
+                          <TH>Action</TH>
+                          <TH className="text-right">Fired</TH>
+                          <TH>Enabled</TH>
+                          <TH></TH>
+                        </TR>
+                      </THead>
+                      <TBody>
+                        {rs.map((r) => (
+                          <TR key={r.id}>
+                            <TD className="font-medium">{r.name || "—"}</TD>
+                            <TD>
+                              <code className="text-xs">{r.when_expr}</code>
+                              {r.created_from_approval_id && (
+                                <span className="ml-2 text-[10px] text-muted-foreground">
+                                  (from approval)
+                                </span>
+                              )}
+                            </TD>
+                            <TD>
+                              {r.action === "route_to"
+                                ? <Chip>route → {r.target_step}</Chip>
+                                : <Chip>block</Chip>}
+                            </TD>
+                            <TD className="text-right tabular-nums">
+                              {r.fired_count}
+                              {r.last_fired_at && (
+                                <div className="text-[10px] text-muted-foreground">
+                                  last {new Date(r.last_fired_at).toLocaleDateString()}
+                                </div>
+                              )}
+                            </TD>
+                            <TD>
+                              <StatusBadge value={r.enabled ? "enabled" : "disabled"} />
+                            </TD>
+                            <TD className="whitespace-nowrap">
+                              {writer && (
+                                <div className="flex gap-1">
+                                  <Button size="sm" variant="ghost" onClick={() => toggle(w.key, r)}>
+                                    {r.enabled ? "Disable" : "Enable"}
+                                  </Button>
+                                  <Button size="sm" variant="ghost" className="text-destructive"
+                                    onClick={() => remove(w.key, r)}>
+                                    Delete
+                                  </Button>
+                                </div>
+                              )}
+                            </TD>
+                          </TR>
+                        ))}
+                      </TBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+      {creating && (
+        <RuleDialog
+          workflowKey={creating}
+          onClose={() => { setCreating(null); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function RuleDialog({ workflowKey, approvalId, onClose }: {
+  workflowKey: string; approvalId?: string; onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [when, setWhen] = useState("");
+  const [action, setAction] = useState<"route_to" | "block">("route_to");
+  const [target, setTarget] = useState("");
+  const [steps, setSteps] = useState<Array<{ id: string; type: string; name?: string }>>([]);
+  const toast = useToast();
+
+  useEffect(() => {
+    api.getWorkflow(workflowKey).then((s) => {
+      setSteps(s.steps.map((st) => ({ id: st.id, type: st.type, name: st.name })));
+    }).catch((e: any) => toast.push(e.message, "error"));
+  }, [workflowKey]);
+
+  const TEMPLATES: Array<[string, string]> = [
+    ["High score", "risk.score > 70"],
+    ["High-risk country", 'country in ["IR", "KP", "MM"]'],
+    ["Low confidence", "risk.confidence < 0.7"],
+    ["Sanctions hit", "sanctions.hit == true"],
+  ];
+
+  async function save() {
+    try {
+      await api.createWorkflowRule(workflowKey, {
+        name: name || when,
+        when_expr: when,
+        action,
+        target_step: action === "route_to" ? target : null,
+        created_from_approval_id: approvalId ?? null,
+      });
+      toast.push("Rule created", "success");
+      onClose();
+    } catch (e: any) { toast.push(e.message, "error"); }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>New rule for “{workflowKey}”</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label>Name</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. High-risk country" />
+          </div>
+          <div>
+            <Label>When (safe expression over the run context)</Label>
+            <Textarea rows={2} value={when} onChange={(e) => setWhen(e.target.value)}
+              placeholder='risk.score > 70 and country in ["IR", "KP"]' />
+            <div className="mt-2 flex flex-wrap gap-1">
+              {TEMPLATES.map(([label, expr]) => (
+                <button key={label} onClick={() => setWhen(expr)}
+                  className="rounded-md border px-2 py-1 text-xs hover:bg-muted">
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <Label>Action</Label>
+            <select value={action} onChange={(e) => setAction(e.target.value as any)}
+              className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm">
+              <option value="route_to">route_to — skip to a step</option>
+              <option value="block">block — fail the run</option>
+            </select>
+          </div>
+          {action === "route_to" && (
+            <div>
+              <Label>Target step</Label>
+              <select value={target} onChange={(e) => setTarget(e.target.value)}
+                className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm">
+                <option value="">Select step…</option>
+                {steps.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.id} ({s.type}{s.name ? ` · ${s.name}` : ""})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Rules are stored on the tenant, not the workflow version — a rule created now
+            keeps applying through future workflow edits. If a target step is removed in a
+            later version, the rule is skipped at runtime with a warning in the audit trail.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <AsyncButton onRun={save} disabled={!when || (action === "route_to" && !target)}>
+            Create rule
+          </AsyncButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

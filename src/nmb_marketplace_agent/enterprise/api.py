@@ -7,10 +7,11 @@ import hmac
 import json
 import os
 from typing import Any
-
+import uuid  
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -27,6 +28,7 @@ from nmb_marketplace_agent.enterprise.models import (
     Approval,
     ConnectorConfig,
     PolicySet,
+    UsageEvent,
     WorkflowDefinition,
     WorkflowRun,
     now_iso,
@@ -38,9 +40,14 @@ from nmb_marketplace_agent.enterprise.workflows.engine import (
     WorkflowEngine,
     WorkflowError,
 )
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 from nmb_marketplace_agent.enterprise.workflows.spec import WorkflowSpec, validate_spec
+
+from nmb_marketplace_agent.config.models import EvalCase, EvalDataset
+from nmb_marketplace_agent.enterprise.workflows.shadow import run_shadow
+
+from nmb_marketplace_agent.enterprise.expr import ExprError, safe_eval
+from nmb_marketplace_agent.enterprise.models import WorkflowRule
+
 
 router = APIRouter()
 _bg: set[asyncio.Task] = set()
@@ -197,6 +204,122 @@ async def wf_run(key: str, body: RunRequest, p: Principal = Depends(requires("wo
         t.add_done_callback(_bg.discard)
     return _run_view(run)
 
+
+
+# ── approvals → eval cases (learning loop) ────────────────────────────
+class ToEvalCase(BaseModel):
+    dataset_id: str
+    input: str | None = None       # override the workflow run's input if provided
+    criteria: str | None = None    # override the derived criteria if provided
+    expect_delegations: list[str] | None = None
+
+
+@router.post("/approvals/{approval_id}/to-eval-case", dependencies=[Depends(require_module("approvals"))])
+async def approval_to_eval_case(
+    approval_id: str, body: ToEvalCase,
+    p: Principal = Depends(requires("approvals:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn a human decision into a labeled eval case on the chosen dataset.
+
+    Defaults:
+      input           — the workflow run's original inputs, serialized
+      criteria        — describes the human decision ("The reviewer approved/rejected ...")
+      expect_delegations — none (orchestration not asserted from a single approval)
+    """
+    a = await db.get(Approval, approval_id)
+    if not a or a.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Approval not found")
+    if a.status not in ("approved", "rejected"):
+        raise HTTPException(409, "Only decided approvals can become eval cases")
+
+    ds = await db.get(EvalDataset, body.dataset_id)
+    if not ds or ds.tenant_id != p.tenant_id:
+        raise HTTPException(404, "Eval dataset not found")
+
+    run = await db.get(WorkflowRun, a.run_id)
+    input_text = body.input
+    if input_text is None:
+        inputs = ((run.state or {}).get("ctx") or {}).get("input") if run else None
+        input_text = json.dumps(inputs or {}, ensure_ascii=False)
+
+    decision = a.status  # "approved" | "rejected"
+    criteria = body.criteria or (
+        f"A human {decision} this case"
+        + (f": {a.decisions[-1].get('comment')}" if a.decisions and a.decisions[-1].get("comment") else "")
+        + ". The agent must produce an answer consistent with that decision."
+    )
+
+    case = EvalCase(
+        id=str(uuid.uuid4()),
+        dataset_id=ds.id,
+        input=input_text,
+        expected_contains=None,
+        criteria=criteria,
+        expect_delegations=body.expect_delegations,
+    )
+    db.add(case)
+    await db.commit()
+
+    await audit.record(
+        db, tenant_id=p.tenant_id, actor=p.sub, action="approval.to_eval_case",
+        resource_type="eval_case", resource_id=case.id,
+        details={"approval_id": a.id, "dataset_id": ds.id, "decision": decision},
+    )
+    return {
+        "case_id": case.id, "dataset_id": ds.id, "decision": decision,
+        "input": input_text, "criteria": criteria,
+    }
+
+
+# ── shadow mode (historical replay) ───────────────────────────────────
+class ShadowRequest(BaseModel):
+    days: int = 30
+    limit: int = 100
+
+
+@router.post("/workflows/{key}/shadow", dependencies=[Depends(require_module("workflows"))])
+async def workflow_shadow(
+    key: str, body: ShadowRequest,
+    p: Principal = Depends(requires("workflows:write")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Replay historical runs of `key` against the current config, return the matrix."""
+    if body.days < 1 or body.days > 365:
+        raise HTTPException(422, "days must be in [1, 365]")
+    if body.limit < 1 or body.limit > 500:
+        raise HTTPException(422, "limit must be in [1, 500]")
+
+    runtime = await build_runtime(db, p.tenant_id)
+    try:
+        report = await run_shadow(db, p.tenant_id, runtime, key, days=body.days, limit=body.limit)
+    except WorkflowError as e:
+        raise HTTPException(404, str(e)) from e
+
+    await audit.record(
+        db, tenant_id=p.tenant_id, actor=p.sub, action="workflow.shadow_run",
+        resource_type="workflow", resource_id=key,
+        details={"days": body.days, "limit": body.limit,
+                 "total": report.total, "matched": report.matched},
+    )
+    return {
+        "workflow": report.workflow,
+        "version": report.version,
+        "window_days": report.window_days,
+        "total": report.total,
+        "matched": report.matched,
+        "agreement": (report.matched / report.total) if report.total else None,
+        "matrix": report.matrix,
+        "results": [
+            {"original_id": r.original_id, "original_shape": r.original_shape,
+             "shadow_shape": r.shadow_shape, "matches": r.matches, "error": r.error}
+            for r in report.results
+        ],
+    }
+
+
+
+
 def _run_view(r: WorkflowRun) -> dict:
     ctx = r.state.get("ctx", {})
     return {"id": r.id, "workflow": r.workflow_key, "version": r.workflow_version, "status": r.status,
@@ -251,6 +374,130 @@ async def run_cancel(run_id: str, p: Principal = Depends(requires("workflows:wri
     except WorkflowError as e:
         raise HTTPException(404, str(e)) from e
 
+
+# ── workflow rules (approval-as-code) ─────────────────────────────────
+class RuleIn(BaseModel):
+    name: str = ""
+    when_expr: str
+    action: str = "route_to"
+    target_step: str | None = None
+    enabled: bool = True
+    created_from_approval_id: str | None = None
+
+
+class RulePatch(BaseModel):
+    name: str | None = None
+    when_expr: str | None = None
+    action: str | None = None
+    target_step: str | None = None
+    enabled: bool | None = None
+
+
+@router.get("/workflows/{key}/rules", dependencies=[Depends(require_module("workflows"))])
+async def rules_list(key: str, p: Principal = Depends(requires("workflows:read")),
+                     db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(
+        select(WorkflowRule)
+        .where(WorkflowRule.tenant_id == p.tenant_id, WorkflowRule.workflow_key == key)
+        .order_by(WorkflowRule.created_at)
+    )).scalars().all()
+    return [r.model_dump() for r in rows]
+
+
+@router.post("/workflows/{key}/rules", dependencies=[Depends(require_module("workflows"))])
+async def rule_create(key: str, body: RuleIn, p: Principal = Depends(requires("workflows:write")),
+                      db: AsyncSession = Depends(get_db)):
+    if body.action not in ("route_to", "block"):
+        raise HTTPException(422, "action must be 'route_to' or 'block'")
+    try:
+        safe_eval(body.when_expr, {})
+    except ExprError as e:
+        raise HTTPException(422, f"Invalid when_expr: {e}") from e
+
+    spec = await (await _engine(db, p.tenant_id)).get_spec(key)
+    if body.action == "route_to":
+        if not body.target_step:
+            raise HTTPException(422, "route_to requires target_step")
+        if body.target_step not in spec.by_id():
+            raise HTTPException(422, f"target_step '{body.target_step}' not in workflow '{key}'")
+
+    if body.created_from_approval_id:
+        ap = await db.get(Approval, body.created_from_approval_id)
+        if not ap or ap.tenant_id != p.tenant_id:
+            raise HTTPException(404, "Source approval not found")
+
+    rule = WorkflowRule(
+        id=str(uuid.uuid4()), tenant_id=p.tenant_id, workflow_key=key,
+        name=body.name, when_expr=body.when_expr, action=body.action,
+        target_step=body.target_step, enabled=body.enabled,
+        created_by=p.sub, created_from_approval_id=body.created_from_approval_id,
+    )
+    db.add(rule)
+    await db.commit()
+
+    await audit.record(
+        db, tenant_id=p.tenant_id, actor=p.sub, action="workflow.rule.created",
+        resource_type="workflow_rule", resource_id=rule.id,
+        details={"workflow": key, "when": body.when_expr, "action": body.action,
+                 "target": body.target_step,
+                 "from_approval": body.created_from_approval_id},
+    )
+    return rule.model_dump()
+
+
+@router.patch("/workflows/{key}/rules/{rule_id}", dependencies=[Depends(require_module("workflows"))])
+async def rule_patch(key: str, rule_id: str, body: RulePatch,
+                     p: Principal = Depends(requires("workflows:write")),
+                     db: AsyncSession = Depends(get_db)):
+    rule = await db.get(WorkflowRule, rule_id)
+    if not rule or rule.tenant_id != p.tenant_id or rule.workflow_key != key:
+        raise HTTPException(404, "Rule not found")
+
+    data = body.model_dump(exclude_unset=True)
+    if "when_expr" in data and data["when_expr"] is not None:
+        try:
+            safe_eval(data["when_expr"], {})
+        except ExprError as e:
+            raise HTTPException(422, f"Invalid when_expr: {e}") from e
+    if "action" in data and data["action"] is not None and data["action"] not in ("route_to", "block"):
+        raise HTTPException(422, "action must be 'route_to' or 'block'")
+
+    new_action = data.get("action", rule.action)
+    new_target = data.get("target_step", rule.target_step)
+    if new_action == "route_to":
+        if not new_target:
+            raise HTTPException(422, "route_to requires target_step")
+        spec = await (await _engine(db, p.tenant_id)).get_spec(key)
+        if new_target not in spec.by_id():
+            raise HTTPException(422, f"target_step '{new_target}' not in workflow '{key}'")
+
+    for k, v in data.items():
+        setattr(rule, k, v)
+    db.add(rule)
+    await db.commit()
+
+    await audit.record(
+        db, tenant_id=p.tenant_id, actor=p.sub, action="workflow.rule.updated",
+        resource_type="workflow_rule", resource_id=rule.id,
+        details={"workflow": key, "fields": list(data.keys())},
+    )
+    return rule.model_dump()
+
+
+@router.delete("/workflows/{key}/rules/{rule_id}", dependencies=[Depends(require_module("workflows"))])
+async def rule_delete(key: str, rule_id: str, p: Principal = Depends(requires("workflows:write")),
+                      db: AsyncSession = Depends(get_db)):
+    rule = await db.get(WorkflowRule, rule_id)
+    if not rule or rule.tenant_id != p.tenant_id or rule.workflow_key != key:
+        raise HTTPException(404, "Rule not found")
+    await db.delete(rule)
+    await db.commit()
+    await audit.record(
+        db, tenant_id=p.tenant_id, actor=p.sub, action="workflow.rule.deleted",
+        resource_type="workflow_rule", resource_id=rule_id,
+        details={"workflow": key},
+    )
+    return {"deleted": rule_id}
 
 # ── approvals ─────────────────────────────────────────────────────────
 @router.get("/approvals", dependencies=[Depends(require_module("approvals"))])
@@ -531,7 +778,85 @@ async def evidence(p: Principal = Depends(requires("compliance:read")), db: Asyn
     await audit.record(db, tenant_id=p.tenant_id, actor=p.sub, action="compliance.evidence_exported")
     return await compliance.evidence_bundle(db, p.tenant_id)
 
+@router.get("/governance/cost", dependencies=[Depends(require_module("compliance"))])
+async def governance_cost(
+    days: int = 30,
+    p: Principal = Depends(requires("usage:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cost per case, per workflow, over the last N days.
 
+    Reads the `llm_tokens` metering rows written by CostTracker.flush(). Each row
+    carries `run_id`, `usd`, `calls`, `input_tokens`, `output_tokens`, `model`.
+    Joins to `workflow_runs` to attribute cost to a workflow key.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    cutoff = (datetime.now(UTC) - timedelta(days=max(1, min(days, 365)))).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+
+    rows = (await db.execute(
+        select(UsageEvent).where(
+            UsageEvent.tenant_id == p.tenant_id,
+            UsageEvent.metric == "llm_tokens",
+            UsageEvent.ts >= cutoff,
+        )
+    )).scalars().all()
+
+    # run_id -> { workflow, usd, calls, input, output }
+    by_run: dict[str, dict] = {}
+    for r in rows:
+        dims = r.dims or {}
+        run_id = dims.get("run_id") or ""
+        if not run_id:
+            continue
+        entry = by_run.setdefault(run_id, {
+            "workflow": None, "usd": 0.0, "calls": 0,
+            "input_tokens": 0, "output_tokens": 0,
+        })
+        entry["usd"] += float(dims.get("usd") or 0.0)
+        entry["calls"] += int(dims.get("calls") or 0)
+        entry["input_tokens"] += int(dims.get("input_tokens") or 0)
+        entry["output_tokens"] += int(dims.get("output_tokens") or 0)
+
+    if by_run:
+        run_ids = list(by_run.keys())
+        run_rows = (await db.execute(
+            select(WorkflowRun).where(
+                WorkflowRun.tenant_id == p.tenant_id,
+                WorkflowRun.id.in_(run_ids),
+            )
+        )).scalars().all()
+        for rr in run_rows:
+            by_run[rr.id]["workflow"] = rr.workflow_key
+
+    # Aggregate per workflow
+    by_workflow: dict[str, dict] = {}
+    for entry in by_run.values():
+        wf = entry["workflow"] or "unknown"
+        agg = by_workflow.setdefault(wf, {
+            "workflow": wf, "cases": 0, "total_usd": 0.0,
+            "total_calls": 0, "total_input": 0, "total_output": 0,
+        })
+        agg["cases"] += 1
+        agg["total_usd"] += entry["usd"]
+        agg["total_calls"] += entry["calls"]
+        agg["total_input"] += entry["input_tokens"]
+        agg["total_output"] += entry["output_tokens"]
+
+    out = []
+    for agg in by_workflow.values():
+        avg = (agg["total_usd"] / agg["cases"]) if agg["cases"] else 0.0
+        out.append({
+            "workflow": agg["workflow"],
+            "cases": agg["cases"],
+            "total_usd": round(agg["total_usd"], 6),
+            "avg_usd": round(avg, 6),
+            "total_calls": agg["total_calls"],
+            "total_tokens": agg["total_input"] + agg["total_output"],
+        })
+    return sorted(out, key=lambda r: r["total_usd"], reverse=True)
 # ── inbound webhooks (events from core systems; HMAC-signed) ─────────
 @router.post("/hooks/{tenant_id}/{key}", dependencies=[Depends(require_module("workflows"))])
 async def inbound_hook(tenant_id: str, key: str, request: Request, db: AsyncSession = Depends(get_db)):

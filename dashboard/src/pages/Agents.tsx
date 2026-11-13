@@ -262,8 +262,61 @@ function VersionsDialog({ agent, tenant, onClose }: { agent: Agent; tenant: stri
   useEffect(() => { refresh(); }, []);
 
   async function publish() {
-    try { await api.publishAgent(agent.id, note); setNote(""); refresh(); toast.push("Published", "success"); }
-    catch (e: any) { toast.push(e.message, "error"); }
+    try {
+      await api.publishAgent(agent.id, note);
+      setNote("");
+      refresh();
+      toast.push("Published", "success");
+    } catch (e: any) {
+      const body = e.body as
+        | { error?: string;
+            detail?: {
+              failed?: Array<{ id: string; notes: string[] }>;
+              failures?: Array<{ dimension: string; pass_rate: number | null; threshold: number }>;
+              reason?: string; message?: string;
+              pass_rate?: number | null; threshold?: number | null;
+            };
+            hint?: string }
+        | undefined;
+
+      if (body?.error === "conformance_failed") {
+        const reason = prompt(
+          `Publish blocked by conformance (${body.detail?.failed?.length ?? 0} failing cases).\n\n` +
+          (body.detail?.failed ?? []).map((f) => `• ${f.id}: ${f.notes.join("; ")}`).join("\n") +
+          `\n\n${body.hint}\n\nOverride reason:`,
+        );
+        if (reason?.trim()) {
+          try {
+            await api.publishAgent(agent.id, note, reason);
+            setNote(""); refresh(); toast.push("Published with conformance override (audited)", "success");
+          } catch (e2: any) { toast.push(e2.message, "error"); }
+        }
+        return;
+      }
+
+      if (body?.error === "eval_failed") {
+        const d = body.detail;
+        const lines = d?.reason === "no_eval_run"
+          ? [`• ${d.message ?? "no draft eval run"}`]
+          : (d?.failures ?? []).map(
+              (f) => `• ${f.dimension}: pass ${f.pass_rate ?? "—"} < ${f.threshold}`,
+            );
+        const reason = prompt(
+          `Publish blocked by eval gate.\n\n` +
+          (lines.join("\n") || "(no details)") +
+          `\n\n${body.hint}\n\nOverride reason:`,
+        );
+        if (reason?.trim()) {
+          try {
+            await api.publishAgent(agent.id, note, reason);
+            setNote(""); refresh(); toast.push("Published with eval override (audited)", "success");
+          } catch (e2: any) { toast.push(e2.message, "error"); }
+        }
+        return;
+      }
+
+      toast.push(e.message, "error");
+    }
   }
   async function rollback(v: number) {
     try { await api.rollback(agent.id, v); refresh(); toast.push(`v${v} live`, "success"); }

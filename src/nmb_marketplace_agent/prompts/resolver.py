@@ -55,3 +55,32 @@ async def resolve_system_prompt(value: str | None, fallback: str) -> str:
         log.warning("Could not load %s from Langfuse (%s); using %s", value, e,
                     "cached copy" if hit else "fallback prompt")
         return hit[1] if hit else fallback
+
+
+async def resolve_with_provenance(value: str | None, fallback: str) -> tuple[str, dict]:
+    """Same as `resolve_system_prompt` but also returns provenance metadata.
+
+    Callers who only need the text keep using `resolve_system_prompt`; publish-time
+    provenance capture uses this variant. Never raises: on Langfuse errors it returns
+    the fallback and a `kind=fallback` record so the audit trail can see the misconfig.
+    """
+    if not value:
+        return fallback, {"kind": "fallback"}
+    if not is_ref(value):
+        return value, {"kind": "inline"}
+    try:
+        client = lf.client()
+        if not client:
+            raise lf.LangfuseError("Langfuse is not connected")
+        name, label, version = parse_ref(value)
+        p = await client.prompt(name, label=label, version=version)
+        text = prompt_text(p)
+        return text, {
+            "kind": "langfuse",
+            "name": name,
+            "version": p.get("version"),
+            "labels": p.get("labels") or ([] if not label else [label]),
+        }
+    except Exception as e:
+        log.warning("Could not resolve %s for provenance: %s", value, e)
+        return fallback, {"kind": "fallback", "ref": value, "error": str(e)[:200]}

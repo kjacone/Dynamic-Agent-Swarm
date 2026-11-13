@@ -16,5 +16,8 @@
  },
  "t1-banking-kyc-kyc-extraction-sample": {
   "file_name": "t1-banking-kyc-kyc-extraction-sample.json"
+ },
+ "t2-banking-kyc-kyc-extraction-sample": {
+  "file_name": "t2-banking-kyc-kyc-extraction-sample.json"
  }
 }

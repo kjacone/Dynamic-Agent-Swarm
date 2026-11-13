@@ -200,3 +200,38 @@ def test_list_packs_returns_v2_shape():
     assert kyc["assets"]["models"] == 2
     assert len(kyc["samples"]) == 3
     assert {c["id"] for c in kyc["samples"]} == {"low-risk", "high-risk", "injection"}
+
+def test_validate_supervisor_rejects_bad_max_cost():
+    from nmb_marketplace_agent.enterprise.solutions.loader import (
+        PackError,
+        _validate_supervisor,
+    )
+
+    pack = {
+        "agents": [{"key": "a", "tools": []}],
+        "supervisor": {
+            "key": "sup",
+            "delegates": ["a"],
+            "limits": {"max_cost_usd": "lots"},
+        },
+    }
+    with pytest.raises(PackError, match="max_cost_usd"):
+        _validate_supervisor(pack)
+
+
+def test_validate_supervisor_rejects_negative_cost():
+    from nmb_marketplace_agent.enterprise.solutions.loader import (
+        PackError,
+        _validate_supervisor,
+    )
+
+    pack = {
+        "agents": [{"key": "a", "tools": []}],
+        "supervisor": {
+            "key": "sup",
+            "delegates": ["a"],
+            "limits": {"max_cost_usd": -1},
+        },
+    }
+    with pytest.raises(PackError, match="max_cost_usd"):
+        _validate_supervisor(pack)

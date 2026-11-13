@@ -188,24 +188,36 @@ function DatasetView({ dataset, onDelete }: { dataset: EvalDataset; onDelete: ()
           {runs.length === 0 ? (
             <div className="text-sm text-muted-foreground">No runs yet.</div>
           ) : (
-            <Table>
-              <THead><TR><TH>Started</TH><TH>Target</TH><TH>Version</TH><TH>Status</TH><TH>Pass rate</TH><TH>Avg</TH><TH></TH></TR></THead>
-              <TBody>
-                {runs.map((r) => (
-                  <TR key={r.id}>
-                    <TD className="text-xs">{fmtDate(r.created_at)}</TD>
-                    <TD><Badge variant="secondary">{r.target}</Badge></TD>
-                    <TD className="tabular-nums">{r.agent_version ?? "—"}</TD>
-                    <TD>
-                      <Badge variant={r.status === "done" ? "success" : "warning"}>{r.status}</Badge>
-                    </TD>
-                    <TD className="tabular-nums">{(r.summary as any)?.pass_rate ?? "—"}</TD>
-                    <TD className="tabular-nums">{(r.summary as any)?.avg ?? "—"}</TD>
-                    <TD><Button size="sm" variant="ghost" onClick={() => setViewing(r)}>View</Button></TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
+           <Table>
+  <THead>
+    <TR>
+      <TH>Started</TH><TH>Target</TH><TH>Version</TH><TH>Status</TH>
+      <TH>Pass rate</TH><TH>Orch</TH><TH>Avg</TH><TH></TH>
+    </TR>
+  </THead>
+  <TBody>
+    {runs.map((r) => {
+      const s = r.summary ?? {};
+      const orch = s.orchestration_rate;
+      return (
+        <TR key={r.id}>
+          <TD className="text-xs">{fmtDate(r.created_at)}</TD>
+          <TD><Badge variant="secondary">{r.target}</Badge></TD>
+          <TD className="tabular-nums">{r.agent_version ?? "—"}</TD>
+          <TD>
+            <Badge variant={r.status === "done" ? "default" : "destructive"}>{r.status}</Badge>
+          </TD>
+          <TD className="tabular-nums">{s.pass_rate ?? "—"}</TD>
+          <TD className="tabular-nums">
+            {orch == null ? "—" : `${s.orchestration_passed}/${s.orchestration_checked}`}
+          </TD>
+          <TD className="tabular-nums">{s.avg ?? "—"}</TD>
+          <TD><Button size="sm" variant="ghost" onClick={() => setViewing(r)}>View</Button></TD>
+        </TR>
+      );
+    })}
+  </TBody>
+</Table>
           )}
         </CardContent>
       </Card>
@@ -222,12 +234,19 @@ function AddCase({ datasetId, onClose }: { datasetId: string; onClose: () => voi
   const [input, setInput] = useState("");
   const [expected, setExpected] = useState("");
   const [criteria, setCriteria] = useState("");
+  const [expectDelegations, setExpectDelegations] = useState("");
   const toast = useToast();
 
   async function save() {
     try {
+      const delegations = expectDelegations.trim()
+        ? expectDelegations.split(",").map((s) => s.trim()).filter(Boolean)
+        : null;
       await api.addEvalCase(datasetId, {
-        input, expected_contains: expected || null, criteria: criteria || null,
+        input,
+        expected_contains: expected || null,
+        criteria: criteria || null,
+        expect_delegations: delegations,
       });
       toast.push("Case added", "success"); onClose();
     } catch (e: any) { toast.push(e.message, "error"); }
@@ -241,6 +260,18 @@ function AddCase({ datasetId, onClose }: { datasetId: string; onClose: () => voi
           <div><Label>Expected contains (optional)</Label><Input value={expected} onChange={(e) => setExpected(e.target.value)} /></div>
           <div><Label>Judge criteria (optional)</Label><Textarea rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)}
             placeholder="The answer is correct and cites a source." /></div>
+          <div>
+            <Label>Expected delegations (optional, comma-separated)</Label>
+            <Input
+              value={expectDelegations}
+              onChange={(e) => setExpectDelegations(e.target.value)}
+              placeholder="document-analyst, risk-analyst, case-writer"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              When set, the runner checks that each of these subagents was invoked for this case.
+              Leave empty for non-supervisor datasets.
+            </p>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -270,31 +301,50 @@ function RunView({ run, onClose }: { run: EvalRun; onClose: () => void }) {
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-3xl">
         <DialogHeader><DialogTitle>Run {detail.id.slice(0, 8)}</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <div className="grid grid-cols-4 gap-2 text-sm">
-            <Box label="Status" value={detail.status} />
-            <Box label="Cases" value={String((detail.summary as any)?.cases ?? "—")} />
-            <Box label="Pass rate" value={String((detail.summary as any)?.pass_rate ?? "—")} />
-            <Box label="Avg" value={String((detail.summary as any)?.avg ?? "—")} />
-          </div>
-          {(detail.summary as any)?.langfuse && (
-            <div className="text-xs text-muted-foreground">Langfuse: {String((detail.summary as any).langfuse)}</div>
-          )}
-          <div className="max-h-96 space-y-2 overflow-auto">
-            {detail.results?.map((r: any, i: number) => (
-              <div key={i} className="rounded-md border p-3 text-sm">
-                <div className="mb-1 text-xs text-muted-foreground">Case {i + 1}</div>
-                <div className="font-medium">{r.input}</div>
-                {r.reply && <div className="mt-1 whitespace-pre-wrap">{r.reply}</div>}
-                {r.error && <div className="mt-1 text-xs text-destructive">{r.error}</div>}
-                <div className="mt-2 flex gap-3 text-xs">
-                  {r.score != null && <span>score: <strong>{r.score.toFixed(2)}</strong></span>}
-                  {r.judge_reason && <span className="text-muted-foreground">{r.judge_reason}</span>}
-                </div>
-              </div>
-            ))}
+        
+        <div className="grid grid-cols-5 gap-2 text-sm">
+  <Box label="Status" value={detail.status} />
+  <Box label="Cases" value={String(detail.summary?.cases ?? "—")} />
+  <Box label="Pass rate" value={String(detail.summary?.pass_rate ?? "—")} />
+  <Box label="Orch" value={
+    detail.summary?.orchestration_rate == null
+      ? "—"
+      : `${detail.summary.orchestration_passed}/${detail.summary.orchestration_checked}`
+  } />
+  <Box label="Avg" value={String(detail.summary?.avg ?? "—")} />
+</div>
+{detail.summary?.langfuse && (
+  <div className="text-xs text-muted-foreground">Langfuse: {detail.summary.langfuse}</div>
+)}
+<div className="max-h-96 space-y-2 overflow-auto">
+  {detail.results?.map((r: any, i: number) => (
+    <div key={i} className="rounded-md border p-3 text-sm">
+      <div className="mb-1 text-xs text-muted-foreground">Case {i + 1}</div>
+      <div className="font-medium">{r.input}</div>
+      {r.reply && <div className="mt-1 whitespace-pre-wrap">{r.reply}</div>}
+      {r.error && <div className="mt-1 text-xs text-destructive">{r.error}</div>}
+      {r.delegations_expected && (
+        <div className="mt-2 rounded-md bg-muted/40 p-2 text-xs">
+          <div>orchestration:{" "}
+            {r.orchestration_passed
+              ? <span className="font-medium text-emerald-600">passed</span>
+              : <span className="font-medium text-red-600">failed</span>}
+            {" — "}expected [{r.delegations_expected.join(", ") || "none"}],
+            actual [{r.delegations_actual?.join(", ") || "none"}]
+            {r.orchestration_missing?.length > 0 && (
+              <> · missing: {r.orchestration_missing.join(", ")}</>
+            )}
           </div>
         </div>
+      )}
+      <div className="mt-2 flex gap-3 text-xs">
+        {r.score != null && <span>score: <strong>{r.score.toFixed(2)}</strong></span>}
+        {r.judge_reason && <span className="text-muted-foreground">{r.judge_reason}</span>}
+      </div>
+    </div>
+  ))}
+</div>
+
         <DialogFooter><Button variant="outline" onClick={onClose}>Close</Button></DialogFooter>
       </DialogContent>
     </Dialog>

@@ -120,3 +120,29 @@ class ConnectorConfig(SQLModel, table=True):
     type: str = Field(default="rest")
     config: dict = Field(default_factory=dict, sa_column=Column(JSON))
     enabled: bool = Field(default=True)
+
+
+class WorkflowRule(SQLModel, table=True):
+    """Tenant-scoped rule layered on top of a workflow.
+
+    Evaluated after each successful step; the first enabled rule whose `when_expr`
+    matches the run context fires (and is remembered for the run so it can't loop).
+    Rules are keyed on `workflow_key`, not `workflow_version` — the semantic intent
+    ("high-risk goes to EDD") should survive a typo fix in a later workflow version.
+    """
+    __tablename__ = "workflow_rules"
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    workflow_key: str = Field(index=True)
+    name: str = Field(default="")
+    when_expr: str = Field(sa_column=Column(Text))
+    # `route_to` — cursor is overridden to `target_step`.
+    # `block`    — run fails with a message; `target_step` is ignored.
+    action: str = Field(default="route_to")
+    target_step: Optional[str] = Field(default=None)
+    enabled: bool = Field(default=True)
+    created_by: str = Field(default="")
+    created_from_approval_id: Optional[str] = Field(default=None)
+    created_at: str = Field(default_factory=now_iso)
+    fired_count: int = Field(default=0)
+    last_fired_at: Optional[str] = Field(default=None)

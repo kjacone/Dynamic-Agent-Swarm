@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -33,6 +34,7 @@ from nmb_marketplace_agent.enterprise.workflows.spec import (
     validate_spec,
 )
 
+log = logging.getLogger(__name__)
 
 class WorkflowError(Exception):
     pass
@@ -50,10 +52,9 @@ class Runtime:
     connector_runner: Callable[[str, str, dict], Awaitable[Any]] | None = None
     policy: PolicyEngine = field(default_factory=PolicyEngine)
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
-    # In-process supervisor path (accurate cost tracking across `task` boundaries).
     supervisor_runner: Callable[[str, str, dict, list], Awaitable[Any]] | None = None
-    # Agent ids that should use supervisor_runner instead of agent_runner.
     supervisor_ids: set[str] = field(default_factory=set)
+    shadow: bool = False
 
 
 def _due(hours: float | None) -> str | None:
@@ -64,6 +65,23 @@ class WorkflowEngine:
     def __init__(self, db: AsyncSession, runtime: Runtime, tenant_id: str):
         self.db, self.rt, self.tenant = db, runtime, tenant_id
 
+    # ── shadow-mode-aware audit / metering ───────────────────────────
+    async def _audit(self, *, actor: str, action: str, resource_type: str, resource_id: str,
+                     actor_type: str = "system", outcome: str = "success",
+                     details: dict | None = None) -> None:
+        if self.rt.shadow:
+            return
+        await audit.record(
+            self.db, tenant_id=self.tenant, actor=actor, actor_type=actor_type,
+            action=action, resource_type=resource_type, resource_id=resource_id,
+            outcome=outcome, details=details or {},
+        )
+
+    async def _meter(self, metric: str, **dims: Any) -> None:
+        if self.rt.shadow:
+            return
+        await record_usage(self.db, self.tenant, metric, **dims)
+
     # ── definitions ───────────────────────────────────────────────────
     async def save_definition(self, spec: WorkflowSpec | dict, actor: str) -> WorkflowDefinition:
         spec = WorkflowSpec.model_validate(spec) if isinstance(spec, dict) else spec
@@ -72,13 +90,14 @@ class WorkflowEngine:
         last = (await self.db.execute(select(WorkflowDefinition).where(
             WorkflowDefinition.tenant_id == self.tenant, WorkflowDefinition.key == spec.key)
             .order_by(WorkflowDefinition.version.desc()).limit(1))).scalars().first()
-        spec.version = (last.version + 1) if last else 1  # definitions are immutable; edits = new version
+        spec.version = (last.version + 1) if last else 1
         d = WorkflowDefinition(id=str(uuid.uuid4()), tenant_id=self.tenant, key=spec.key, version=spec.version,
                                spec=spec.model_dump(by_alias=True), created_by=actor)
         self.db.add(d)
         await self.db.commit()
-        await audit.record(self.db, tenant_id=self.tenant, actor=actor, action="workflow.definition.saved",
-                           resource_type="workflow", resource_id=spec.key, details={"version": spec.version})
+        await self._audit(actor=actor, action="workflow.definition.saved",
+                          resource_type="workflow", resource_id=spec.key, actor_type="user",
+                          details={"version": spec.version})
         return d
 
     async def get_spec(self, key: str, version: int | None = None) -> WorkflowSpec:
@@ -101,14 +120,14 @@ class WorkflowEngine:
                                                       "history": [], "n": 0, "approved_steps": []})
         self.db.add(run)
         await self.db.commit()
-        await audit.record(self.db, tenant_id=self.tenant, actor=initiator, action="workflow.run.started",
-                           resource_type="workflow_run", resource_id=run.id,
-                           details={"workflow": key, "version": spec.version, "inputs": inputs})
-        await record_usage(self.db, self.tenant, "workflow_runs", workflow=key)
+        await self._audit(actor=initiator, action="workflow.run.started", resource_type="workflow_run",
+                          resource_id=run.id, actor_type="user",
+                          details={"workflow": key, "version": spec.version, "inputs": inputs})
+        await self._meter("workflow_runs", workflow=key)
         return await self.advance(run.id) if run_now else run
 
     async def _save(self, run: WorkflowRun, state: dict, status: str | None = None, error: str | None = None):
-        run.state = copy.deepcopy(state)  # new object so SQLAlchemy sees the JSON change
+        run.state = copy.deepcopy(state)
         run.updated_at = now_iso()
         if status:
             run.status = status
@@ -145,15 +164,37 @@ class WorkflowEngine:
                     st["cursor"] = step.error_goto
                     continue
                 await self._save(run, st, "failed", str(e)[:1000])
-                await audit.record(self.db, tenant_id=self.tenant, actor="workflow-engine", actor_type="system",
-                                   action="workflow.run.failed", resource_type="workflow_run", resource_id=run.id,
-                                   outcome="error", details={"step": step.id, "error": str(e)[:300]})
+                await self._audit(actor="workflow-engine", action="workflow.run.failed",
+                                  resource_type="workflow_run", resource_id=run.id,
+                                  outcome="error", details={"step": step.id, "error": str(e)[:300]})
                 return run
             if outcome == "WAIT":
                 await self._save(run, st, "waiting_approval")
                 return run
             st["history"].append({"step": step.id, "status": "ok", "ts": now_iso()})
-            await record_usage(self.db, self.tenant, "workflow_steps", workflow=run.workflow_key, step_type=step.type)
+            await self._meter("workflow_steps", workflow=run.workflow_key, step_type=step.type)
+
+            # Rules layer on top of natural routing. `route_to` overrides the next
+            # step; `block` fails the run. Rules fire at most once per run per rule
+            # (tracked in `_fired_rules`), so a rule that routes to X cannot loop by
+            # firing again after X executes.
+            override = await self._apply_rules(run, st)
+            if override:
+                action, target = override
+                if action == "block":
+                    await self._save(run, st, "failed",
+                                     f"Workflow rule blocked after '{step.id}'")
+                    return run
+                if action == "route_to" and target and target in by:
+                    st["cursor"] = target
+                    await self._save(run, st)
+                    continue
+                if action == "route_to" and target and target not in by:
+                    # The rule references a step that was removed in a later workflow
+                    # version. Fall through to natural routing; the audit trail has
+                    # the `workflow.rule.fired` event that points at the misconfig.
+                    pass
+
             if step.type == "end":
                 st["ctx"]["_outcome"] = step.outcome or "completed"
                 st["cursor"] = None
@@ -163,15 +204,71 @@ class WorkflowEngine:
 
         if run.status == "running":
             await self._save(run, st, "completed")
-            await audit.record(self.db, tenant_id=self.tenant, actor="workflow-engine", actor_type="system",
-                               action="workflow.run.completed", resource_type="workflow_run", resource_id=run.id,
-                               details={"outcome": st["ctx"].get("_outcome", "completed")})
+            await self._audit(actor="workflow-engine", action="workflow.run.completed",
+                              resource_type="workflow_run", resource_id=run.id,
+                              details={"outcome": st["ctx"].get("_outcome", "completed")})
         return run
 
     async def _log(self, run, step, outcome, details=None):
-        await audit.record(self.db, tenant_id=self.tenant, actor="workflow-engine", actor_type="system",
-                           action=f"workflow.step.{step.type}", resource_type="workflow_run", resource_id=run.id,
-                           outcome="success" if outcome == "ok" else outcome, details={"step": step.id, **(details or {})})
+        await self._audit(actor="workflow-engine", action=f"workflow.step.{step.type}",
+                          resource_type="workflow_run", resource_id=run.id,
+                          outcome="success" if outcome == "ok" else outcome,
+                          details={"step": step.id, **(details or {})})
+
+    async def _apply_rules(self, run: WorkflowRun, st: dict) -> tuple[str, str | None] | None:
+        """Return (action, target_step) for the first enabled rule whose expr matches.
+
+        Fires at most once per (run, rule). Updates the rule's counters and writes
+        `workflow.rule.fired` / `workflow.rule.blocked` audit events (both suppressed
+        in shadow mode via `_audit`, but fired_count is skipped explicitly to avoid
+        inflating the operator-visible counter with replay traffic).
+        """
+        from sqlalchemy import select as _select
+        from nmb_marketplace_agent.enterprise.models import WorkflowRule
+
+        fired = set(st.get("_fired_rules", []))
+        rules = (await self.db.execute(
+            _select(WorkflowRule).where(
+                WorkflowRule.tenant_id == self.tenant,
+                WorkflowRule.workflow_key == run.workflow_key,
+                WorkflowRule.enabled == True,  # noqa: E712
+            ).order_by(WorkflowRule.created_at)
+        )).scalars().all()
+        if not rules:
+            return None
+
+        for r in rules:
+            if r.id in fired:
+                continue
+            try:
+                if not safe_eval(r.when_expr, st["ctx"]):
+                    continue
+            except ExprError as e:
+                log.warning("Rule %s has invalid expression %r: %s", r.id, r.when_expr, e)
+                continue
+
+            if not self.rt.shadow:
+                r.fired_count = (r.fired_count or 0) + 1
+                r.last_fired_at = now_iso()
+                self.db.add(r)
+                await self.db.commit()
+
+            st.setdefault("_fired_rules", []).append(r.id)
+            await self._audit(
+                actor="rules-engine", action="workflow.rule.fired",
+                resource_type="workflow_run", resource_id=run.id,
+                details={"rule_id": r.id, "name": r.name, "when": r.when_expr,
+                         "action": r.action, "target": r.target_step},
+            )
+            if r.action == "block":
+                await self._audit(
+                    actor="rules-engine", action="workflow.rule.blocked",
+                    resource_type="workflow_run", resource_id=run.id,
+                    outcome="denied",
+                    details={"rule_id": r.id, "name": r.name},
+                )
+            return (r.action, r.target_step)
+        return None                          
 
     # ── step execution ────────────────────────────────────────────────
     async def _exec(self, run: WorkflowRun, spec: WorkflowSpec, step: Step, st: dict) -> str | None:
@@ -194,8 +291,6 @@ class WorkflowEngine:
         if step.type == "approval":
             return await self._approval(run, step, st, nxt)
         if step.type == "parallel":
-            # DB bookkeeping (policy, audit, metering) is serial: one AsyncSession is not concurrency-safe.
-            # Only the external calls themselves run concurrently.
             prepared = [(b, *(await self._prepare(run, b, ctx, False))) for b in step.branches]
             raws = await asyncio.gather(*[self._retry(b, thunk) for b, thunk, _ in prepared])
             for (b, _t, fin), raw in zip(prepared, raws):
@@ -205,7 +300,7 @@ class WorkflowEngine:
 
         try:
             ctx[key] = await self._run_step(run, step, ctx, approved=step.id in st["approved_steps"])
-        except _NeedsApproval as na:  # guardrail demands a human before the model sees this input
+        except _NeedsApproval as na:
             await self._open_approval(run, step, st, f"Policy review required: {step.id}", "; ".join(na.reasons))
             return "WAIT"
         await self._log(run, step, "ok")
@@ -228,15 +323,14 @@ class WorkflowEngine:
         raise last  # type: ignore[misc]
 
     async def _deny(self, run, step: Step, dec, target: str | None = None):
-        await audit.record(self.db, tenant_id=self.tenant, actor="guardrails", actor_type="system",
-                           action="policy.blocked", resource_type="workflow_run", resource_id=run.id,
-                           outcome="denied", details={"step": step.id, **({"target": target} if target else {}), **dec.as_dict()})
-        await record_usage(self.db, self.tenant, "policy_blocks")
+        await self._audit(actor="guardrails", action="policy.blocked", resource_type="workflow_run",
+                          resource_id=run.id, outcome="denied",
+                          details={"step": step.id, **({"target": target} if target else {}), **dec.as_dict()})
+        await self._meter("policy_blocks")
         raise PolicyViolation("; ".join(dec.reasons))
 
     async def _prepare(self, run, step: Step, ctx: dict, approved: bool):
-        """Do every DB-touching, policy-related part of a step; return (thunk, finish) where ``thunk``
-        performs only the external call (safe to run concurrently) and ``finish`` post-processes it."""
+        """Do every DB-touching, policy-related part of a step; return (thunk, finish)."""
         if step.type == "set":
             val = render(step.values, ctx)
 
@@ -244,8 +338,6 @@ class WorkflowEngine:
                 return val
             return _set, None
 
-        # Context keys the supervisor's own graph factory and the CostTracker both read.
-        # Leading underscore so _public() and run_view drop them from what approvers see.
         ctx["_run_id"] = run.id
         ctx["_step_id"] = step.id
 
@@ -261,9 +353,9 @@ class WorkflowEngine:
             if dec.action == "require_approval" and not approved:
                 raise _NeedsApproval(dec.reasons)
             if step.type == "tool":
-                await record_usage(self.db, self.tenant, "tool_calls", tool=step.tool)
+                await self._meter("tool_calls", tool=step.tool)
                 return (lambda: runner(step.tool or "", args)), None
-            await record_usage(self.db, self.tenant, "connector_calls", connector=step.connector)
+            await self._meter("connector_calls", connector=step.connector)
             return (lambda: runner(step.connector or "", step.operation or "", args)), None
 
         # agent
@@ -275,19 +367,17 @@ class WorkflowEngine:
         if dec.action == "require_approval" and not approved:
             raise _NeedsApproval(dec.reasons)
         prompt = dec.text or prompt
-        await record_usage(self.db, self.tenant, "agent_runs", agent=step.agent)
+        await self._meter("agent_runs", agent=step.agent)
 
         async def finish(out):
             if isinstance(out, str):
                 od = self.rt.policy.check_text(out, "output")
                 if od.blocked:
-                    await record_usage(self.db, self.tenant, "policy_blocks")
+                    await self._meter("policy_blocks")
                     raise PolicyViolation("Model output blocked: " + "; ".join(od.reasons))
                 return od.text if od.text is not None else out
             return out
 
-        # Supervisor path: in-process so `on_llm_end` fires across `task` boundaries
-        # (see docs/DESIGN_AGENT_INVOCATION.md and deepagents#6555).
         if step.agent in self.rt.supervisor_ids and self.rt.supervisor_runner:
             from nmb_marketplace_agent.enterprise.observability.cost_tracker import CostTracker
 
@@ -308,7 +398,7 @@ class WorkflowEngine:
     async def _approval(self, run, step: Step, st: dict, nxt: str | None) -> str | None:
         ctx = st["ctx"]
         res = ctx.get(step.output or step.id)
-        if isinstance(res, dict) and res.get("decision"):  # resumed after a decision
+        if isinstance(res, dict) and res.get("decision"):
             if res["decision"] == "rejected":
                 if step.on_reject:
                     return step.on_reject
@@ -328,11 +418,11 @@ class WorkflowEngine:
                               "_self_ok": step.allow_self_approval, "_due_hours": step.due_hours, **(payload or {})})
         self.db.add(a)
         await self.db.commit()
-        await audit.record(self.db, tenant_id=self.tenant, actor="workflow-engine", actor_type="system",
-                           action="approval.requested", resource_type="approval", resource_id=a.id,
-                           details={"run": run.id, "step": step.id, "title": a.title, "roles": step.roles,
-                                    "required": step.required_approvals})
-        await record_usage(self.db, self.tenant, "approvals")
+        await self._audit(actor="workflow-engine", action="approval.requested",
+                          resource_type="approval", resource_id=a.id,
+                          details={"run": run.id, "step": step.id, "title": a.title,
+                                   "roles": step.roles, "required": step.required_approvals})
+        await self._meter("approvals")
         return a
 
     async def decide(self, approval_id: str, principal: Principal, decision: str, comment: str = "") -> Approval:
@@ -353,8 +443,9 @@ class WorkflowEngine:
         if not (set(a.allowed_roles) & principal.roles):
             deny("You do not hold a role permitted to decide this request.")
         if principal.sub == a.requester and not a.payload.get("_self_ok"):
-            await audit.record(self.db, tenant_id=self.tenant, actor=principal.sub, action="approval.denied_self",
-                               resource_type="approval", resource_id=a.id, outcome="denied")
+            await self._audit(actor=principal.sub, action="approval.denied_self",
+                              resource_type="approval", resource_id=a.id,
+                              actor_type="user", outcome="denied")
             deny("Maker-checker: the requester cannot approve their own request.")
         if any(d["by"] == principal.sub for d in a.decisions):
             deny("You have already decided on this request.")
@@ -363,14 +454,14 @@ class WorkflowEngine:
         a.decisions = decisions
         approved = sum(1 for d in decisions if d["decision"] == "approve")
         if decision == "reject":
-            a.status, a.decided_at = "rejected", now_iso()  # any rejection vetoes
+            a.status, a.decided_at = "rejected", now_iso()
         elif approved >= a.required_approvals:
             a.status, a.decided_at = "approved", now_iso()
         self.db.add(a)
         await self.db.commit()
-        await audit.record(self.db, tenant_id=self.tenant, actor=principal.sub, action=f"approval.{decision}",
-                           resource_type="approval", resource_id=a.id,
-                           details={"run": a.run_id, "comment": comment, "status": a.status})
+        await self._audit(actor=principal.sub, action=f"approval.{decision}",
+                          resource_type="approval", resource_id=a.id, actor_type="user",
+                          details={"run": a.run_id, "comment": comment, "status": a.status})
         if a.status != "pending":
             await self._resume(a)
         return a
@@ -387,7 +478,7 @@ class WorkflowEngine:
         if step.type == "approval":
             st["ctx"][step_key] = {"decision": verdict, "approvers": [d["by"] for d in a.decisions],
                                    "decisions": a.decisions}
-        else:  # guardrail-triggered approval on an agent step: retry (approved) or fail
+        else:
             if verdict == "approved":
                 st["approved_steps"].append(step.id)
             else:
@@ -399,7 +490,6 @@ class WorkflowEngine:
         await self.advance(run.id)
 
     async def sweep_overdue(self, now: datetime | None = None) -> dict[str, int]:
-        """SLA sweeper (run from a scheduler): escalate once, then expire -> rejection."""
         now_s = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         rows = (await self.db.execute(select(Approval).where(
             Approval.tenant_id == self.tenant, Approval.status == "pending", Approval.due_at != None,  # noqa: E711
@@ -413,17 +503,17 @@ class WorkflowEngine:
                 a.due_at = _due(a.payload.get("_due_hours") or 24)
                 self.db.add(a)
                 await self.db.commit()
-                await audit.record(self.db, tenant_id=self.tenant, actor="sla-sweeper", actor_type="system",
-                                   action="approval.escalated", resource_type="approval", resource_id=a.id,
-                                   details={"to": esc})
+                await self._audit(actor="sla-sweeper", action="approval.escalated",
+                                  resource_type="approval", resource_id=a.id,
+                                  details={"to": esc})
                 out["escalated"] += 1
             else:
                 a.status, a.decided_at = "expired", now_iso()
                 self.db.add(a)
                 await self.db.commit()
-                await audit.record(self.db, tenant_id=self.tenant, actor="sla-sweeper", actor_type="system",
-                                   action="approval.expired", resource_type="approval", resource_id=a.id)
-                a.status = "rejected"  # an expired request resumes as a rejection
+                await self._audit(actor="sla-sweeper", action="approval.expired",
+                                  resource_type="approval", resource_id=a.id)
+                a.status = "rejected"
                 await self._resume(a)
                 out["expired"] += 1
         return out
@@ -439,8 +529,9 @@ class WorkflowEngine:
             a.status = "expired"
             self.db.add(a)
         await self.db.commit()
-        await audit.record(self.db, tenant_id=self.tenant, actor=actor, action="workflow.run.cancelled",
-                           resource_type="workflow_run", resource_id=run.id, details={"reason": reason})
+        await self._audit(actor=actor, action="workflow.run.cancelled",
+                          resource_type="workflow_run", resource_id=run.id, actor_type="user",
+                          details={"reason": reason})
         return run
 
 

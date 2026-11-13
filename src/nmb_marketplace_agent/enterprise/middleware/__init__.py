@@ -3,6 +3,7 @@ from .delegation import (
     DELEGATION_TOOLS,
     POLLING_TOOLS,
     SYNC_DELEGATION_TOOLS,
+    CostBudgetExceeded,
     DelegationBudgetExceeded,
     DelegationMiddleware,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "DELEGATION_TOOLS",
     "POLLING_TOOLS",
     "SYNC_DELEGATION_TOOLS",
+    "CostBudgetExceeded",
     "DelegationBudgetExceeded",
     "DelegationMiddleware",
 ]

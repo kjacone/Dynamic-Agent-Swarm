@@ -2,6 +2,7 @@
 import logging
 
 from nmb_marketplace_agent.integrations import connections
+from nmb_marketplace_agent.integrations.langfuse_mask import langfuse_mask
 
 log = logging.getLogger(__name__)
 _registered: set[tuple[str, str]] = set()
@@ -27,7 +28,17 @@ def callback_config(metadata: dict | None = None) -> dict:
 
         key = (creds["host"], creds["public_key"])
         if key not in _registered:
-            Langfuse(public_key=creds["public_key"], secret_key=creds["secret_key"], host=creds["host"])
+            # `mask=` is applied to every input/output/metadata the SDK exports,
+            # including the LangChain callback's spans. Tokens produced by the mask
+            # are the same as those produced by the platform's guardrails — same
+            # HMAC, same REDACTION_KEY — so correlation across audit/Langfuse is
+            # possible without rehydration.
+            Langfuse(
+                public_key=creds["public_key"],
+                secret_key=creds["secret_key"],
+                host=creds["host"],
+                mask=langfuse_mask,
+            )
             _registered.add(key)
         meta = {k: v for k, v in (metadata or {}).items() if v is not None}
         return {"callbacks": [CallbackHandler(public_key=creds["public_key"])], "metadata": meta}

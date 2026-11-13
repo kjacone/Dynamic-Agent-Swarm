@@ -12,12 +12,23 @@ import nmb_marketplace_agent.enterprise.models  # noqa: F401
 
 
 @pytest_asyncio.fixture
-async def db(tmp_path):
+async def db(tmp_path, monkeypatch):
+    from nmb_marketplace_agent.config import database
+
     eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'t.db'}")
     async with eng.begin() as c:
         await c.run_sync(SQLModel.metadata.create_all)
-    async with async_sessionmaker(eng, class_=AsyncSession, expire_on_commit=False)() as s:
+
+    maker = async_sessionmaker(eng, class_=AsyncSession, expire_on_commit=False)
+
+    # Any code that calls `database.async_session()` (the delegation middleware,
+    # audit helpers, etc.) now writes to *this* isolated temp DB instead of
+    # settings.database_url. Resolution happens at call time, so this is safe.
+    monkeypatch.setattr(database, "async_session", maker)
+
+    async with maker() as s:
         yield s
+
     await eng.dispose()
 
 

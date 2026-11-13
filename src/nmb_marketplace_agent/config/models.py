@@ -53,6 +53,7 @@ class AgentConfig(SQLModel, table=True):
     subagent_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     tenant_id: str = Field(default="default", index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    limits: dict = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 class ModelConfig(SQLModel, table=True):

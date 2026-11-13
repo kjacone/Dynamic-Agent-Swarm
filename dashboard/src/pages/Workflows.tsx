@@ -16,8 +16,10 @@ import { Chip, StatusBadge } from "@/components/common/StatusBadge";
 import { useToast } from "@/components/ui/toast";
 import { fmtDate } from "@/lib/utils";
 
-const STEP_TONE: Record<string, string> = { agent: "bg-violet-500", approval: "bg-amber-500", connector: "bg-sky-500",
-  tool: "bg-sky-500", condition: "bg-slate-400", parallel: "bg-indigo-500", set: "bg-slate-400", end: "bg-emerald-500" };
+const STEP_TONE: Record<string, string> = {
+  agent: "bg-violet-500", approval: "bg-amber-500", connector: "bg-sky-500",
+  tool: "bg-sky-500", condition: "bg-slate-400", parallel: "bg-indigo-500", set: "bg-slate-400", end: "bg-emerald-500"
+};
 
 function describe(s: WfSpec["steps"][number]): string {
   switch (s.type) {
@@ -45,7 +47,7 @@ export function Workflows({ me }: { me: Me | null }) {
     api.listWorkflows().then((d) => { setDefs(d); setActive((a) => a ?? d[0]?.key ?? null); }).catch((e) => toast.push(e.message, "error"));
     loadRuns();
   }, []);
-  useEffect(() => { setSpec(null); if (active) api.getWorkflow(active).then(setSpec).catch(() => {}); }, [active]);
+  useEffect(() => { setSpec(null); if (active) api.getWorkflow(active).then(setSpec).catch(() => { }); }, [active]);
   useEffect(() => {
     if (!runs.some((r) => r.status === "running")) return;
     const id = setInterval(loadRuns, 3000); return () => clearInterval(id);
@@ -142,10 +144,10 @@ function StartDialog({ spec, onClose }: { spec: WfSpec; onClose: (r?: RunView) =
               <Label>{k}{d.required && <span className="text-red-500"> *</span>} <span className="text-xs text-muted-foreground">({d.type})</span></Label>
               {d.type === "string" || d.type === "any" || d.type === "object" || d.type === "array"
                 ? <Textarea rows={d.type === "string" || d.type === "any" ? 3 : 4} value={vals[k] ?? ""} onChange={(e) => setVals({ ...vals, [k]: e.target.value })}
-                    placeholder={d.type === "object" || d.type === "array" ? "JSON" : undefined} />
+                  placeholder={d.type === "object" || d.type === "array" ? "JSON" : undefined} />
                 : d.type === "boolean"
                   ? <select className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm" value={vals[k] ?? ""} onChange={(e) => setVals({ ...vals, [k]: e.target.value })}>
-                      <option value="">—</option><option value="true">true</option><option value="false">false</option></select>
+                    <option value="">—</option><option value="true">true</option><option value="false">false</option></select>
                   : <Input type="number" value={vals[k] ?? ""} onChange={(e) => setVals({ ...vals, [k]: e.target.value })} />}
               {d.description && <p className="mt-1 text-xs text-muted-foreground">{d.description}</p>}
             </div>))}
@@ -161,8 +163,8 @@ function RunDialog({ run: initial, canCancel, onClose }: { run: RunView; canCanc
   const [run, setRun] = useState<RunView>(initial);
   const [spec, setSpec] = useState<WfSpec | null>(null);
   const toast = useToast();
-  const refresh = () => api.getRun(initial.id).then(setRun).catch(() => {});
-  useEffect(() => { refresh(); api.getWorkflow(initial.workflow, initial.version).then(setSpec).catch(() => {}); }, []);
+  const refresh = () => api.getRun(initial.id).then(setRun).catch(() => { });
+  useEffect(() => { refresh(); api.getWorkflow(initial.workflow, initial.version).then(setSpec).catch(() => { }); }, []);
   useEffect(() => { if (run.status !== "running") return; const id = setInterval(refresh, 2000); return () => clearInterval(id); }, [run.status]);
   const type = (id: string) => spec?.steps.find((s) => s.id === id)?.type ?? "";
   const active = ["running", "waiting_approval"].includes(run.status);
@@ -174,6 +176,26 @@ function RunDialog({ run: initial, canCancel, onClose }: { run: RunView; canCanc
           <div className="text-xs text-muted-foreground">Started by <b>{run.initiator}</b> · {fmtDate(run.created_at)}{run.outcome && <> · outcome <b>{run.outcome}</b></>}</div>
           {run.error && <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-700 dark:text-red-400">{run.error}</div>}
           {run.status === "waiting_approval" && <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs">Paused for a human decision — see the Approvals tab.</div>}
+          {run.delegations && run.delegations.length > 0 && (
+            <div className="rounded-md border p-3">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Delegations ({run.delegations.length})
+              </div>
+              <ol className="space-y-1.5 text-sm">
+                {run.delegations.map((d, i) => (
+                  <li key={i} className="flex items-start gap-2">
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-violet-500" />
+                    <div>
+                      <span className="mr-2 text-xs text-muted-foreground">#{d.n}</span>
+                      <b>{d.delegate}</b>
+                      {d.task && <div className="text-xs text-muted-foreground">{d.task}</div>}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           <ol className="relative space-y-3 border-l pl-5">
             {run.history.map((h, i) => (
               <li key={i} className="relative">

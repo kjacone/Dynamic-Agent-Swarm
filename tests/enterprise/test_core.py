@@ -9,9 +9,21 @@ from fastapi import HTTPException
 from sqlalchemy import update
 
 from nmb_marketplace_agent.enterprise import audit, licensing
-from nmb_marketplace_agent.enterprise.expr import ExprError, parse_json, render, safe_eval
+from nmb_marketplace_agent.enterprise.expr import (
+    ExprError,
+    parse_json,
+    render,
+    safe_eval,
+)
 from nmb_marketplace_agent.enterprise.guardrails import (
-    DEFAULT_POLICY, Policy, PolicyEngine, redact, rehydrate, scan_injection, scan_pii)
+    DEFAULT_POLICY,
+    Policy,
+    PolicyEngine,
+    redact,
+    rehydrate,
+    scan_injection,
+    scan_pii,
+)
 from nmb_marketplace_agent.enterprise.models import AuditEvent
 from nmb_marketplace_agent.enterprise.rbac import principal_from_token
 
@@ -219,3 +231,36 @@ def test_license_lifecycle(monkeypatch):
 
 def test_license_unenforced_by_default():
     assert licensing.load_license().state == "unenforced"
+
+async def test_build_sync_subagent_guards_tools(monkeypatch):
+    from nmb_marketplace_agent.config.models import SubAgentConfig
+    from nmb_marketplace_agent.subagents import registry as reg
+
+    cfg = SubAgentConfig(id="s1", name="researcher", tenant_id="t1",
+                         tool_ids=[], rag_collection_ids=[])
+    called: dict = {}
+
+    async def fake_guard(tools, tenant_id, agent_id):
+        called.update(tenant_id=tenant_id, agent_id=agent_id, tools=tools)
+        return tools
+
+    monkeypatch.setattr(reg, "guard_agent_tools", fake_guard)
+    out = await reg.build_sync_subagent(cfg)
+
+    assert called == {"tenant_id": "t1", "agent_id": "s1", "tools": []}
+    assert out["name"] == "researcher"
+
+
+async def test_build_subagent_rejects_cross_tenant(monkeypatch):
+    from nmb_marketplace_agent.config.models import SubAgentConfig
+    from nmb_marketplace_agent.subagents import registry as reg
+
+    cfg = SubAgentConfig(id="s1", name="x", tenant_id="tenant-a")
+
+    async def fake_load(_):
+        return cfg
+
+    monkeypatch.setattr(reg, "_load", fake_load)
+
+    with pytest.raises(ValueError, match="belongs to tenant 'tenant-a'"):
+        await reg.build_subagent("s1", tenant_id="tenant-b")

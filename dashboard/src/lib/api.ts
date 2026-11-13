@@ -1,6 +1,7 @@
 const BASE = (import.meta.env.VITE_API_BASE || "http://localhost:8000").replace(/\/$/, "");
 const TOKEN_KEY = "nmb_admin_token";
 
+
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -139,16 +140,59 @@ export interface RunView {
   id: string; workflow: string; version: number; status: string; initiator: string; outcome: string | null; error: string | null;
   history: Array<{ step: string; status: string; ts: string; error?: string }>; created_at: string; updated_at: string;
   context?: Record<string, unknown>;
+    delegations?: Array<{ delegate: string; task: string; n: number }>;
 }
 export interface AuditEventRow {
   id: string; seq: number; ts: string; actor: string; actor_type: string; action: string; resource_type: string;
   resource_id: string; outcome: string; details: Record<string, unknown>; prev_hash: string; hash: string;
 }
+export interface PackAssets {
+  agents: number; supervisor: boolean; workflows: number; connectors: number;
+  knowledge_docs: number; training_rows: number; eval_cases: number;
+  samples: number; models: number;
+}
+export interface PackModel { role: string; tier: string; recommended: string; notes?: string }
+export interface PackWidget {
+  agent?: string; title: string; greeting: string;
+  suggested_prompts: string[]; frontend_tools?: string[]; readable_state?: string[];
+}
+export interface PackSample { id: string; title: string; expect?: string }
+
+export interface ConformanceCaseResult {
+  id: string;
+  passed: boolean;
+  expected: string[];
+  actual: string[];
+  notes: string[];
+}
+
+export interface ConformanceReport {
+  passed?: number;
+  total?: number;
+  cases?: ConformanceCaseResult[];
+  error?: string;
+}
+
 export interface Pack {
-  id: string; name: string; industry: string; version: string; summary: string; priority: "first" | "later";
-  agents: number; workflows: number; frameworks: string[]; kpis: string[];
+  id: string;
+  name: string;
+  industry: string;
+  version: string;
+  summary: string;
+  priority: "first" | "later";
+  delivery: "workflow" | "agent_kit" | "both";
+  audience: string[];
+  assets: PackAssets;
+  frameworks: string[];
+  kpis: string[];
   parameters: Record<string, { default: unknown; description?: string }>;
-  installed: boolean; entitled: boolean; installed_version: string | null;
+  models: PackModel[];
+  widget: PackWidget | null;
+  samples: PackSample[];
+  installed: boolean;
+  entitled: boolean;
+  installed_version: string | null;
+  conformance: ConformanceReport | null;   // ← new
 }
 export interface PostureCheck { id: string; title: string; status: "pass" | "warn" | "fail"; detail: string; remediation: string }
 export interface Readiness {
@@ -189,6 +233,12 @@ export interface ConnectorDetail {
 
 // ── API ────────────────────────────────────────────────────────────
 export const api = {
+   
+  runSample: (_solution: string, _caseId: string): Promise<RunView & { expect?: string }> =>
+    Promise.reject(new ApiError(501, "Sample cases run in Phase B. Workflow is installed, sample path is not.")),
+  solutionEmbed: (_solution: string): Promise<{ agent_id: string; script: string; steps: string[] }> =>
+    Promise.reject(new ApiError(501, "This solution has no embeddable widget yet.")),
+
   // system
   status: (tenant = "default") => request<SystemStatus>(`/system/status?tenant_id=${tenant}`),
   connections: () => request<Record<string, Connection>>("/system/connections"),
@@ -198,7 +248,7 @@ export const api = {
     request<ServiceStatus>(`/system/connections/${name}/test`, { method: "POST" }),
 
 
-    listConnectors: () => request<ConnectorSummary[]>("/enterprise/connectors"),
+  listConnectors: () => request<ConnectorSummary[]>("/enterprise/connectors"),
   getConnector: (name: string) => request<ConnectorDetail>(`/enterprise/connectors/${encodeURIComponent(name)}`),
   saveConnector: (name: string, body: { type: string; config: Record<string, unknown>; enabled?: boolean }) =>
     request(`/enterprise/connectors/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(body) }),
@@ -210,7 +260,7 @@ export const api = {
       `/enterprise/connectors/${encodeURIComponent(name)}/test/${encodeURIComponent(operation)}`,
       { method: "POST", body: JSON.stringify(params) }),
 
-      
+
   // Admin token (legacy) or a named SSO/JWT user: either is a valid console login.
   authCheck: async () => {
     try { return await request<{ ok: boolean }>("/auth/check"); }
@@ -400,8 +450,32 @@ export const api = {
   exportAudit: () => download("/enterprise/audit/export", "audit-export.jsonl"),
   listPacks: () => request<Pack[]>("/enterprise/solutions"),
   installPack: (id: string, parameters: Record<string, unknown>) =>
-    request<{ solution: string; version: string; created: { agents: Record<string, string>; workflows: Array<{ key: string; version: number }>; connectors: string[] } }>(
-      `/enterprise/solutions/${id}/install`, { method: "POST", body: JSON.stringify({ parameters }) }),
+    request<{
+      solution: string;
+      version: string;
+      created: {
+        agents: Record<string, string>;
+        workflows: Array<{ key: string; version: number }>;
+        connectors: string[];
+        supervisor?: string;
+        knowledge?: Array<{
+          collection: string;
+          name: string;
+          docs: number;
+          attach_to: string[];
+          attached_to: string[];
+          status: string;
+        }>;
+        training?: Array<{ name: string; rows: number; task?: string }>;
+        models?: PackModel[];
+        samples?: PackSample[];
+        widget?: PackWidget | null;
+        conformance?: ConformanceReport | null;   // ← new
+      };
+    }>(`/enterprise/solutions/${id}/install`, {
+      method: "POST",
+      body: JSON.stringify({ parameters }),
+    }),
   readiness: () => request<Readiness>("/enterprise/compliance/readiness"),
   capabilities: () => request<Record<string, { description: string; status: string }>>("/enterprise/compliance/capabilities"),
   evidence: () => request<Record<string, unknown>>("/enterprise/compliance/evidence"),
@@ -410,4 +484,6 @@ export const api = {
   exportUsage: () => download("/enterprise/usage/export.csv", "usage.csv"),
   testPolicy: (text: string, direction: string) =>
     request<PolicyDecision>("/enterprise/policies/test", { method: "POST", body: JSON.stringify({ text, direction }) }),
+
+  
 };

@@ -3,7 +3,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from nmb_marketplace_agent.enterprise import compliance
-from nmb_marketplace_agent.enterprise.connectors import ConnectorError, EgressPolicy, build_connector
+from nmb_marketplace_agent.enterprise.connectors import (
+    ConnectorError,
+    EgressPolicy,
+    build_connector,
+)
 from nmb_marketplace_agent.enterprise.connectors.base import resolve_secret
 
 

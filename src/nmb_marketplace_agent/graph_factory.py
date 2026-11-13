@@ -8,6 +8,7 @@ from nmb_marketplace_agent.config.database import async_session
 from nmb_marketplace_agent.config.models import AgentConfig
 from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.config.versioning import effective_config
+from nmb_marketplace_agent.enterprise.middleware.delegation import DelegationMiddleware
 from nmb_marketplace_agent.llm.registry import resolve_model
 from nmb_marketplace_agent.observability import attach
 from nmb_marketplace_agent.prompts.resolver import resolve_system_prompt
@@ -77,19 +78,60 @@ async def make_graph(config: RunnableConfig):
             except Exception as e:
                 log.warning("Skipping RAG collection %s: %s", rag_id, e)
 
-        # Enterprise guardrails: every tool call is policy-checked, audited, and can pause for human approval.
+        # Enterprise guardrails: every tool call is policy-checked, audited, and can pause
+        # for human approval.
         from nmb_marketplace_agent.enterprise.hooks import guard_agent_tools
         tools = await guard_agent_tools(tools, tenant_id, agent.id)
 
-        subagents = await build_subagents(cfg["subagent_ids"])
+        # One shared middleware instance so nested `task` calls at any depth share the
+        # same per-run delegation counter.
+        delegation_mw = DelegationMiddleware()
+
+        subagents = await build_subagents(
+            cfg["subagent_ids"],
+            tenant_id=tenant_id,
+            middleware=[delegation_mw],
+        )
+
+        # Replace the auto-added `general-purpose` subagent (which has filesystem tools
+        # by default) with an inert stub so it cannot bypass the pack's declared
+        # delegates. This is the per-call equivalent of disabling it globally; keeping a
+        # named stub means a model that tries to delegate there is visible in the audit
+        # trail instead of silently succeeding.
+        if not any(
+            (s.get("name") if isinstance(s, dict) else getattr(s, "name", None)) == "general-purpose"
+            for s in subagents
+        ):
+            subagents = list(subagents) + [{
+                "name": "general-purpose",
+                "description": (
+                    "Fallback with no tools. Ask the supervisor to pick a specialist instead."
+                ),
+                "system_prompt": (
+                    "You are a fallback agent with no tools. If you cannot answer from the "
+                    "task description alone, return: 'No suitable specialist was selected; "
+                    "escalate.'"
+                ),
+                "tools": [],
+            }]
+
         model = await resolve_model(cfg["model"] or settings.main_model, tenant_id)
 
+        limits = (agent.limits or {})
         graph = create_deep_agent(
             model=model,
             tools=tools,
             subagents=subagents,
             system_prompt=system_prompt,
+            middleware=[delegation_mw],
+            name=f"supervisor:{agent.id}",
         )
+        # recursion_limit is a standalone config key (not inside `configurable`) and
+        # applies per invocation. deepagents defaults to 1000, far too high for a
+        # supervisor. Bind a lower default; runtime.py can override per call.
+        graph = graph.with_config({
+            "recursion_limit": int(limits.get("max_steps", 100)),
+        })
         return attach(graph, {
             "langfuse_session_id": _thread_id(config, cfgurable),
             "langfuse_user_id": cfgurable.get("user_id"),

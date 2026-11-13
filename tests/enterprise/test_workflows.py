@@ -4,7 +4,11 @@ from nmb_marketplace_agent.enterprise import audit
 from nmb_marketplace_agent.enterprise.guardrails import Policy, PolicyEngine
 from nmb_marketplace_agent.enterprise.models import Approval
 from nmb_marketplace_agent.enterprise.rbac import Principal
-from nmb_marketplace_agent.enterprise.workflows import Runtime, WorkflowEngine, validate_spec
+from nmb_marketplace_agent.enterprise.workflows import (
+    Runtime,
+    WorkflowEngine,
+    validate_spec,
+)
 from nmb_marketplace_agent.enterprise.workflows.engine import WorkflowError
 from nmb_marketplace_agent.enterprise.workflows.spec import WorkflowSpec
 
@@ -202,3 +206,74 @@ async def test_tenant_isolation(db):
     run = await a.start("loan", {"amount": 1}, "x")
     with pytest.raises(WorkflowError):
         await b.advance(run.id)
+
+async def test_delegation_budget_exceeded(db, monkeypatch):
+    """A supervisor that delegates more than max_delegations fails the run cleanly."""
+    from nmb_marketplace_agent.enterprise.middleware.delegation import (
+        DelegationBudgetExceeded,
+        DelegationMiddleware,
+    )
+
+    mw = DelegationMiddleware()
+
+    class _Req:
+        def __init__(self, name, args):
+            self.tool = type("T", (), {"name": name})()
+            self.tool_call = {"name": name, "args": args}
+            self.runtime = type("R", (), {"config": {"configurable": {
+                "tenant_id": "t", "agent_id": "sup", "run_id": "r1", "max_delegations": 2}}})()
+    async def _handler(_req): return "ok"
+
+    for n in range(2):
+        await mw.awrap_tool_call(_Req("task", {"subagent_type": "x"}), _handler)
+    with pytest.raises(DelegationBudgetExceeded):
+        await mw.awrap_tool_call(_Req("task", {"subagent_type": "x"}), _handler)
+
+
+async def test_delegation_audit_rows_written(db):
+    from nmb_marketplace_agent.enterprise.middleware.delegation import (
+        DelegationMiddleware,
+    )
+    mw = DelegationMiddleware()
+
+    class _Req:
+        tool = type("T", (), {"name": "task"})()
+        tool_call = {"name": "task", "args": {"subagent_type": "risk-analyst", "description": "score this"}}
+        runtime = type("R", (), {"config": {"configurable": {
+            "tenant_id": "t1", "agent_id": "sup", "run_id": "run-42", "max_delegations": 8}}})()
+    async def _handler(_): return "ok"
+    await mw.awrap_tool_call(_Req(), _handler)
+
+    rows = await audit.query(db, "t1", action="agent.delegated", resource_id="run-42")
+    assert len(rows) == 1 and rows[0].details["delegate"] == "risk-analyst"
+
+
+async def test_conformance_missing_delegate():
+    from nmb_marketplace_agent.enterprise.workflows.conformance import (
+        ConformanceCase,
+        run_conformance,
+    )
+
+    class _FakeSub:
+        def __init__(self, name): self.name = name; self.output = _AsyncValue(name)
+    class _AsyncValue:
+        def __init__(self, v): self.v = v
+        def __await__(self):
+            async def _w(): return self.v
+            return _w().__await__()
+
+    class _Stream:
+        def __init__(self, names):
+            async def gen():
+                for n in names: yield _FakeSub(n)
+            self.subagents = gen()
+            self.output = _AsyncValue(None)
+
+    class _FakeGraph:
+        def __init__(self, names): self._n = names
+        async def astream_events(self, *_a, **_k): return _Stream(self._n)
+
+    case = ConformanceCase(id="x", title="", input="q",
+                           expect_delegations=["a", "b"], must_not_call=[])
+    out = await run_conformance(_FakeGraph(["a"]), [case])   # missed "b"
+    assert not out[0].passed and "missing delegation: b" in out[0].notes

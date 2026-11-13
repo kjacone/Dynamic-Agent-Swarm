@@ -3,7 +3,15 @@ from sqlmodel import select
 from nmb_marketplace_agent.config.database import async_session
 from nmb_marketplace_agent.config.models import AgentConfig, AgentVersion
 
-FIELDS = ["name", "model", "system_prompt", "tool_ids", "rag_collection_ids", "subagent_ids"]
+FIELDS = [
+    "name",
+    "model",
+    "system_prompt",
+    "tool_ids",
+    "rag_collection_ids",
+    "subagent_ids",
+    "limits",
+]
 
 
 def snapshot_of(a: AgentConfig) -> dict:
@@ -13,7 +21,10 @@ def snapshot_of(a: AgentConfig) -> dict:
 async def published_version(agent_id: str) -> AgentVersion | None:
     async with async_session() as s:
         res = await s.execute(
-            select(AgentVersion).where(AgentVersion.agent_id == agent_id, AgentVersion.published == True)  # noqa: E712
+            select(AgentVersion).where(
+                AgentVersion.agent_id == agent_id,
+                AgentVersion.published == True,  # noqa: E712
+            )
         )
         return res.scalars().first()
 

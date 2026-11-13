@@ -19,10 +19,19 @@ from nmb_marketplace_agent.enterprise import audit
 from nmb_marketplace_agent.enterprise.expr import ExprError, render, safe_eval
 from nmb_marketplace_agent.enterprise.guardrails import PolicyEngine
 from nmb_marketplace_agent.enterprise.metering import record_usage
-from nmb_marketplace_agent.enterprise.models import Approval, WorkflowDefinition, WorkflowRun, now_iso
+from nmb_marketplace_agent.enterprise.models import (
+    Approval,
+    WorkflowDefinition,
+    WorkflowRun,
+    now_iso,
+)
 from nmb_marketplace_agent.enterprise.rbac import Principal
 from nmb_marketplace_agent.enterprise.workflows.spec import (
-    Step, WorkflowSpec, validate_inputs, validate_spec)
+    Step,
+    WorkflowSpec,
+    validate_inputs,
+    validate_spec,
+)
 
 
 class WorkflowError(Exception):
@@ -41,6 +50,10 @@ class Runtime:
     connector_runner: Callable[[str, str, dict], Awaitable[Any]] | None = None
     policy: PolicyEngine = field(default_factory=PolicyEngine)
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    # In-process supervisor path (accurate cost tracking across `task` boundaries).
+    supervisor_runner: Callable[[str, str, dict, list], Awaitable[Any]] | None = None
+    # Agent ids that should use supervisor_runner instead of agent_runner.
+    supervisor_ids: set[str] = field(default_factory=set)
 
 
 def _due(hours: float | None) -> str | None:
@@ -230,6 +243,12 @@ class WorkflowEngine:
             async def _set():
                 return val
             return _set, None
+
+        # Context keys the supervisor's own graph factory and the CostTracker both read.
+        # Leading underscore so _public() and run_view drop them from what approvers see.
+        ctx["_run_id"] = run.id
+        ctx["_step_id"] = step.id
+
         args = render(step.input, ctx)
         if step.type in ("tool", "connector"):
             runner = self.rt.tool_runner if step.type == "tool" else self.rt.connector_runner
@@ -246,6 +265,7 @@ class WorkflowEngine:
                 return (lambda: runner(step.tool or "", args)), None
             await record_usage(self.db, self.tenant, "connector_calls", connector=step.connector)
             return (lambda: runner(step.connector or "", step.operation or "", args)), None
+
         # agent
         prompt = render(step.prompt or "", ctx)
         prompt = prompt if isinstance(prompt, str) else str(prompt)
@@ -265,6 +285,23 @@ class WorkflowEngine:
                     raise PolicyViolation("Model output blocked: " + "; ".join(od.reasons))
                 return od.text if od.text is not None else out
             return out
+
+        # Supervisor path: in-process so `on_llm_end` fires across `task` boundaries
+        # (see docs/DESIGN_AGENT_INVOCATION.md and deepagents#6555).
+        if step.agent in self.rt.supervisor_ids and self.rt.supervisor_runner:
+            from nmb_marketplace_agent.enterprise.observability.cost_tracker import CostTracker
+
+            tracker = CostTracker(tenant_id=self.tenant, run_id=run.id, step_id=step.id)
+
+            async def _supervisor_call():
+                try:
+                    return await self.rt.supervisor_runner(
+                        step.agent or "", prompt, ctx, [tracker],
+                    )
+                finally:
+                    await tracker.flush(self.db)
+            return _supervisor_call, finish
+
         return (lambda: self.rt.agent_runner(step.agent or "", prompt, ctx)), finish
 
     # ── approvals ─────────────────────────────────────────────────────
@@ -343,7 +380,6 @@ class WorkflowEngine:
         if not run or run.status != "waiting_approval":
             return
         st = copy.deepcopy(run.state)
-        step_key = None
         spec = await self.get_spec(run.workflow_key, run.workflow_version)
         step = spec.by_id()[a.step_id]
         step_key = step.output or step.id

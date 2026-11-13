@@ -11,7 +11,12 @@ from sqlmodel import select
 
 from nmb_marketplace_agent.api.deps import get_db
 from nmb_marketplace_agent.api.routes.runs import final_text, invoke_agent
-from nmb_marketplace_agent.config.models import AgentConfig, EvalCase, EvalDataset, EvalRun
+from nmb_marketplace_agent.config.models import (
+    AgentConfig,
+    EvalCase,
+    EvalDataset,
+    EvalRun,
+)
 from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.config.versioning import published_version
 from nmb_marketplace_agent.llm.registry import resolve_model

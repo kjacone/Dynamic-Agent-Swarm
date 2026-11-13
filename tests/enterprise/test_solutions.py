@@ -1,14 +1,26 @@
+import tempfile
+from pathlib import Path
+
 import pytest
 from sqlmodel import select
 
 from nmb_marketplace_agent.config.models import AgentConfig, EvalCase, EvalDataset
 from nmb_marketplace_agent.enterprise import audit
 from nmb_marketplace_agent.enterprise.guardrails import PolicyEngine
-from nmb_marketplace_agent.enterprise.models import Approval, ConnectorConfig, PolicySet, WorkflowDefinition
+from nmb_marketplace_agent.enterprise.models import (
+    Approval,
+    ConnectorConfig,
+    PolicySet,
+    WorkflowDefinition,
+)
 from nmb_marketplace_agent.enterprise.rbac import Principal
 from nmb_marketplace_agent.enterprise.runtime import load_policy
 from nmb_marketplace_agent.enterprise.solutions import loader
-from nmb_marketplace_agent.enterprise.workflows import Runtime, WorkflowEngine, validate_spec
+from nmb_marketplace_agent.enterprise.workflows import (
+    Runtime,
+    WorkflowEngine,
+    validate_spec,
+)
 from nmb_marketplace_agent.enterprise.workflows.spec import WorkflowSpec
 
 ALL = ["banking-kyc", "insurance-claims", "telco-service-ops", "gov-document-workflows",
@@ -135,3 +147,56 @@ async def test_kyc_screening_outage_falls_back_to_human(db):
     assert run.status == "waiting_approval" and "risk-analyst" not in log  # nothing proceeds without screening
     ap = (await db.execute(select(Approval))).scalars().first()
     assert "screening service down" in ap.summary
+
+
+
+async def test_install_creates_knowledge_collection(db, monkeypatch):
+    from nmb_marketplace_agent.enterprise.solutions import loader
+
+    monkeypatch.setattr(loader, "build_index", lambda *a, **k: 2)
+    monkeypatch.setattr(loader, "DOCS_ROOT", Path(tempfile.mkdtemp()))
+
+    inst = await loader.install_solution(db, "t1", "banking-kyc", "test")
+    kb = inst.created.get("knowledge", [])
+    assert len(kb) == 1
+    entry = kb[0]
+    assert entry["name"] == "kyc-policy"
+    assert entry["docs"] == 2
+    assert entry["status"] == "ready"
+    # both declared attach_to keys should have resolved to real agents
+    assert set(entry["attach_to"]) == {"risk-analyst", "case-writer"}
+    assert len(entry["attached_to"]) == 2
+
+
+async def test_install_registers_training_dataset(db, tmp_path, monkeypatch):
+    from nmb_marketplace_agent.enterprise.solutions import loader
+    from nmb_marketplace_agent.training import store as training_store
+
+    def _root():
+        for d in ("datasets", "queue", "runs"):
+            (tmp_path / d).mkdir(parents=True, exist_ok=True)
+        return tmp_path
+    monkeypatch.setattr(training_store, "root", _root)
+    monkeypatch.setattr(loader, "build_index", lambda *a, **k: 2)
+    monkeypatch.setattr(loader, "DOCS_ROOT", tmp_path / "docs")
+
+    inst = await loader.install_solution(db, "t1", "banking-kyc", "test")
+    tr = inst.created.get("training", [])
+    assert len(tr) == 1
+    assert tr[0]["rows"] == 3
+    # the file the training store wrote must exist and be readable
+    assert (tmp_path / "datasets" / f"{tr[0]['name']}.json").exists()
+
+
+def test_list_packs_returns_v2_shape():
+    from nmb_marketplace_agent.enterprise.solutions import loader
+
+    packs = loader.list_packs()
+    kyc = next(p for p in packs if p["id"] == "banking-kyc")
+    assert kyc["delivery"] == "workflow"
+    assert kyc["assets"]["knowledge_docs"] == 2
+    assert kyc["assets"]["training_rows"] == 3
+    assert kyc["assets"]["samples"] == 3
+    assert kyc["assets"]["models"] == 2
+    assert len(kyc["samples"]) == 3
+    assert {c["id"] for c in kyc["samples"]} == {"low-risk", "high-risk", "injection"}

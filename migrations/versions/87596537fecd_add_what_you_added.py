@@ -3,9 +3,8 @@
 Revision ID: 87596537fecd
 Revises: 0001_enterprise
 """
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = '87596537fecd'
 down_revision = '0001_enterprise'

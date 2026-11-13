@@ -1,0 +1,20 @@
+{
+ "acme-banking-kyc-kyc-extraction-sample": {
+  "file_name": "acme-banking-kyc-kyc-extraction-sample.json"
+ },
+ "bank-a-banking-kyc-kyc-extraction-sample": {
+  "file_name": "bank-a-banking-kyc-kyc-extraction-sample.json"
+ },
+ "bank-b-banking-kyc-kyc-extraction-sample": {
+  "file_name": "bank-b-banking-kyc-kyc-extraction-sample.json"
+ },
+ "t-banking-kyc-kyc-extraction-sample": {
+  "file_name": "t-banking-kyc-kyc-extraction-sample.json"
+ },
+ "bank-banking-kyc-kyc-extraction-sample": {
+  "file_name": "bank-banking-kyc-kyc-extraction-sample.json"
+ },
+ "t1-banking-kyc-kyc-extraction-sample": {
+  "file_name": "t1-banking-kyc-kyc-extraction-sample.json"
+ }
+}

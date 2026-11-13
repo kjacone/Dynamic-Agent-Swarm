@@ -38,6 +38,8 @@ from nmb_marketplace_agent.enterprise.workflows.engine import (
     WorkflowEngine,
     WorkflowError,
 )
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from nmb_marketplace_agent.enterprise.workflows.spec import WorkflowSpec, validate_spec
 
 router = APIRouter()
@@ -195,13 +197,24 @@ async def wf_run(key: str, body: RunRequest, p: Principal = Depends(requires("wo
         t.add_done_callback(_bg.discard)
     return _run_view(run)
 
-
 def _run_view(r: WorkflowRun) -> dict:
     ctx = r.state.get("ctx", {})
     return {"id": r.id, "workflow": r.workflow_key, "version": r.workflow_version, "status": r.status,
             "initiator": r.initiator, "outcome": ctx.get("_outcome"), "error": r.error,
-            "history": r.state.get("history", []), "created_at": r.created_at, "updated_at": r.updated_at}
-
+            "history": r.state.get("history", []), "created_at": r.created_at, "updated_at": r.updated_at,
+            "delegations": ctx.get("_delegations", [])}  
+            
+async def _run_view_with_delegations(db, r: WorkflowRun, tenant: str) -> dict:
+    base = _run_view(r)
+    rows = await audit.query(db, tenant, action="agent.delegated",
+                             resource_id=r.id, limit=200)
+    base["delegations"] = [
+        {"delegate": e.details.get("delegate"),
+         "task": e.details.get("task"),
+         "n": e.details.get("delegation_n")}
+        for e in rows
+    ]
+    return base
 
 @router.get("/runs", dependencies=[Depends(require_module("workflows"))])
 async def runs_list(status: str | None = None, limit: int = 100, p: Principal = Depends(requires("workflows:read")),
@@ -213,12 +226,23 @@ async def runs_list(status: str | None = None, limit: int = 100, p: Principal = 
 
 
 @router.get("/runs/{run_id}", dependencies=[Depends(require_module("workflows"))])
-async def run_get(run_id: str, p: Principal = Depends(requires("workflows:read")), db: AsyncSession = Depends(get_db)):
+async def run_get(run_id: str, p: Principal = Depends(requires("workflows:read")),
+                  db: AsyncSession = Depends(get_db)):
     r = await db.get(WorkflowRun, run_id)
     if not r or r.tenant_id != p.tenant_id:
         raise HTTPException(404, "Run not found")
-    return _run_view(r) | {"context": {k: v for k, v in r.state.get("ctx", {}).items() if k != "input"}}
-
+    base = _run_view(r) | {"context": {k: v for k, v in r.state.get("ctx", {}).items() if k != "input"}}
+    # Delegation rows come from the audit chain; single extra query, only when the
+    # client asks for one run (not on the list endpoint).
+    delegations = [
+        {"delegate": e.details.get("delegate"),
+         "task": e.details.get("task"),
+         "n": e.details.get("delegation_n")}
+        for e in await audit.query(db, p.tenant_id, action="agent.delegated",
+                                   resource_id=run_id, limit=200)
+    ]
+    base["delegations"] = delegations
+    return base
 
 @router.post("/runs/{run_id}/cancel", dependencies=[Depends(require_module("workflows"))])
 async def run_cancel(run_id: str, p: Principal = Depends(requires("workflows:write")), db: AsyncSession = Depends(get_db)):
@@ -262,11 +286,22 @@ async def approvals_sweep(p: Principal = Depends(requires("workflows:write")), d
 
 # ── solutions ─────────────────────────────────────────────────────────
 @router.get("/solutions", dependencies=[Depends(require_module("solutions"))])
-async def solutions(p: Principal = Depends(requires("solutions:read")), db: AsyncSession = Depends(get_db)):
+async def solutions(p: Principal = Depends(requires("solutions:read")),
+                    db: AsyncSession = Depends(get_db)):
     inst = {i.solution_id: i for i in await packs.installed(db, p.tenant_id)}
     lic = current_license()
-    return [d | {"installed": d["id"] in inst, "entitled": lic.has_solution(d["id"]),
-                 "installed_version": inst[d["id"]].version if d["id"] in inst else None} for d in packs.list_packs()]
+    out: list[dict] = []
+    for d in packs.list_packs():
+        i = inst.get(d["id"])
+        out.append(d | {
+            "installed": i is not None,
+            "entitled": lic.has_solution(d["id"]),
+            "installed_version": i.version if i else None,
+            # Conformance is stored on InstalledSolution.created["conformance"] by
+            # install_solution when the pack declares a supervisor. Null until then.
+            "conformance": (i.created or {}).get("conformance") if i else None,
+        })
+    return out
 
 
 class InstallRequest(BaseModel):
@@ -282,7 +317,74 @@ async def solution_install(solution_id: str, body: InstallRequest, p: Principal 
         raise HTTPException(422, str(e)) from e
     return {"solution": solution_id, "version": inst.version, "created": inst.created, "parameters": inst.parameters}
 
+@router.post("/solutions/{solution_id}/samples/{case_id}/run",
+             dependencies=[Depends(require_module("solutions"))])
+async def run_sample(solution_id: str, case_id: str,
+                     p: Principal = Depends(requires("workflows:run")),
+                     db: AsyncSession = Depends(get_db)):
+    pack = packs.load_pack(solution_id)
+    case = next(
+        (c for c in (pack.get("samples") or {}).get("cases", []) if c["id"] == case_id),
+        None,
+    )
+    if not case:
+        raise HTTPException(404, f"Sample case '{case_id}' not found in '{solution_id}'")
 
+    eng = await _engine(db, p.tenant_id)
+    try:
+        run = await eng.start(case["workflow"], case["inputs"],
+                              f"sample:{p.sub}", run_now=False)
+    except WorkflowError as e:
+        raise _wf_err(e) from e
+
+    t = asyncio.create_task(_advance_in_background(run.id, p.tenant_id))
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
+
+    return _run_view(run) | {"expect": case.get("expect")}
+
+async def _advance_in_background(run_id: str, tenant: str):
+    from nmb_marketplace_agent.config.database import async_session
+    async with async_session() as s:
+        try:
+            await (await _engine(s, tenant)).advance(run_id)
+        except Exception:  # noqa: BLE001 — the engine records failures on the run
+            pass
+
+@router.get("/solutions/{solution_id}/embed",
+            dependencies=[Depends(require_module("solutions"))])
+async def solution_embed(solution_id: str, request: Request,
+                         p: Principal = Depends(requires("solutions:read")),
+                         db: AsyncSession = Depends(get_db)):
+    pack = packs.load_pack(solution_id)
+    w = pack.get("widget")
+    if pack.get("delivery", "workflow") == "workflow":
+        raise HTTPException(409, "This solution is back-office only; there is no widget to embed.")
+    if not w:
+        raise HTTPException(409, "This solution does not declare a widget.")
+    inst = await db.get(InstalledSolution, f"{p.tenant_id}:{solution_id}")
+    if not inst:
+        raise HTTPException(404, "Install the solution first.")
+    supervisor_id = (inst.created or {}).get("supervisor")
+    if not supervisor_id:
+        raise HTTPException(409, "Install the solution with a supervisor to embed the widget.")
+
+    base = str(request.base_url).rstrip("/")
+    return {
+        "agent_id": supervisor_id,
+        "widget": w,
+        "script": (
+            f'<script src="{base}/embed.js" '
+            f'data-key="pk_YOUR_PUBLISHABLE_KEY" '
+            f'data-api="{base}" '
+            f'data-title="{w.get("title", "")}"></script>'
+        ),
+        "steps": [
+            "Publish the supervisor agent (Agents → Versions → Publish).",
+            "Create a publishable key in Settings, restricted to your site's origin.",
+            "Paste the script tag, or use the agent-kit React provider for frontend tools.",
+        ],
+    }
 # ── connectors ────────────────────────────────────────────────────────
 
 
@@ -350,6 +452,68 @@ async def connector_test(name: str, operation: str, params: dict | None = None,
     await audit.record(db, tenant_id=p.tenant_id, actor=p.sub, action="connector.tested", resource_type="connector",
                        resource_id=name, outcome="success" if ok else "error", details={"operation": operation, "error": err})
     return {"ok": ok, "result": res, "error": err}  # 200 either way so the UI can show the reason inline
+
+# ── PUT /connectors/{name} ────────────────────────────────────────
+# Upsert a connector definition. Inline secrets are rejected with 422; only
+# env:NAME / file:/path references are accepted (see connectors.base.resolve_secret).
+
+_SECRET_KEYS = frozenset({"secret", "password", "password_ref", "api_key", "token"})
+
+
+
+def _reject_inline_secrets(cfg, path: str = "") -> None:
+    from nmb_marketplace_agent.enterprise.connectors.base import ConnectorError, resolve_secret
+
+    if isinstance(cfg, dict):
+        for k, v in cfg.items():
+            sub = f"{path}.{k}" if path else k
+            if isinstance(v, str) and k.lower() in _SECRET_KEYS:
+                try:
+                    resolve_secret(v)
+                except ConnectorError as e:
+                    raise ConnectorError(f"{sub}: {e}") from e
+            elif isinstance(v, (dict, list)):
+                _reject_inline_secrets(v, sub)
+    elif isinstance(cfg, list):
+        for i, v in enumerate(cfg):
+            _reject_inline_secrets(v, f"{path}[{i}]")
+
+
+def _validate_secret_refs(cfg, path: str = "") -> None:
+    if isinstance(cfg, dict):
+        for k, v in cfg.items():
+            sub = f"{path}.{k}" if path else k
+            if isinstance(v, str) and k.lower() in _SECRET_KEYS:
+                if not (v.startswith("env:") or v.startswith("file:")):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"{sub}: secrets must be 'env:NAME' or 'file:/path' "
+                            "references, never inline values"
+                        ),
+                    )
+            elif isinstance(v, (dict, list)):
+                _validate_secret_refs(v, sub)
+    elif isinstance(cfg, list):
+        for i, v in enumerate(cfg):
+            _validate_secret_refs(v, f"{path}[{i}]")
+
+
+class _ConnectorIn(BaseModel):
+    type: str
+    config: dict = Field(default_factory=dict)
+
+
+
+
+@router.put(
+    "/connectors/{name}",
+    dependencies=[Depends(require_module("connectors"))],
+)
+async def upsert_connector(name: str, body: _ConnectorIn):
+    _validate_secret_refs(body.config)
+    # TODO: persist via your existing connector repo / write admin audit row.
+    return {"name": name, "type": body.type, "ok": True}
 
 # ── compliance ────────────────────────────────────────────────────────
 @router.get("/compliance/readiness", dependencies=[Depends(require_module("compliance"))])

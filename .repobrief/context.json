@@ -1,0 +1,167 @@
+{
+  "generatedAt": "2026-11-10T16:50:10.594Z",
+  "rootDir": "/Users/macbook/Downloads/custom-llm/nmb_marketplace_agent",
+  "structure": {
+    "projectType": "monorepo",
+    "keyDirectories": [
+      "src",
+      "tests"
+    ],
+    "entryPoints": [],
+    "detection": {
+      "languages": [
+        "Python"
+      ],
+      "framework": "FastAPI",
+      "buildSystem": "pip/pyproject",
+      "entryPoints": []
+    }
+  },
+  "dependencies": {
+    "runtime": [
+      {
+        "name": "deepagents",
+        "version": "*",
+        "type": "runtime",
+        "source": "pyproject.toml"
+      },
+      {
+        "name": "langgraph-cli[inmem",
+        "version": "*",
+        "type": "runtime",
+        "source": "pyproject.toml"
+      }
+    ],
+    "dev": []
+  },
+  "gitHistory": {
+    "hotFiles": [
+      {
+        "path": ".env.example",
+        "commits": 3
+      },
+      {
+        "path": "dashboard/src/pages/Agents.tsx",
+        "commits": 3
+      },
+      {
+        "path": "dashboard/src/pages/Prompts.tsx",
+        "commits": 3
+      },
+      {
+        "path": "docker/litellm/config.yaml",
+        "commits": 3
+      },
+      {
+        "path": "pyproject.toml",
+        "commits": 3
+      },
+      {
+        "path": "scripts/seed.py",
+        "commits": 3
+      },
+      {
+        "path": "src/nmb_marketplace_agent/api/routes/agents.py",
+        "commits": 3
+      },
+      {
+        "path": "src/nmb_marketplace_agent/config/models.py",
+        "commits": 3
+      },
+      {
+        "path": "src/nmb_marketplace_agent/config/settings.py",
+        "commits": 3
+      },
+      {
+        "path": "src/nmb_marketplace_agent/static/index.html",
+        "commits": 3
+      },
+      {
+        "path": "uv.lock",
+        "commits": 3
+      },
+      {
+        "path": "README.md",
+        "commits": 2
+      },
+      {
+        "path": "dashboard/src/App.tsx",
+        "commits": 2
+      },
+      {
+        "path": "dashboard/src/components/layout/Sidebar.tsx",
+        "commits": 2
+      },
+      {
+        "path": "dashboard/src/components/layout/Topbar.tsx",
+        "commits": 2
+      },
+      {
+        "path": "dashboard/src/components/layout/nav.ts",
+        "commits": 2
+      },
+      {
+        "path": "dashboard/src/lib/api.ts",
+        "commits": 2
+      },
+      {
+        "path": "dashboard/src/pages/Login.tsx",
+        "commits": 2
+      },
+      {
+        "path": "src/nmb_marketplace_agent/api/main.py",
+        "commits": 2
+      },
+      {
+        "path": "src/nmb_marketplace_agent/api/routes/public.py",
+        "commits": 2
+      }
+    ],
+    "recentCommits": [
+      {
+        "hash": "23e816cbed66e98296fb690201becbbc93d88529",
+        "date": "2026-11-10T18:53:16+03:00",
+        "message": "feature: adding workflows to the dynamic agent",
+        "author": "jacone keya sakwa"
+      },
+      {
+        "hash": "3bd82e0cd6a6349c843d4115fa1d6254c8877056",
+        "date": "2026-11-09T15:33:46+03:00",
+        "message": "feature: adding fixes to the dynamic agent",
+        "author": "jacone keya sakwa"
+      },
+      {
+        "hash": "ea4aad4a013140bde4f6ea373b4c2b215aea395a",
+        "date": "2026-10-29T12:19:47+03:00",
+        "message": "Initial commit: Dynamic Agent Swarm",
+        "author": "jacone keya sakwa"
+      }
+    ],
+    "contributors": [
+      {
+        "name": "jacone keya sakwa",
+        "email": "kjacone@gmail.com",
+        "commits": 3
+      }
+    ],
+    "totalCommits": 3
+  },
+  "patterns": {
+    "namingConvention": "kebab-case",
+    "importStyle": "esm",
+    "errorHandling": [
+      "throw new Error",
+      "Promise.catch",
+      "try/catch"
+    ],
+    "testingFramework": "pytest",
+    "testCommand": "pytest",
+    "lintersFormatters": [],
+    "ciCd": [],
+    "monorepoTooling": [],
+    "docker": [
+      "Dockerfile",
+      "docker-compose.yml"
+    ]
+  }
+}

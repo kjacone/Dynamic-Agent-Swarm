@@ -10,7 +10,12 @@ from sqlmodel import select
 
 from nmb_marketplace_agent.api.deps import get_db
 from nmb_marketplace_agent.config.models import (
-    AgentConfig, EvalDataset, ModelConfig, RAGCollection, SubAgentConfig, ToolConfig,
+    AgentConfig,
+    EvalDataset,
+    ModelConfig,
+    RAGCollection,
+    SubAgentConfig,
+    ToolConfig,
 )
 from nmb_marketplace_agent.integrations import connections
 from nmb_marketplace_agent.integrations import langfuse as lf

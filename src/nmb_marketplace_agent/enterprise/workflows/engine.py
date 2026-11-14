@@ -83,6 +83,17 @@ class WorkflowEngine:
             return
         await record_usage(self.db, self.tenant, metric, **dims)
 
+    async def _notify_whatsapp(self, run: WorkflowRun) -> None:
+        """Tell a WhatsApp customer when their background task finishes."""
+        if self.rt.shadow or not str(run.initiator or "").startswith("wa:"):
+            return
+        try:
+            from nmb_marketplace_agent.enterprise import whatsapp as whatsapp_service
+
+            await whatsapp_service.queue_task_update(self.db, run)
+        except Exception:  # noqa: BLE001 - a channel failure must never fail the run
+            log.exception("Could not queue the WhatsApp task update for run %s", run.id)
+
     # ── definitions ───────────────────────────────────────────────────
     async def save_definition(self, spec: WorkflowSpec | dict, actor: str) -> WorkflowDefinition:
         spec = WorkflowSpec.model_validate(spec) if isinstance(spec, dict) else spec
@@ -149,6 +160,7 @@ class WorkflowEngine:
         while st["cursor"]:
             if st["n"] >= spec.max_steps:
                 await self._save(run, st, "failed", "max_steps exceeded (possible loop)")
+                await self._notify_whatsapp(run)
                 break
             step = by[st["cursor"]]
             st["n"] += 1
@@ -168,6 +180,7 @@ class WorkflowEngine:
                 await self._audit(actor="workflow-engine", action="workflow.run.failed",
                                   resource_type="workflow_run", resource_id=run.id,
                                   outcome="error", details={"step": step.id, "error": str(e)[:300]})
+                await self._notify_whatsapp(run)
                 return run
             if outcome == "WAIT":
                 await self._save(run, st, "waiting_approval")
@@ -185,6 +198,7 @@ class WorkflowEngine:
                 if action == "block":
                     await self._save(run, st, "failed",
                                      f"Workflow rule blocked after '{step.id}'")
+                    await self._notify_whatsapp(run)
                     return run
                 if action == "route_to" and target and target in by:
                     st["cursor"] = target
@@ -208,6 +222,7 @@ class WorkflowEngine:
             await self._audit(actor="workflow-engine", action="workflow.run.completed",
                               resource_type="workflow_run", resource_id=run.id,
                               details={"outcome": st["ctx"].get("_outcome", "completed")})
+            await self._notify_whatsapp(run)
         return run
 
     async def _log(self, run, step, outcome, details=None):
@@ -537,6 +552,7 @@ class WorkflowEngine:
         await self._audit(actor=actor, action="workflow.run.cancelled",
                           resource_type="workflow_run", resource_id=run.id, actor_type="user",
                           details={"reason": reason})
+        await self._notify_whatsapp(run)
         return run
 
 

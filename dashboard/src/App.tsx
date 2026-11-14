@@ -18,6 +18,7 @@ import { Observability } from "@/pages/Observability";
 import { Settings } from "@/pages/Settings";
 import { Approvals } from "@/pages/Approvals";
 import { Handoffs } from "@/pages/Handoffs";
+import { WhatsApp } from "@/pages/WhatsApp";
 import { Workflows } from "@/pages/Workflows";
 import { Solutions } from "@/pages/Solutions";
 import { Audit } from "@/pages/Audit";
@@ -90,6 +91,7 @@ export default function App() {
           {tab === "settings" && <Settings tenant={tenant} />}
           {tab === "approvals" && <Approvals key={tenant} me={me} onChanged={refreshPending} />}
           {tab === "handoffs" && <Handoffs key={tenant} me={me} />}
+          {tab === "whatsapp" && <WhatsApp key={tenant} me={me} tenant={tenant} />}
           {tab === "workflows" && <Workflows key={tenant} me={me} tenant={tenant} />}
           {tab === "solutions" && <Solutions key={tenant} me={me} />}
           {tab === "audit" && <Audit key={tenant} me={me} />}

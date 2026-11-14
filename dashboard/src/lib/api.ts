@@ -343,6 +343,30 @@ export interface Readiness {
     controls: Array<{ id: string; title: string; supported: boolean; gaps: string[]; roadmap: string[] }>
   }>;
 }
+export interface WhatsAppConfig {
+  graph_configured: boolean; simulator: boolean;
+  app_secret_set: boolean; verify_token_set: boolean; unsigned_webhooks_allowed: boolean;
+  webhook_path: string; bound_numbers: number;
+}
+export interface WhatsAppAccount {
+  id: string; tenant_id: string; agent_id: string; phone_number_id: string;
+  display_phone: string; enabled: boolean; created_at: string;
+}
+export interface WhatsAppContact {
+  id: string; tenant_id: string; account_id: string; wa_id: string; user_id: string;
+  thread_id: string; display_name: string; created_at: string; last_seen_at: string;
+  message_count?: number;
+}
+export interface WhatsAppMessage {
+  id: string; direction: "in" | "out"; kind: string; status: string;
+  body: string; created_at: string; error: string | null;
+}
+export interface WhatsAppTranscript { contact: WhatsAppContact; messages: WhatsAppMessage[] }
+export interface WhatsAppSimResult {
+  ok: boolean; reply?: string; thread_id?: string; reason?: string;
+  duplicate?: boolean; contact_id?: string;
+}
+export interface WhatsAppSendResult { id: string; status: string; attempts: number; error: string | null }
 export interface CostPerCase {
   workflow: string;
   cases: number;
@@ -900,6 +924,29 @@ export const api = {
     request<LicenceUpgradeRequest>("/enterprise/licence/upgrade-requests", {
       method: "POST", body: JSON.stringify(body),
     }),
+
+  // WhatsApp channel
+  whatsappConfig: () => request<WhatsAppConfig>("/enterprise/whatsapp/config"),
+  whatsappAccounts: () => request<WhatsAppAccount[]>("/enterprise/whatsapp/accounts"),
+  saveWhatsAppAccount: (body: {
+    phone_number_id: string; agent_id: string; display_phone: string; enabled: boolean;
+  }) => request<WhatsAppAccount>("/enterprise/whatsapp/accounts", { method: "POST", body: JSON.stringify(body) }),
+  deleteWhatsAppAccount: (id: string) =>
+    request<{ deleted: string }>(`/enterprise/whatsapp/accounts/${id}`, { method: "DELETE" }),
+  whatsappContacts: () => request<WhatsAppContact[]>("/enterprise/whatsapp/contacts"),
+  whatsappTranscript: (waId: string, limit = 100) =>
+    request<WhatsAppTranscript>(`/enterprise/whatsapp/contacts/${encodeURIComponent(waId)}/messages?limit=${limit}`),
+  simulateWhatsApp: (body: { wa_id: string; text: string; display_name?: string }) =>
+    request<WhatsAppSimResult>("/enterprise/whatsapp/simulate", { method: "POST", body: JSON.stringify(body) }),
+  notifyWhatsApp: (body: { wa_id: string; text: string; subject?: string }) =>
+    request<WhatsAppSendResult>("/enterprise/whatsapp/notify", { method: "POST", body: JSON.stringify(body) }),
+  runWhatsAppTask: (body: {
+    wa_id: string; workflow_key: string; inputs: Record<string, unknown>; wait: boolean;
+  }) => request<RunView & { wa_id: string; initiator: string }>("/enterprise/whatsapp/tasks", {
+    method: "POST", body: JSON.stringify(body),
+  }),
+  dispatchNotifications: () =>
+    request<Record<string, number>>("/enterprise/notifications/dispatch", { method: "POST" }),
 
   // demo sign-in (disabled outside demo deployments)
   demoAccounts: () => request<DemoAccounts>("/auth/demo/accounts"),

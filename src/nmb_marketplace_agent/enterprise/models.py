@@ -118,6 +118,51 @@ class Notification(SQLModel, table=True):
     sent_at: Optional[str] = Field(default=None)
 
 
+class WhatsAppAccount(SQLModel, table=True):
+    """One WhatsApp Business number bound to a tenant and agent."""
+    __tablename__ = "whatsapp_accounts"
+    __table_args__ = (UniqueConstraint("phone_number_id", name="uq_whatsapp_phone_number"),)
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(default="")
+    phone_number_id: str = Field(index=True)
+    display_phone: str = Field(default="")
+    enabled: bool = Field(default=True)
+    created_at: str = Field(default_factory=now_iso)
+
+
+class WhatsAppContact(SQLModel, table=True):
+    """A WhatsApp user linked to one agent thread. ``user_id`` is ``wa:<wa_id>``."""
+    __tablename__ = "whatsapp_contacts"
+    __table_args__ = (UniqueConstraint("tenant_id", "wa_id", name="uq_whatsapp_contact"),)
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    account_id: str = Field(default="")
+    wa_id: str = Field(index=True)
+    user_id: str = Field(default="", index=True)
+    thread_id: str = Field(default="")
+    display_name: str = Field(default="")
+    created_at: str = Field(default_factory=now_iso)
+    last_seen_at: str = Field(default_factory=now_iso)
+
+
+class WhatsAppMessage(SQLModel, table=True):
+    """Transcript row for one WhatsApp message (encrypted body, provider id for dedupe)."""
+    __tablename__ = "whatsapp_messages"
+    __table_args__ = (UniqueConstraint("provider_id", name="uq_whatsapp_provider_message"),)
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    contact_id: str = Field(index=True)
+    wa_id: str = Field(index=True)
+    direction: str = Field(default="in")  # in | out
+    kind: str = Field(default="text")  # text | task | status
+    provider_id: str = Field(default="")
+    status: str = Field(default="received", index=True)  # received | sent | delivered | read | failed
+    body: str = Field(default="", sa_column=Column(EncryptedText(aad="whatsapp.body")))
+    created_at: str = Field(default_factory=now_iso)
+    error: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+
 class UsageEvent(SQLModel, table=True):
     __tablename__ = "usage_events"
     id: str = Field(primary_key=True)

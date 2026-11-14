@@ -35,6 +35,7 @@ from nmb_marketplace_agent.api.routes import (
     tools,
     training,
     versions,
+    whatsapp,
 )
 from nmb_marketplace_agent.api.routes import (
     observability as observability_routes,
@@ -117,6 +118,7 @@ app.include_router(demo.router, prefix="/auth/demo", tags=["demo"])
 app.include_router(manifest.router, prefix="/agents",
                    tags=["manifest"], dependencies=[Depends(verify_api_key)])
 app.include_router(public.router, prefix="/v1", tags=["public"])
+app.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])
 app.include_router(catalog.router, prefix="/v1", tags=["public"])
 app.include_router(lg_proxy.config_router, prefix="/v1", tags=["public"])
 app.include_router(lg_proxy.router, prefix="/v1/lg", tags=["langgraph-proxy"])

@@ -39,7 +39,7 @@ from nmb_marketplace_agent.enterprise.models import (
 
 log = logging.getLogger(__name__)
 
-CHANNELS = ("webhook", "email")
+CHANNELS = ("webhook", "email", "whatsapp")
 MAX_ATTEMPTS = max(1, int(os.environ.get("NOTIFY_MAX_ATTEMPTS", "5")))
 _LABELS = {
     "approval.requested": "Approval needed",
@@ -238,11 +238,19 @@ async def _email(n: Notification) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
+async def _whatsapp(n: Notification) -> tuple[bool, str]:
+    from nmb_marketplace_agent.enterprise.whatsapp import deliver_outbox
+
+    return await deliver_outbox(n)
+
+
 async def _deliver(n: Notification) -> tuple[bool, str]:
     if n.channel == "webhook":
         return await _webhook(n)
     if n.channel == "email":
         return await _email(n)
+    if n.channel == "whatsapp":
+        return await _whatsapp(n)
     return False, f"Unsupported channel '{n.channel}'"
 
 

@@ -21,6 +21,7 @@ from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.config.versioning import published_version
 from nmb_marketplace_agent.enterprise import audit as audit_mod
 from nmb_marketplace_agent.llm.registry import resolve_model
+from nmb_marketplace_agent.locale.compiler import format_reply
 
 router = APIRouter()
 
@@ -166,6 +167,11 @@ async def _execute(run_id: str):
     async with async_session() as s:
         run = await s.get(EvalRun, run_id)
         cases = (await s.execute(select(EvalCase).where(EvalCase.dataset_id == run.dataset_id))).scalars().all()
+        agent_cfg = await s.get(AgentConfig, run.agent_id)
+        profile = None
+        if agent_cfg is not None:
+            from nmb_marketplace_agent.locale.service import locale_for_agent
+            profile, _ = await locale_for_agent(s, agent_cfg, use_draft=run.target == "draft")
         results: list = []
         orch_checked = 0
         orch_passed = 0
@@ -176,7 +182,9 @@ async def _execute(run_id: str):
                                          use_draft=run.target == "draft")
                 thread_id = out.get("thread_id")
                 r["thread_id"] = thread_id
-                reply = final_text(out["result"])
+                # Score what the customer would receive: normalisation runs before
+                # expected_contains and the judge, same as the gateway.
+                reply = format_reply(final_text(out["result"]), profile)
                 r["reply"] = reply
                 parts = []
                 if c.expected_contains:

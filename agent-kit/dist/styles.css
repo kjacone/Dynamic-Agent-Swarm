@@ -217,6 +217,24 @@
 .lgk-tool-body { padding: 0 10px 10px; }
 .lgk-tool-body h4 { margin: 8px 0 4px; font-size: 12px; font-weight: 600; color: var(--lgk-muted); }
 
+/* generic list results: horizontal, scrollable cards with click-to-details */
+.lgk-results { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.lgk-results-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; }
+.lgk-results-cards { display: flex; flex-direction: row; gap: 8px; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.lgk-results-cards::-webkit-scrollbar { height: 6px; }
+.lgk-results-cards::-webkit-scrollbar-thumb { background: var(--lgk-line); border-radius: 3px; }
+.lgk-r-card { flex: 0 0 148px; scroll-snap-align: start; display: flex; flex-direction: column; align-items: stretch; text-align: left; font: inherit; color: var(--lgk-ink); background: var(--lgk-panel); border: 1px solid var(--lgk-line); border-radius: 8px; padding: 6px; cursor: pointer; overflow: hidden; }
+.lgk-r-card:hover:not(:disabled), .lgk-r-card[data-open] { border-color: var(--lgk-accent); }
+.lgk-r-card:disabled { cursor: default; }
+.lgk-r-card:focus-visible { outline: 2px solid var(--lgk-accent); outline-offset: 1px; }
+.lgk-r-img { display: block; width: 100%; height: 76px; object-fit: cover; border-radius: 5px; background: var(--lgk-tint); margin-bottom: 5px; }
+.lgk-r-b { font-weight: 600; font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lgk-r-s { color: var(--lgk-muted); font-size: 10.5px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lgk-r-p { margin-top: 4px; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lgk-results-detail { border: 1px solid var(--lgk-line); border-radius: 6px; padding: 6px 8px; }
+.lgk-results-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.lgk-results-detail-head .lgk-more { margin: 0; }
+
 .lgk-typing { display: flex; gap: 4px; padding: 4px 0; }
 .lgk-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--lgk-muted); animation: lgk-pulse 1s ease-in-out infinite; }
 .lgk-typing i:nth-child(2) { animation-delay: .15s; } .lgk-typing i:nth-child(3) { animation-delay: .3s; }

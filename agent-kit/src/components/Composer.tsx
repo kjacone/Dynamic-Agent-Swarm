@@ -59,7 +59,7 @@ export function Composer({ placeholder, busy, disabled, upload, toolToggle, onSe
           {toolToggle && (
             <label className="lgk-switch">
               <input type="checkbox" role="switch" checked={toolToggle.checked} onChange={(e) => toolToggle.onChange(e.target.checked)} />
-              <span>Hide tool calls</span>
+              <span>Hide background tasks</span>
             </label>
           )}
           {busy ? (

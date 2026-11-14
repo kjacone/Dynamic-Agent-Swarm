@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,7 +7,12 @@ class Settings(BaseSettings):
 
     main_model: str = "ollama:llama3.1:8b"
     embedding_model: str = "openai:text-embedding-3-small"
-    database_url: str = "sqlite+aiosqlite:///./data/app.db"
+    # NMB_DATABASE_URL wins when set: in the Aegra container DATABASE_URL is the
+    # server's own store, so the platform registry needs a separate name.
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./data/app.db",
+        validation_alias=AliasChoices("NMB_DATABASE_URL", "DATABASE_URL"),
+    )
     vector_store_root: str = "data/indexes"
     rag_default_top_k: int = 4
     async_researcher_url: str | None = None

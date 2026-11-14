@@ -1,5 +1,6 @@
 """Model training. Datasets are built here; jobs run in the LLaMA-Factory trainer container."""
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -7,6 +8,7 @@ from sqlmodel import select
 from nmb_marketplace_agent.api.deps import get_db
 from nmb_marketplace_agent.config.models import Feedback
 from nmb_marketplace_agent.training import store
+from nmb_marketplace_agent.training import playground
 
 router = APIRouter()
 
@@ -45,6 +47,17 @@ async def create_dataset(body: DatasetIn, db: AsyncSession = Depends(get_db)):
     return _guard(store.write_dataset, body.name, rows)
 
 
+@router.get("/datasets/{name}/download")
+async def download_dataset(name: str):
+    path = _guard(store.dataset_path, name)
+    return FileResponse(path, media_type="application/json", filename=f"{name}.json")
+
+
+@router.delete("/datasets/{name}")
+async def delete_dataset(name: str):
+    return _guard(store.delete_dataset, name)
+
+
 @router.get("/jobs")
 async def jobs():
     return {"runner_online": store.runner_alive(), "jobs": store.list_jobs()}
@@ -69,3 +82,30 @@ async def job_log(job_id: str, lines: int = 200):
 async def cancel(job_id: str):
     _guard(store.cancel, job_id)
     return {"ok": True}
+
+
+class PlaygroundIn(BaseModel):
+    corpus: str
+    epochs: int = playground.DEFAULTS["epochs"]
+    learning_rate: float = playground.DEFAULTS["learning_rate"]
+    temperature: float = playground.DEFAULTS["temperature"]
+    prefix: str = playground.DEFAULTS["prefix"]
+
+
+@router.get("/playground")
+async def playground_defaults():
+    return {"corpus": playground.DEFAULT_CORPUS, "defaults": playground.DEFAULTS}
+
+
+@router.post("/playground/train")
+async def playground_train(body: PlaygroundIn):
+    try:
+        return playground.train(
+            body.corpus,
+            epochs=body.epochs,
+            learning_rate=body.learning_rate,
+            temperature=body.temperature,
+            prefix=body.prefix,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))

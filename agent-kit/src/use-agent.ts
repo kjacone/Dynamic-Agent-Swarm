@@ -8,7 +8,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { messageText, newId } from "./content";
 import {
-  handoffSnapshot, requestHandoff, sendFeedback,
+  gatewayThreadMessages, handoffSnapshot, requestHandoff, sendFeedback,
   type GatewayHandoff, type GatewaySource, type GatewayStaffMessage,
 } from "./gateway";
 import { ensureToolCallsHaveResponses } from "./lib/ensure-tool-responses";
@@ -63,6 +63,8 @@ export function useAgent() {
   const [handoffMessages, setHandoffMessages] = useState<GatewayStaffMessage[]>([]);
   const [serverThreadId, setServerThreadId] = useState<string | null>(null);
   const [feedbackSent, setFeedbackSent] = useState<"up" | "down" | null>(null);
+  /** Gateway mode: messages loaded from the server when an old thread is opened. */
+  const [history, setHistory] = useState<Message[]>([]);
 
   const stream = useTypedStream((gateway && gatewayTransport
     ? {
@@ -101,6 +103,31 @@ export function useAgent() {
       else if (event.type === "handoff") setHandoff(event.handoff.status === "resolved" ? null : event.handoff);
     });
   }, [gateway, kit.gatewayEvents]);
+
+  // Reopening a thread from history: the gateway transport only streams new
+  // runs, so load the transcript that is already stored server-side.
+  const gwBase = gateway?.baseUrl ?? "";
+  const gwKey = gateway?.publishableKey ?? "";
+  const gwUser = gateway?.userId ?? "";
+  const gwFetch = gateway?.fetch;
+  useEffect(() => {
+    setHistory([]);
+    if (!gateway || !threadId) return;
+    let off = false;
+    gatewayThreadMessages(
+      { baseUrl: gateway.baseUrl, publishableKey: gateway.publishableKey, userId: gateway.userId, fetch: gateway.fetch },
+      threadId,
+    ).then((rows) => {
+      if (off) return;
+      setHistory(rows.map((m, i) => ({
+        id: m.id || `${threadId}-h${i}`,
+        type: m.role === "user" ? "human" : "ai",
+        content: m.text,
+      } as Message)));
+    }).catch(() => { /* history is best-effort */ });
+    return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gwBase, gwKey, gwUser, gwFetch, threadId]);
 
   useEffect(() => {
     if (threadId) return;
@@ -174,7 +201,9 @@ export function useAgent() {
       opts({
         optimisticValues: (prev: AgentState) => ({
           ...prev,
-          messages: [...(prev.messages ?? []), ...placeholders, human],
+          // The SDK seeds optimistic values from `initialValues` (empty in
+          // gateway mode), so carry the live messages over explicitly.
+          messages: [...((s.messages ?? []) as Message[]), ...placeholders, human],
         }),
       }),
     );
@@ -217,7 +246,14 @@ export function useAgent() {
 
   /** Answer a user-facing `interrupt()` with any value. */
   const resume = useCallback(
-    (value: unknown) => latest.current.stream.submit(null, opts({ command: { resume: value } })),
+    (value: unknown) => latest.current.stream.submit(null, opts({
+      command: { resume: value },
+      // Resume starts a new stream: keep the messages already on screen.
+      optimisticValues: (prev: AgentState) => ({
+        ...prev,
+        messages: (latest.current.stream.messages ?? []) as Message[],
+      }),
+    })),
     [opts],
   );
 
@@ -319,7 +355,7 @@ export function useAgent() {
           ? done[0].value
           : Object.fromEntries(done.map((d) => [d.call.id ?? d.call.name, d.value]));
 
-      await latest.current.stream.submit(null, opts({ command: { resume: resumeValue } }));
+      await resume(resumeValue);
     })().catch(() => { /* surfaced through stream.error */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream.isLoading, pendingKey]);
@@ -327,7 +363,7 @@ export function useAgent() {
   const values = stream.values as AgentState | undefined;
 
   return {
-    messages: stream.messages as Message[],
+    messages: history.length ? [...history, ...(stream.messages as Message[])] : (stream.messages as Message[]),
     isLoading: stream.isLoading,
     error: stream.error ? (stream.error instanceof Error ? stream.error.message : String(stream.error)) : null,
     /** Pending human-in-the-loop interrupts (frontend-tool pauses are handled for you). */

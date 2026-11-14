@@ -1,0 +1,178 @@
+# Pilot values for a bank deployment. Copy to bank-values.yaml and fill in.
+#
+#   helm upgrade --install nmb deploy/helm/nmb-marketplace-agent \
+#     -n nmb --create-namespace -f bank-values.yaml
+#
+# Every secret comes from an existing Secret (created by Vault/External
+# Secrets, never from this file). Required keys:
+#   ADMIN_TOKEN, POSTGRES_PASSWORD, NMB_ENCRYPTION_KEY
+#   NMB_JWT_SECRET            recommended (32+ chars)
+#   NMB_DATABASE_URL          platform registry Postgres DSN (needed for the
+#                             migrations Job; without it the registry is SQLite
+#                             on the /app/data volume)
+#   <provider>_API_KEY        whichever provider config.mainModel uses
+#
+#   kubectl -n nmb create secret generic nmb-secrets \
+#     --from-literal=ADMIN_TOKEN='…' \
+#     --from-literal=POSTGRES_PASSWORD='…' \
+#     --from-literal=NMB_ENCRYPTION_KEY="$(python -m nmb_marketplace_agent.crypto generate)" \
+#     --from-literal=NMB_JWT_SECRET='…' \
+#     --from-literal=NMB_DATABASE_URL='postgresql+asyncpg://nmb:…@pg.bank.internal:5432/nmb'
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets:
+  - name: bank-registry-pull
+
+images:
+  # Build dashboard with VITE_API_BASE=<browser-facing admin API URL>.
+  adminApi:
+    repository: registry.bank.internal/nmb/admin-api
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  aegra:
+    repository: registry.bank.internal/nmb/aegra
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  dashboard:
+    repository: registry.bank.internal/nmb/dashboard
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+secrets:
+  existingSecret: nmb-secrets
+
+encryption:
+  enabled: true
+  # Fail startup if the key is missing or unreadable — required for the pilot.
+  required: true
+  mountPath: /etc/nmb/encryption
+  fileName: key
+
+persistence:
+  enabled: true
+  # ReadWriteMany if the API and Aegra pods may be scheduled on different
+  # nodes; ReadWriteOnce when one node hosts both (or when the registry and
+  # indexes live outside the PVC).
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  storageClass: bank-rwo
+
+config:
+  # Bank LLM gateway (OpenAI-compatible). The key comes from OPENAI_API_KEY in
+  # the Secret; point the client at the gateway via OLLAMA_/LITELLM_/VLLM_URL
+  # or extraEnv as documented in .env.example.
+  mainModel: "openai_compatible:bank-gpt-4o"
+  embeddingModel: "openai_compatible:bank-embed-3-small"
+  langgraphUrl: ""            # defaults to the chart's Aegra service
+  qdrantUrl: "https://qdrant.bank.internal"
+  langfuseHost: "https://langfuse.bank.internal"
+  langfusePublicUrl: "https://langfuse.bank.internal"
+  # Only the dashboard origin; the chat widget allowlists per key at runtime.
+  corsOrigins: "https://nmb.bank.internal"
+
+serviceAccount:
+  create: true
+  annotations: {}             # e.g. the bank's workload-identity annotation
+  automountServiceAccountToken: false
+
+adminApi:
+  replicaCount: 2
+  port: 8000
+  # Schema is owned by Alembic once migrations.enabled is true.
+  autoCreateTables: false
+  # Shared rate limits across the two replicas. With AUTH on the bank's Redis,
+  # leave this empty and set REDIS_URL from the Secret in extraEnv below.
+  redisUrl: redis://redis.bank.internal:6379/0
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: ["ALL"]
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "2", memory: 4Gi }
+  podAnnotations: {}
+  extraEnv:
+    # Anything the chart does not model, from the same Secret:
+    # - name: HTTP_TOOL_ALLOWED_HOSTS
+    #   value: api.bank.internal
+    []
+
+aegra:
+  replicaCount: 2
+  port: 2026
+  workerCount: 3
+  jobsPerWorker: 10
+  authType: noop              # matches the API's session-token model; change if the bank fronts it with OIDC
+  postgres:
+    host: pg.bank.internal
+    port: 5432
+    database: aegra
+    user: aegra
+  redis:
+    enabled: true
+    # Credentials belong in the Secret, not here — override via extraEnv:
+    # - name: REDIS_URL
+    #   valueFrom:
+    #     secretKeyRef: { name: nmb-secrets, key: REDIS_URL }
+    url: redis://redis.bank.internal:6379/0
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "4", memory: 8Gi }
+  podAnnotations: {}
+  extraEnv: []
+
+dashboard:
+  replicaCount: 2
+  port: 80
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  podAnnotations: {}
+  extraEnv: []
+
+migrations:
+  enabled: true
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"   # SSE chat streams
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  hosts:
+    - host: nmb.bank.internal
+      service: dashboard
+      paths: ["/"]
+    - host: api.nmb.bank.internal
+      service: admin-api
+      paths: ["/"]
+  tls:
+    - secretName: nmb-tls
+      hosts:
+        - nmb.bank.internal
+        - api.nmb.bank.internal

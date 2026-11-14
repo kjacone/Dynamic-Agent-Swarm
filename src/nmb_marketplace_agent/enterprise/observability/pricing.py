@@ -76,7 +76,8 @@ def _strip_provider(model: str) -> str:
     if ":" not in model:
         return model
     provider, _, rest = model.partition(":")
-    if provider in {"openai", "anthropic", "google_genai", "google", "azure_openai", "ollama", "vllm", "litellm"}:
+    if provider in {"openai", "anthropic", "google_genai", "google", "azure_openai", "ollama",
+                    "vllm", "litellm", "groq", "openrouter", "openai_compatible"}:
         # ollama:llama3.1:8b → keep the middle, drop the tag
         if provider == "ollama" and ":" in rest:
             return rest.split(":", 1)[0]

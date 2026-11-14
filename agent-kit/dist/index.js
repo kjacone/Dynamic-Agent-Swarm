@@ -174,6 +174,26 @@ async function sendFeedback(cfg, body) {
   });
   if (!res.ok) throw new Error(`feedback failed (${res.status})`);
 }
+async function listGatewayThreads(cfg, limit = 20) {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (cfg.userId) qs.set("user_id", cfg.userId);
+  const res = await gatewayFetch(cfg, `/v1/threads?${qs}`);
+  if (!res.ok) throw new Error(`threads failed (${res.status})`);
+  const data = await res.json();
+  return (data.threads ?? []).map((t) => ({ id: t.id, title: t.title || "Untitled chat", updated_at: t.updated_at ?? null }));
+}
+async function gatewayThreadMessages(cfg, threadId) {
+  const qs = cfg.userId ? `?user_id=${encodeURIComponent(cfg.userId)}` : "";
+  const res = await gatewayFetch(cfg, `/v1/threads/${encodeURIComponent(threadId)}/messages${qs}`);
+  if (!res.ok) throw new Error(`thread messages failed (${res.status})`);
+  const data = await res.json();
+  return (data.messages ?? []).filter((m) => m && m.text);
+}
+async function deleteGatewayThread(cfg, threadId) {
+  const qs = cfg.userId ? `?user_id=${encodeURIComponent(cfg.userId)}` : "";
+  const res = await gatewayFetch(cfg, `/v1/threads/${encodeURIComponent(threadId)}${qs}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete thread failed (${res.status})`);
+}
 function lastUserText(input) {
   const messages = input?.messages;
   if (!Array.isArray(messages)) return "";
@@ -216,6 +236,32 @@ async function* readSse(res) {
     reader.releaseLock();
   }
 }
+var stringify = (value) => {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+};
+function resumeResults(resume) {
+  const out = [];
+  if (!resume || typeof resume !== "object" || Array.isArray(resume)) return out;
+  for (const value of Object.values(resume)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    for (const [callId, result] of Object.entries(value)) {
+      out.push([callId, result]);
+    }
+  }
+  return out;
+}
+function interruptToolCall(value) {
+  if (!value || typeof value !== "object") return null;
+  const v = value;
+  if (v.type !== "tool") return null;
+  const call = v.toolCall ?? v.tool_call;
+  return call && call.name ? { id: call.id, name: call.name, args: call.args } : null;
+}
 var GatewayTransport = class {
   constructor(cfg, emit = () => {
   }) {
@@ -248,38 +294,66 @@ var GatewayTransport = class {
     }
   }
   async *stream(payload) {
-    if (payload.command) {
-      throw new Error("This assistant runs on the NMB gateway; resuming graph commands is not supported yet.");
-    }
-    const text = lastUserText(payload.input);
-    if (!text) throw new Error("The gateway transport needs a user message.");
     const clientThread = payload.config?.configurable?.thread_id ?? null;
     if (clientThread !== this.boundThread) {
       this.boundThread = clientThread;
-      this.serverThread = clientThread ? this.restore(clientThread) : null;
+      this.serverThread = clientThread ? this.restore(clientThread) ?? clientThread : null;
     }
     const cfgurable = payload.config?.configurable;
-    const context = payload.context ?? cfgurable?.context ?? void 0;
-    const readables = cfgurable?.readables;
-    const token = await gatewayToken(this.cfg);
-    const res = await gatewayFetch(this.cfg, "/v1/chat", {
-      method: "POST",
-      headers: { Accept: "text/event-stream" },
-      signal: payload.signal,
-      body: JSON.stringify({
-        message: text,
-        thread_id: this.serverThread,
-        ...this.cfg.userId ? { user_id: this.cfg.userId } : {},
-        ...context !== void 0 ? { context } : {},
-        ...readables !== void 0 ? { readables } : {}
-      })
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(res.status === 429 ? "Too many messages. Please wait a moment." : `Gateway error (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ""}`);
-    }
-    void token;
     const aiId = `ai_${crypto.randomUUID()}`;
+    let res;
+    if (payload.command) {
+      const command = payload.command;
+      if (!("resume" in command)) {
+        throw new Error("This assistant runs on the NMB gateway; only frontend-tool resumes are supported.");
+      }
+      if (!this.serverThread) throw new Error("There is no paused gateway conversation to resume.");
+      res = await gatewayFetch(this.cfg, "/v1/chat/resume", {
+        method: "POST",
+        headers: { Accept: "text/event-stream" },
+        signal: payload.signal,
+        body: JSON.stringify({
+          thread_id: this.serverThread,
+          resume: command.resume,
+          ...this.cfg.userId ? { user_id: this.cfg.userId } : {}
+        })
+      });
+      if (!res.ok) throw await this.failure(res);
+      for (const [callId, value] of resumeResults(command.resume)) {
+        yield {
+          event: "messages",
+          data: [
+            { id: `tool_${callId}`, type: "tool", tool_call_id: callId, content: stringify(value) },
+            { langgraph_node: "agent" }
+          ]
+        };
+      }
+    } else {
+      const text = lastUserText(payload.input);
+      if (!text) throw new Error("The gateway transport needs a user message.");
+      const context = payload.context ?? cfgurable?.context ?? void 0;
+      const readables = cfgurable?.readables;
+      res = await gatewayFetch(this.cfg, "/v1/chat", {
+        method: "POST",
+        headers: { Accept: "text/event-stream" },
+        signal: payload.signal,
+        body: JSON.stringify({
+          message: text,
+          thread_id: this.serverThread,
+          ...this.cfg.userId ? { user_id: this.cfg.userId } : {},
+          ...context !== void 0 ? { context } : {},
+          ...readables !== void 0 ? { readables } : {}
+        })
+      });
+      if (!res.ok) throw await this.failure(res);
+    }
+    yield* this.consume(res, aiId);
+  }
+  async failure(res) {
+    const detail = await res.text().catch(() => "");
+    return new Error(res.status === 429 ? "Too many messages. Please wait a moment." : `Gateway error (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+  }
+  async *consume(res, aiId) {
     for await (const frame of readSse(res)) {
       const ev = frame.data;
       switch (ev.type) {
@@ -299,6 +373,30 @@ var GatewayTransport = class {
               event: "messages",
               data: [{ id: aiId, type: "AIMessageChunk", content: delta }, { langgraph_node: "agent" }]
             };
+          }
+          break;
+        }
+        case "interrupt": {
+          const interrupts = Array.isArray(ev.interrupts) ? ev.interrupts : [];
+          for (const [index, raw] of interrupts.entries()) {
+            const call = interruptToolCall(raw?.value);
+            if (!call) continue;
+            yield {
+              event: "messages",
+              data: [{
+                id: aiId,
+                type: "AIMessageChunk",
+                content: "",
+                tool_call_chunks: [{ name: call.name, args: stringify(call.args ?? {}), id: call.id ?? `call_${index}`, index }]
+              }, { langgraph_node: "agent" }]
+            };
+          }
+          yield { event: "values", data: { __interrupt__: interrupts } };
+          break;
+        }
+        case "state": {
+          if (ev.values && typeof ev.values === "object") {
+            yield { event: "values", data: ev.values };
           }
           break;
         }
@@ -745,6 +843,7 @@ function useAgent() {
   const [handoffMessages, setHandoffMessages] = useState4([]);
   const [serverThreadId, setServerThreadId] = useState4(null);
   const [feedbackSent, setFeedbackSent] = useState4(null);
+  const [history, setHistory] = useState4([]);
   const stream = useTypedStream(gateway && gatewayTransport ? {
     transport: gatewayTransport,
     threadId,
@@ -785,6 +884,30 @@ function useAgent() {
       else if (event.type === "handoff") setHandoff(event.handoff.status === "resolved" ? null : event.handoff);
     });
   }, [gateway, kit.gatewayEvents]);
+  const gwBase = gateway?.baseUrl ?? "";
+  const gwKey = gateway?.publishableKey ?? "";
+  const gwUser = gateway?.userId ?? "";
+  const gwFetch = gateway?.fetch;
+  useEffect3(() => {
+    setHistory([]);
+    if (!gateway || !threadId) return;
+    let off = false;
+    gatewayThreadMessages(
+      { baseUrl: gateway.baseUrl, publishableKey: gateway.publishableKey, userId: gateway.userId, fetch: gateway.fetch },
+      threadId
+    ).then((rows) => {
+      if (off) return;
+      setHistory(rows.map((m, i) => ({
+        id: m.id || `${threadId}-h${i}`,
+        type: m.role === "user" ? "human" : "ai",
+        content: m.text
+      })));
+    }).catch(() => {
+    });
+    return () => {
+      off = true;
+    };
+  }, [gwBase, gwKey, gwUser, gwFetch, threadId]);
   useEffect3(() => {
     if (threadId) return;
     setSources([]);
@@ -848,7 +971,9 @@ function useAgent() {
       opts({
         optimisticValues: (prev) => ({
           ...prev,
-          messages: [...prev.messages ?? [], ...placeholders, human]
+          // The SDK seeds optimistic values from `initialValues` (empty in
+          // gateway mode), so carry the live messages over explicitly.
+          messages: [...s.messages ?? [], ...placeholders, human]
         })
       })
     );
@@ -882,7 +1007,14 @@ function useAgent() {
     );
   }, [opts]);
   const resume = useCallback4(
-    (value) => latest.current.stream.submit(null, opts({ command: { resume: value } })),
+    (value) => latest.current.stream.submit(null, opts({
+      command: { resume: value },
+      // Resume starts a new stream: keep the messages already on screen.
+      optimisticValues: (prev) => ({
+        ...prev,
+        messages: latest.current.stream.messages ?? []
+      })
+    })),
     [opts]
   );
   const submitDecisions = useCallback4(
@@ -965,13 +1097,13 @@ function useAgent() {
       }));
       const byId = done.every((d) => d.interruptId);
       const resumeValue = byId ? Object.fromEntries(done.map((d) => [d.interruptId, d.call.id ? { [d.call.id]: d.value } : d.value])) : done.length === 1 && !done[0].call.id ? done[0].value : Object.fromEntries(done.map((d) => [d.call.id ?? d.call.name, d.value]));
-      await latest.current.stream.submit(null, opts({ command: { resume: resumeValue } }));
+      await resume(resumeValue);
     })().catch(() => {
     });
   }, [stream.isLoading, pendingKey]);
   const values = stream.values;
   return {
-    messages: stream.messages,
+    messages: history.length ? [...history, ...stream.messages] : stream.messages,
     isLoading: stream.isLoading,
     error: stream.error ? stream.error instanceof Error ? stream.error.message : String(stream.error) : null,
     /** Pending human-in-the-loop interrupts (frontend-tool pauses are handled for you). */
@@ -1069,9 +1201,13 @@ function useAssistants() {
 var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 var threadMetadata = (assistantId) => UUID.test(assistantId) ? { assistant_id: assistantId } : { graph_id: assistantId };
 function useThreads({ limit = 100 } = {}) {
-  const { client, connection, isConfigured, threadsRevision, bumpThreads, threadId, setThreadId } = useKit();
+  const { client, connection, isConfigured, threadsRevision, bumpThreads, threadId, setThreadId, gateway } = useKit();
   const [threads, setThreads] = useState5([]);
   const [loading, setLoading] = useState5(isConfigured);
+  const gwBase = gateway?.baseUrl;
+  const gwKey = gateway?.publishableKey;
+  const gwUser = gateway?.userId;
+  const gwFetch = gateway?.fetch;
   useEffect4(() => {
     if (!isConfigured) {
       setThreads([]);
@@ -1079,31 +1215,37 @@ function useThreads({ limit = 100 } = {}) {
       return;
     }
     let off = false;
-    client.threads.search({
+    setLoading(true);
+    const load = gateway !== void 0 ? listGatewayThreads(
+      { baseUrl: gateway.baseUrl, publishableKey: gateway.publishableKey, userId: gateway.userId, fetch: gateway.fetch },
+      Math.min(limit, 50)
+    ).then((rows) => rows.map((t) => ({ id: t.id, title: t.title, updatedAt: t.updated_at ?? (/* @__PURE__ */ new Date()).toISOString() }))) : client.threads.search({
       limit,
       sortBy: "updated_at",
       sortOrder: "desc",
       metadata: threadMetadata(connection.assistantId)
-    }).then((rows) => {
+    }).then((rows) => rows.map((t) => {
+      const msgs = t.values?.messages ?? [];
+      const first = msgs.find((m) => m.type === "human");
+      let title = first ? messageText(first.content).trim().slice(0, 80) : "";
+      if (!title && first && Array.isArray(first.content) && first.content.length) title = "Attachment";
+      return { id: t.thread_id, title: title || "Untitled chat", updatedAt: t.updated_at };
+    }));
+    load.then((rows) => {
       if (off) return;
-      setThreads(rows.map((t) => {
-        const msgs = t.values?.messages ?? [];
-        const first = msgs.find((m) => m.type === "human");
-        let title = first ? messageText(first.content).trim().slice(0, 80) : "";
-        if (!title && first && Array.isArray(first.content) && first.content.length) title = "Attachment";
-        return { id: t.thread_id, title: title || "Untitled chat", updatedAt: t.updated_at };
-      }));
+      setThreads(rows);
       setLoading(false);
     }).catch(() => !off && setLoading(false));
     return () => {
       off = true;
     };
-  }, [client, connection.assistantId, isConfigured, threadsRevision, limit]);
+  }, [client, connection.assistantId, isConfigured, threadsRevision, limit, gwBase, gwKey, gwUser, gwFetch]);
   const remove = useCallback5(async (id) => {
-    await client.threads.delete(id);
+    if (gateway) await deleteGatewayThread(gateway, id);
+    else await client.threads.delete(id);
     if (id === threadId) setThreadId(null);
     bumpThreads();
-  }, [client, threadId, setThreadId, bumpThreads]);
+  }, [client, threadId, setThreadId, bumpThreads, gateway]);
   return { threads, loading, remove };
 }
 
@@ -1223,7 +1365,7 @@ function useFileUpload({ enabled = true, onError } = {}) {
 }
 
 // src/components/Chat.tsx
-import { useEffect as useEffect8, useState as useState15 } from "react";
+import { useEffect as useEffect8, useState as useState16 } from "react";
 
 // src/use-stick-to-bottom.ts
 import { useCallback as useCallback7, useEffect as useEffect6, useRef as useRef7, useState as useState7 } from "react";
@@ -1410,7 +1552,7 @@ function Composer({ placeholder, busy, disabled, upload, toolToggle, onSend, onS
       ] }),
       toolToggle && /* @__PURE__ */ jsxs6("label", { className: "lgk-switch", children: [
         /* @__PURE__ */ jsx6("input", { type: "checkbox", role: "switch", checked: toolToggle.checked, onChange: (e) => toolToggle.onChange(e.target.checked) }),
-        /* @__PURE__ */ jsx6("span", { children: "Hide tool calls" })
+        /* @__PURE__ */ jsx6("span", { children: "Hide background tasks" })
       ] }),
       busy ? /* @__PURE__ */ jsxs6("button", { type: "button", className: "lgk-stop", onClick: onStop, children: [
         /* @__PURE__ */ jsx6(SpinnerIcon, {}),
@@ -1419,6 +1561,87 @@ function Composer({ placeholder, busy, disabled, upload, toolToggle, onSend, onS
     ] }),
     files.dragOver && /* @__PURE__ */ jsx6("div", { className: "lgk-drop-hint", children: "Drop images or PDFs to attach" })
   ] }) });
+}
+
+// src/components/ui/IconButton.tsx
+import { jsx as jsx7 } from "react/jsx-runtime";
+function IconButton({ label, children, className = "", ...rest }) {
+  return /* @__PURE__ */ jsx7("button", { type: "button", className: `lgk-icon-btn ${className}`, title: label, "aria-label": label, ...rest, children });
+}
+
+// src/components/ThreadHistory.tsx
+import { jsx as jsx8, jsxs as jsxs7 } from "react/jsx-runtime";
+function formatRelative(iso) {
+  const seconds = (new Date(iso).getTime() - Date.now()) / 1e3;
+  const f = new Intl.RelativeTimeFormat(void 0, { numeric: "auto" });
+  const steps = [
+    [60, "second", 1],
+    [3600, "minute", 60],
+    [86400, "hour", 3600],
+    [604800, "day", 86400]
+  ];
+  for (const [limit, unit, div] of steps) {
+    if (Math.abs(seconds) < limit) return f.format(Math.round(seconds / div), unit);
+  }
+  return new Date(iso).toLocaleDateString();
+}
+function ThreadHistory({ onSelect }) {
+  const { threads, loading, remove } = useThreads();
+  const { threadId, setThreadId, isConfigured, notify } = useKit();
+  if (!isConfigured) return /* @__PURE__ */ jsx8("p", { className: "lgk-muted", children: "Connect to a server to see your chats." });
+  if (loading) {
+    return /* @__PURE__ */ jsx8("div", { className: "lgk-threads", "aria-busy": "true", "aria-label": "Loading chats", children: Array.from({ length: 8 }, (_, i) => /* @__PURE__ */ jsx8("div", { className: "lgk-skeleton" }, i)) });
+  }
+  if (!threads.length) return /* @__PURE__ */ jsx8("p", { className: "lgk-muted", children: "No chats yet. Send a message to start one." });
+  return /* @__PURE__ */ jsx8("nav", { className: "lgk-threads", "aria-label": "Chat history", children: threads.map((t) => /* @__PURE__ */ jsxs7("div", { className: "lgk-thread-row", "data-active": t.id === threadId, children: [
+    /* @__PURE__ */ jsxs7(
+      "button",
+      {
+        type: "button",
+        "aria-current": t.id === threadId ? "page" : void 0,
+        onClick: () => {
+          if (t.id !== threadId) setThreadId(t.id);
+          onSelect?.(t.id);
+        },
+        children: [
+          /* @__PURE__ */ jsx8("span", { className: "lgk-thread-title", children: t.title }),
+          /* @__PURE__ */ jsx8("span", { className: "lgk-muted", children: formatRelative(t.updatedAt) })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsx8(
+      IconButton,
+      {
+        label: `Delete "${t.title}"`,
+        onClick: () => {
+          remove(t.id).catch(() => notify({ kind: "error", title: "Couldn't delete that chat" }));
+        },
+        children: /* @__PURE__ */ jsx8(TrashIcon, {})
+      }
+    )
+  ] }, t.id)) });
+}
+
+// src/components/HistoryPanel.tsx
+import { jsx as jsx9, jsxs as jsxs8 } from "react/jsx-runtime";
+function HistoryPanel({ onClose, title = "Chats" }) {
+  const { setThreadId } = useKit();
+  return /* @__PURE__ */ jsxs8("div", { className: "lgk-dock-history", role: "region", "aria-label": "Chat history", children: [
+    /* @__PURE__ */ jsxs8("header", { className: "lgk-chat-head", children: [
+      /* @__PURE__ */ jsxs8("div", { className: "lgk-chat-head-start", children: [
+        /* @__PURE__ */ jsx9(IconButton, { label: "Back to chat", onClick: onClose, children: /* @__PURE__ */ jsx9(ChevronLeftIcon, {}) }),
+        /* @__PURE__ */ jsx9("h2", { children: title })
+      ] }),
+      /* @__PURE__ */ jsx9("div", { className: "lgk-chat-head-actions", children: /* @__PURE__ */ jsxs8("button", { type: "button", className: "lgk-primary lgk-sm", onClick: () => {
+        setThreadId(null);
+        onClose();
+      }, children: [
+        /* @__PURE__ */ jsx9(PlusIcon, {}),
+        " New chat"
+      ] }) })
+    ] }),
+    /* @__PURE__ */ jsx9("div", { className: "lgk-dock-history-body", children: /* @__PURE__ */ jsx9(ThreadHistory, { onSelect: onClose }) })
+  ] });
 }
 
 // src/lib/hitl.ts
@@ -1469,25 +1692,25 @@ import { useState as useState10 } from "react";
 
 // src/components/ui/KeyValueTable.tsx
 import { useState as useState9 } from "react";
-import { Fragment as Fragment3, jsx as jsx7, jsxs as jsxs7 } from "react/jsx-runtime";
+import { Fragment as Fragment3, jsx as jsx10, jsxs as jsxs9 } from "react/jsx-runtime";
 var isComplex = (v) => Array.isArray(v) || typeof v === "object" && v !== null;
 var isUrl = (v) => typeof v === "string" && /^https?:\/\//.test(v);
 function Value({ value }) {
-  if (isComplex(value)) return /* @__PURE__ */ jsx7("code", { className: "lgk-inline-code", children: JSON.stringify(value, null, 2) });
-  if (isUrl(value)) return /* @__PURE__ */ jsx7("a", { href: value, target: "_blank", rel: "noopener noreferrer", children: value });
-  return /* @__PURE__ */ jsx7(Fragment3, { children: String(value) });
+  if (isComplex(value)) return /* @__PURE__ */ jsx10("code", { className: "lgk-inline-code", children: JSON.stringify(value, null, 2) });
+  if (isUrl(value)) return /* @__PURE__ */ jsx10("a", { href: value, target: "_blank", rel: "noopener noreferrer", children: value });
+  return /* @__PURE__ */ jsx10(Fragment3, { children: String(value) });
 }
 function KeyValueTable({ data, maxRows }) {
   const [all, setAll] = useState9(false);
   const entries = Array.isArray(data) ? data.map((v, i) => [i, v]) : Object.entries(data);
   const limited = maxRows && !all ? entries.slice(0, maxRows) : entries;
-  return /* @__PURE__ */ jsxs7(Fragment3, { children: [
-    /* @__PURE__ */ jsx7("table", { className: "lgk-kv", children: /* @__PURE__ */ jsx7("tbody", { children: limited.map(([k, v]) => /* @__PURE__ */ jsxs7("tr", { children: [
-      /* @__PURE__ */ jsx7("th", { scope: "row", children: k }),
-      /* @__PURE__ */ jsx7("td", { children: /* @__PURE__ */ jsx7(Value, { value: v }) })
+  return /* @__PURE__ */ jsxs9(Fragment3, { children: [
+    /* @__PURE__ */ jsx10("table", { className: "lgk-kv", children: /* @__PURE__ */ jsx10("tbody", { children: limited.map(([k, v]) => /* @__PURE__ */ jsxs9("tr", { children: [
+      /* @__PURE__ */ jsx10("th", { scope: "row", children: k }),
+      /* @__PURE__ */ jsx10("td", { children: /* @__PURE__ */ jsx10(Value, { value: v }) })
     ] }, k)) }) }),
-    maxRows && entries.length > maxRows && /* @__PURE__ */ jsxs7("button", { type: "button", className: "lgk-more", onClick: () => setAll((a) => !a), children: [
-      all ? /* @__PURE__ */ jsx7(ChevronUpIcon, {}) : /* @__PURE__ */ jsx7(ChevronDownIcon, {}),
+    maxRows && entries.length > maxRows && /* @__PURE__ */ jsxs9("button", { type: "button", className: "lgk-more", onClick: () => setAll((a) => !a), children: [
+      all ? /* @__PURE__ */ jsx10(ChevronUpIcon, {}) : /* @__PURE__ */ jsx10(ChevronDownIcon, {}),
       " ",
       all ? "Show less" : `Show ${entries.length - maxRows} more`
     ] })
@@ -1499,10 +1722,10 @@ function ExpandableText({ text, maxLines = 4, maxChars = 500 }) {
   const long = lines.length > maxLines || text.length > maxChars;
   const shown = !long || open ? text : text.length > maxChars ? `${text.slice(0, maxChars)}\u2026` : `${lines.slice(0, maxLines).join("\n")}
 \u2026`;
-  return /* @__PURE__ */ jsxs7(Fragment3, { children: [
-    /* @__PURE__ */ jsx7("pre", { className: "lgk-pre", children: shown }),
-    long && /* @__PURE__ */ jsxs7("button", { type: "button", className: "lgk-more", onClick: () => setOpen((o) => !o), children: [
-      open ? /* @__PURE__ */ jsx7(ChevronUpIcon, {}) : /* @__PURE__ */ jsx7(ChevronDownIcon, {}),
+  return /* @__PURE__ */ jsxs9(Fragment3, { children: [
+    /* @__PURE__ */ jsx10("pre", { className: "lgk-pre", children: shown }),
+    long && /* @__PURE__ */ jsxs9("button", { type: "button", className: "lgk-more", onClick: () => setOpen((o) => !o), children: [
+      open ? /* @__PURE__ */ jsx10(ChevronUpIcon, {}) : /* @__PURE__ */ jsx10(ChevronDownIcon, {}),
       " ",
       open ? "Show less" : "Show more"
     ] })
@@ -1510,7 +1733,7 @@ function ExpandableText({ text, maxLines = 4, maxChars = 500 }) {
 }
 
 // src/components/interrupts/GenericInterrupt.tsx
-import { Fragment as Fragment4, jsx as jsx8, jsxs as jsxs8 } from "react/jsx-runtime";
+import { Fragment as Fragment4, jsx as jsx11, jsxs as jsxs10 } from "react/jsx-runtime";
 function GenericInterrupt({ value }) {
   const agent = useAgentContext();
   const [text, setText] = useState10("");
@@ -1523,11 +1746,11 @@ function GenericInterrupt({ value }) {
     }
     void agent.resume(v);
   };
-  return /* @__PURE__ */ jsxs8(Fragment4, { children: [
-    /* @__PURE__ */ jsx8("strong", { children: breakpoint ? "The run is paused at a breakpoint" : "The agent is waiting for you" }),
-    !breakpoint && (value && typeof value === "object" ? /* @__PURE__ */ jsx8(KeyValueTable, { data: value, maxRows: Array.isArray(value) ? 5 : void 0 }) : /* @__PURE__ */ jsx8(ExpandableText, { text: String(value) })),
-    breakpoint ? /* @__PURE__ */ jsx8("div", { className: "lgk-interrupt-row", children: /* @__PURE__ */ jsx8("button", { type: "button", className: "lgk-primary", onClick: () => void agent.continueRun(), children: "Continue" }) }) : /* @__PURE__ */ jsxs8("div", { className: "lgk-interrupt-row", children: [
-      /* @__PURE__ */ jsx8(
+  return /* @__PURE__ */ jsxs10(Fragment4, { children: [
+    /* @__PURE__ */ jsx11("strong", { children: breakpoint ? "The run is paused at a breakpoint" : "The agent is waiting for you" }),
+    !breakpoint && (value && typeof value === "object" ? /* @__PURE__ */ jsx11(KeyValueTable, { data: value, maxRows: Array.isArray(value) ? 5 : void 0 }) : /* @__PURE__ */ jsx11(ExpandableText, { text: String(value) })),
+    breakpoint ? /* @__PURE__ */ jsx11("div", { className: "lgk-interrupt-row", children: /* @__PURE__ */ jsx11("button", { type: "button", className: "lgk-primary", onClick: () => void agent.continueRun(), children: "Continue" }) }) : /* @__PURE__ */ jsxs10("div", { className: "lgk-interrupt-row", children: [
+      /* @__PURE__ */ jsx11(
         "input",
         {
           value: text,
@@ -1537,26 +1760,26 @@ function GenericInterrupt({ value }) {
           onKeyDown: (e) => e.key === "Enter" && text && answer()
         }
       ),
-      /* @__PURE__ */ jsx8("button", { type: "button", className: "lgk-primary", onClick: answer, disabled: !text, children: "Continue" })
+      /* @__PURE__ */ jsx11("button", { type: "button", className: "lgk-primary", onClick: answer, disabled: !text, children: "Continue" })
     ] })
   ] });
 }
 
 // src/components/interrupts/HitlReview.tsx
 import { useState as useState11 } from "react";
-import { jsx as jsx9, jsxs as jsxs9 } from "react/jsx-runtime";
+import { jsx as jsx12, jsxs as jsxs11 } from "react/jsx-runtime";
 var pretty = (name) => {
   const s = name.replace(/[_-]+/g, " ");
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 var LABEL = { approve: "Approve", edit: "Edit", reject: "Reject" };
 function ActionReview({ action, allowed, draft, onChange }) {
-  return /* @__PURE__ */ jsxs9("fieldset", { className: "lgk-hitl-action", children: [
-    /* @__PURE__ */ jsx9("legend", { children: pretty(action.name) }),
-    action.description && /* @__PURE__ */ jsx9("p", { className: "lgk-muted-block", children: action.description }),
-    draft.type === "edit" ? /* @__PURE__ */ jsx9("div", { className: "lgk-hitl-edit", children: Object.keys(action.args).map((key) => /* @__PURE__ */ jsxs9("label", { children: [
-      /* @__PURE__ */ jsx9("span", { children: key }),
-      /* @__PURE__ */ jsx9(
+  return /* @__PURE__ */ jsxs11("fieldset", { className: "lgk-hitl-action", children: [
+    /* @__PURE__ */ jsx12("legend", { children: pretty(action.name) }),
+    action.description && /* @__PURE__ */ jsx12("p", { className: "lgk-muted-block", children: action.description }),
+    draft.type === "edit" ? /* @__PURE__ */ jsx12("div", { className: "lgk-hitl-edit", children: Object.keys(action.args).map((key) => /* @__PURE__ */ jsxs11("label", { children: [
+      /* @__PURE__ */ jsx12("span", { children: key }),
+      /* @__PURE__ */ jsx12(
         "textarea",
         {
           rows: Math.min(8, Math.max(1, draft.args[key]?.split("\n").length ?? 1)),
@@ -1564,12 +1787,12 @@ function ActionReview({ action, allowed, draft, onChange }) {
           onChange: (e) => onChange({ ...draft, args: { ...draft.args, [key]: e.target.value } })
         }
       )
-    ] }, key)) }) : /* @__PURE__ */ jsx9(KeyValueTable, { data: action.args }),
-    draft.type === "reject" && /* @__PURE__ */ jsxs9("label", { className: "lgk-hitl-reason", children: [
-      /* @__PURE__ */ jsx9("span", { children: "Reason" }),
-      /* @__PURE__ */ jsx9("textarea", { rows: 2, placeholder: "Tell the agent why", value: draft.message, onChange: (e) => onChange({ ...draft, message: e.target.value }) })
+    ] }, key)) }) : /* @__PURE__ */ jsx12(KeyValueTable, { data: action.args }),
+    draft.type === "reject" && /* @__PURE__ */ jsxs11("label", { className: "lgk-hitl-reason", children: [
+      /* @__PURE__ */ jsx12("span", { children: "Reason" }),
+      /* @__PURE__ */ jsx12("textarea", { rows: 2, placeholder: "Tell the agent why", value: draft.message, onChange: (e) => onChange({ ...draft, message: e.target.value }) })
     ] }),
-    /* @__PURE__ */ jsx9("div", { className: "lgk-hitl-choices", role: "radiogroup", "aria-label": `Decision for ${action.name}`, children: allowed.map((t) => /* @__PURE__ */ jsx9(
+    /* @__PURE__ */ jsx12("div", { className: "lgk-hitl-choices", role: "radiogroup", "aria-label": `Decision for ${action.name}`, children: allowed.map((t) => /* @__PURE__ */ jsx12(
       "button",
       {
         type: "button",
@@ -1615,10 +1838,10 @@ function HitlReview({ interrupts }) {
   };
   const allApprovable = request.action_requests.every((a) => allowedFor(request, a).includes("approve"));
   const complete = list.every((d) => d.type);
-  return /* @__PURE__ */ jsxs9("div", { className: "lgk-hitl", children: [
-    /* @__PURE__ */ jsx9("strong", { children: "Review needed" }),
-    interrupts.length > 1 && /* @__PURE__ */ jsx9("div", { className: "lgk-hitl-tabs", role: "tablist", children: interrupts.map((it, i) => /* @__PURE__ */ jsx9("button", { type: "button", role: "tab", "aria-selected": i === active, onClick: () => setActive(i), children: pretty(it.value.action_requests[0]?.name ?? `Request ${i + 1}`) }, it.id ?? i)) }),
-    request.action_requests.map((a, i) => /* @__PURE__ */ jsx9(
+  return /* @__PURE__ */ jsxs11("div", { className: "lgk-hitl", children: [
+    /* @__PURE__ */ jsx12("strong", { children: "Review needed" }),
+    interrupts.length > 1 && /* @__PURE__ */ jsx12("div", { className: "lgk-hitl-tabs", role: "tablist", children: interrupts.map((it, i) => /* @__PURE__ */ jsx12("button", { type: "button", role: "tab", "aria-selected": i === active, onClick: () => setActive(i), children: pretty(it.value.action_requests[0]?.name ?? `Request ${i + 1}`) }, it.id ?? i)) }),
+    request.action_requests.map((a, i) => /* @__PURE__ */ jsx12(
       ActionReview,
       {
         action: a,
@@ -1628,27 +1851,27 @@ function HitlReview({ interrupts }) {
       },
       `${key}-${i}`
     )),
-    /* @__PURE__ */ jsxs9("div", { className: "lgk-hitl-footer", children: [
-      /* @__PURE__ */ jsx9("button", { type: "button", className: "lgk-ghost", onClick: () => void agent.resolve(), title: "End the run without answering", children: "Mark as resolved" }),
-      request.action_requests.length > 1 && allApprovable && /* @__PURE__ */ jsx9("button", { type: "button", className: "lgk-ghost", onClick: () => send(request.action_requests.map(() => ({ type: "approve" }))), children: "Approve all" }),
-      /* @__PURE__ */ jsx9("button", { type: "button", className: "lgk-primary", disabled: !complete, onClick: submit, children: "Submit" })
+    /* @__PURE__ */ jsxs11("div", { className: "lgk-hitl-footer", children: [
+      /* @__PURE__ */ jsx12("button", { type: "button", className: "lgk-ghost", onClick: () => void agent.resolve(), title: "End the run without answering", children: "Mark as resolved" }),
+      request.action_requests.length > 1 && allApprovable && /* @__PURE__ */ jsx12("button", { type: "button", className: "lgk-ghost", onClick: () => send(request.action_requests.map(() => ({ type: "approve" }))), children: "Approve all" }),
+      /* @__PURE__ */ jsx12("button", { type: "button", className: "lgk-primary", disabled: !complete, onClick: submit, children: "Submit" })
     ] }),
-    /* @__PURE__ */ jsxs9("details", { className: "lgk-hitl-state", children: [
-      /* @__PURE__ */ jsx9("summary", { children: "View thread state" }),
-      /* @__PURE__ */ jsx9("pre", { className: "lgk-pre", children: JSON.stringify(agent.values ?? {}, null, 2) })
+    /* @__PURE__ */ jsxs11("details", { className: "lgk-hitl-state", children: [
+      /* @__PURE__ */ jsx12("summary", { children: "View thread state" }),
+      /* @__PURE__ */ jsx12("pre", { className: "lgk-pre", children: JSON.stringify(agent.values ?? {}, null, 2) })
     ] })
   ] });
 }
 
 // src/components/interrupts/InterruptView.tsx
-import { jsx as jsx10 } from "react/jsx-runtime";
+import { jsx as jsx13 } from "react/jsx-runtime";
 function InterruptView({ interrupts, render }) {
   const agent = useAgentContext();
   if (!interrupts.length) return null;
   const custom = render?.({ interrupt: interrupts[0], value: interrupts[0].value, resume: agent.resume });
-  if (custom != null && custom !== false) return /* @__PURE__ */ jsx10("div", { className: "lgk-interrupt", children: custom });
+  if (custom != null && custom !== false) return /* @__PURE__ */ jsx13("div", { className: "lgk-interrupt", children: custom });
   const hitl = interrupts.filter((i) => isHitlRequest(i.value));
-  return /* @__PURE__ */ jsx10("div", { className: "lgk-interrupt", children: hitl.length ? /* @__PURE__ */ jsx10(HitlReview, { interrupts: hitl }) : /* @__PURE__ */ jsx10(GenericInterrupt, { value: interrupts[0].value }) });
+  return /* @__PURE__ */ jsx13("div", { className: "lgk-interrupt", children: hitl.length ? /* @__PURE__ */ jsx13(HitlReview, { interrupts: hitl }) : /* @__PURE__ */ jsx13(GenericInterrupt, { value: interrupts[0].value }) });
 }
 
 // src/components/messages/AssistantMessage.tsx
@@ -1658,15 +1881,7 @@ import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { Children, memo, isValidElement, useState as useState12 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-
-// src/components/ui/IconButton.tsx
-import { jsx as jsx11 } from "react/jsx-runtime";
-function IconButton({ label, children, className = "", ...rest }) {
-  return /* @__PURE__ */ jsx11("button", { type: "button", className: `lgk-icon-btn ${className}`, title: label, "aria-label": label, ...rest, children });
-}
-
-// src/components/Markdown.tsx
-import { jsx as jsx12, jsxs as jsxs10 } from "react/jsx-runtime";
+import { jsx as jsx14, jsxs as jsxs12 } from "react/jsx-runtime";
 function CodeBlock({ children }) {
   const [copied, setCopied] = useState12(false);
   const child = Children.toArray(children)[0];
@@ -1683,21 +1898,21 @@ function CodeBlock({ children }) {
       setTimeout(() => setCopied(false), 2e3);
     });
   };
-  return /* @__PURE__ */ jsxs10("div", { className: "lgk-codeblock", children: [
-    /* @__PURE__ */ jsxs10("div", { className: "lgk-codeblock-head", children: [
-      /* @__PURE__ */ jsx12("span", { children: language || "text" }),
-      /* @__PURE__ */ jsx12(IconButton, { label: copied ? "Copied" : "Copy code", onClick: copy, children: copied ? /* @__PURE__ */ jsx12(CheckIcon, {}) : /* @__PURE__ */ jsx12(CopyIcon, {}) })
+  return /* @__PURE__ */ jsxs12("div", { className: "lgk-codeblock", children: [
+    /* @__PURE__ */ jsxs12("div", { className: "lgk-codeblock-head", children: [
+      /* @__PURE__ */ jsx14("span", { children: language || "text" }),
+      /* @__PURE__ */ jsx14(IconButton, { label: copied ? "Copied" : "Copy code", onClick: copy, children: copied ? /* @__PURE__ */ jsx14(CheckIcon, {}) : /* @__PURE__ */ jsx14(CopyIcon, {}) })
     ] }),
-    /* @__PURE__ */ jsx12("pre", { children })
+    /* @__PURE__ */ jsx14("pre", { children })
   ] });
 }
 var base = {
-  pre: ({ children }) => /* @__PURE__ */ jsx12(CodeBlock, { children }),
-  a: ({ node: _n, ...props }) => /* @__PURE__ */ jsx12("a", { ...props, target: "_blank", rel: "noopener noreferrer" }),
-  table: ({ node: _n, ...props }) => /* @__PURE__ */ jsx12("div", { className: "lgk-table-wrap", children: /* @__PURE__ */ jsx12("table", { ...props }) })
+  pre: ({ children }) => /* @__PURE__ */ jsx14(CodeBlock, { children }),
+  a: ({ node: _n, ...props }) => /* @__PURE__ */ jsx14("a", { ...props, target: "_blank", rel: "noopener noreferrer" }),
+  table: ({ node: _n, ...props }) => /* @__PURE__ */ jsx14("div", { className: "lgk-table-wrap", children: /* @__PURE__ */ jsx14("table", { ...props }) })
 };
 var Markdown = memo(function Markdown2({ children, remarkPlugins = [], rehypePlugins, components }) {
-  return /* @__PURE__ */ jsx12("div", { className: "lgk-md", children: /* @__PURE__ */ jsx12(
+  return /* @__PURE__ */ jsx14("div", { className: "lgk-md", children: /* @__PURE__ */ jsx14(
     ReactMarkdown,
     {
       remarkPlugins: [remarkGfm, ...remarkPlugins ?? []],
@@ -1710,23 +1925,23 @@ var Markdown = memo(function Markdown2({ children, remarkPlugins = [], rehypePlu
 
 // src/components/messages/MessageControls.tsx
 import { useState as useState13 } from "react";
-import { jsx as jsx13, jsxs as jsxs11 } from "react/jsx-runtime";
+import { jsx as jsx15, jsxs as jsxs13 } from "react/jsx-runtime";
 function BranchSwitcher({ branch, branchOptions, onSelect, disabled }) {
   if (!branch || !branchOptions || branchOptions.length < 2) return null;
   const i = branchOptions.indexOf(branch);
-  return /* @__PURE__ */ jsxs11("div", { className: "lgk-branch", role: "group", "aria-label": "Message versions", children: [
-    /* @__PURE__ */ jsx13(IconButton, { label: "Previous version", disabled: disabled || i <= 0, onClick: () => onSelect(branchOptions[i - 1]), children: /* @__PURE__ */ jsx13(ChevronLeftIcon, {}) }),
-    /* @__PURE__ */ jsxs11("span", { children: [
+  return /* @__PURE__ */ jsxs13("div", { className: "lgk-branch", role: "group", "aria-label": "Message versions", children: [
+    /* @__PURE__ */ jsx15(IconButton, { label: "Previous version", disabled: disabled || i <= 0, onClick: () => onSelect(branchOptions[i - 1]), children: /* @__PURE__ */ jsx15(ChevronLeftIcon, {}) }),
+    /* @__PURE__ */ jsxs13("span", { children: [
       i + 1,
       " / ",
       branchOptions.length
     ] }),
-    /* @__PURE__ */ jsx13(IconButton, { label: "Next version", disabled: disabled || i >= branchOptions.length - 1, onClick: () => onSelect(branchOptions[i + 1]), children: /* @__PURE__ */ jsx13(ChevronRightIcon, {}) })
+    /* @__PURE__ */ jsx15(IconButton, { label: "Next version", disabled: disabled || i >= branchOptions.length - 1, onClick: () => onSelect(branchOptions[i + 1]), children: /* @__PURE__ */ jsx15(ChevronRightIcon, {}) })
   ] });
 }
 function CopyButton({ text, disabled }) {
   const [copied, setCopied] = useState13(false);
-  return /* @__PURE__ */ jsx13(
+  return /* @__PURE__ */ jsx15(
     IconButton,
     {
       label: copied ? "Copied" : "Copy",
@@ -1737,13 +1952,116 @@ function CopyButton({ text, disabled }) {
           setTimeout(() => setCopied(false), 2e3);
         });
       },
-      children: copied ? /* @__PURE__ */ jsx13(CheckIcon, {}) : /* @__PURE__ */ jsx13(CopyIcon, {})
+      children: copied ? /* @__PURE__ */ jsx15(CheckIcon, {}) : /* @__PURE__ */ jsx15(CopyIcon, {})
     }
   );
 }
 
+// src/components/messages/ResultCards.tsx
+import { useState as useState14 } from "react";
+import { jsx as jsx16, jsxs as jsxs14 } from "react/jsx-runtime";
+var LIST_KEYS = ["items", "results", "data", "rows", "records", "list"];
+function listItems(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") {
+    for (const key of LIST_KEYS) {
+      const v = value[key];
+      if (Array.isArray(v)) return v;
+    }
+  }
+  return null;
+}
+function textOf(v) {
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+function pick(obj, keys) {
+  for (const k of keys) {
+    const t = textOf(obj[k]);
+    if (t) return t;
+  }
+  return "";
+}
+var IMAGE_KEYS = ["image", "image_url", "imageUrl", "thumbnail", "thumbnail_url", "thumbnailUrl", "photo", "avatar", "img"];
+function imageOf(obj) {
+  for (const k of IMAGE_KEYS) {
+    const v = obj[k];
+    if (typeof v === "string" && /^(https?:\/\/|data:image\/)/.test(v)) return v;
+  }
+  return "";
+}
+function priceOf(obj) {
+  const raw = obj.price ?? obj.amount ?? obj.cost;
+  if (typeof raw === "number") {
+    const cur = textOf(obj.currency);
+    return cur ? `${cur} ${raw.toLocaleString()}` : raw.toLocaleString();
+  }
+  return textOf(raw) || pick(obj, ["price_formatted", "amount_formatted", "formatted_price"]);
+}
+function subtitleOf(obj) {
+  const parts = [
+    pick(obj, ["brand"]),
+    pick(obj, ["category", "type"]),
+    pick(obj, ["subtitle", "description", "status"])
+  ];
+  return parts.filter((v, i) => v && parts.indexOf(v) === i).join(" \xB7 ");
+}
+function ResultCards({ value, title }) {
+  const [selected, setSelected] = useState14(null);
+  const items = listItems(value) ?? [];
+  if (!items.length) return null;
+  const shown = items.slice(0, 24);
+  const heading = title || (value && typeof value === "object" ? pick(value, ["title", "label", "heading"]) : "") || "Results";
+  const detail = selected != null ? shown[selected] : null;
+  const detailObj = detail && typeof detail === "object" ? detail : null;
+  return /* @__PURE__ */ jsxs14("div", { className: "lgk-results", children: [
+    /* @__PURE__ */ jsxs14("div", { className: "lgk-results-head", children: [
+      /* @__PURE__ */ jsx16("span", { children: heading }),
+      /* @__PURE__ */ jsxs14("span", { className: "lgk-muted", children: [
+        items.length,
+        " item",
+        items.length === 1 ? "" : "s"
+      ] })
+    ] }),
+    /* @__PURE__ */ jsx16("div", { className: "lgk-results-cards", "aria-label": heading, children: shown.map((item, i) => {
+      const obj = item && typeof item === "object" ? item : null;
+      const name = obj ? pick(obj, ["name", "title", "label", "subject", "id"]) : textOf(item);
+      const sub = obj ? subtitleOf(obj) : "";
+      const img = obj ? imageOf(obj) : "";
+      const price = obj ? priceOf(obj) : "";
+      const clickable = !!obj && Object.keys(obj).length > 0;
+      return /* @__PURE__ */ jsxs14(
+        "button",
+        {
+          type: "button",
+          className: "lgk-r-card",
+          disabled: !clickable,
+          "data-open": selected === i || void 0,
+          title: name ? `View ${name}` : "View item",
+          onClick: () => clickable && setSelected(selected === i ? null : i),
+          children: [
+            img ? /* @__PURE__ */ jsx16("img", { className: "lgk-r-img", src: img, alt: "", loading: "lazy" }) : null,
+            /* @__PURE__ */ jsx16("span", { className: "lgk-r-b", children: name || `Item ${i + 1}` }),
+            sub ? /* @__PURE__ */ jsx16("span", { className: "lgk-r-s", children: sub }) : null,
+            price ? /* @__PURE__ */ jsx16("span", { className: "lgk-r-p", children: price }) : null
+          ]
+        },
+        i
+      );
+    }) }),
+    detailObj ? /* @__PURE__ */ jsxs14("div", { className: "lgk-results-detail", children: [
+      /* @__PURE__ */ jsxs14("div", { className: "lgk-results-detail-head", children: [
+        /* @__PURE__ */ jsx16("strong", { children: pick(detailObj, ["name", "title", "label"]) || "Details" }),
+        /* @__PURE__ */ jsx16("button", { type: "button", className: "lgk-more", onClick: () => setSelected(null), children: "Close" })
+      ] }),
+      /* @__PURE__ */ jsx16(KeyValueTable, { data: detailObj })
+    ] }) : null
+  ] });
+}
+
 // src/components/messages/ToolCalls.tsx
-import { Fragment as Fragment5, jsx as jsx14, jsxs as jsxs12 } from "react/jsx-runtime";
+import { Fragment as Fragment5, jsx as jsx17, jsxs as jsxs15 } from "react/jsx-runtime";
 var LABEL2 = { running: "Running", done: "Done", error: "Failed", pending: "Not run" };
 function parse(content) {
   try {
@@ -1754,53 +2072,55 @@ function parse(content) {
 }
 function ToolOutput({ message }) {
   const parsed = parse(messageText(message.content));
+  if (listItems(parsed)?.length) return /* @__PURE__ */ jsx17(ResultCards, { value: parsed });
   if (parsed && typeof parsed === "object") {
-    return /* @__PURE__ */ jsx14(KeyValueTable, { data: parsed, maxRows: Array.isArray(parsed) ? 5 : void 0 });
+    return /* @__PURE__ */ jsx17(KeyValueTable, { data: parsed, maxRows: Array.isArray(parsed) ? 5 : void 0 });
   }
-  return /* @__PURE__ */ jsx14(ExpandableText, { text: String(parsed) });
+  return /* @__PURE__ */ jsx17(ExpandableText, { text: String(parsed) });
 }
 function ToolCallCard({ call, result, status }) {
   const { tools } = useKit();
   const custom = tools[call.name]?.render;
   if (custom) {
-    return /* @__PURE__ */ jsx14("div", { className: "lgk-tool-custom", children: custom({ name: call.name, args: call.args, status, result: result ? parse(messageText(result.content)) : void 0 }) });
+    return /* @__PURE__ */ jsx17("div", { className: "lgk-tool-custom", children: custom({ name: call.name, args: call.args, status, result: result ? parse(messageText(result.content)) : void 0 }) });
   }
   const hasArgs = Object.keys(call.args ?? {}).length > 0;
-  return /* @__PURE__ */ jsxs12("details", { className: "lgk-tool", "data-status": status, open: status === "running" || status === "error" ? true : void 0, children: [
-    /* @__PURE__ */ jsxs12("summary", { children: [
-      /* @__PURE__ */ jsx14("span", { className: "lgk-dot", "aria-hidden": true }),
-      /* @__PURE__ */ jsx14("code", { children: call.name }),
-      /* @__PURE__ */ jsx14("span", { className: "lgk-tool-status", children: LABEL2[status] })
+  const resultItems = result ? listItems(parse(messageText(result.content))) : null;
+  return /* @__PURE__ */ jsxs15("details", { className: "lgk-tool", "data-status": status, open: status === "running" || status === "error" || !!resultItems?.length || void 0, children: [
+    /* @__PURE__ */ jsxs15("summary", { children: [
+      /* @__PURE__ */ jsx17("span", { className: "lgk-dot", "aria-hidden": true }),
+      /* @__PURE__ */ jsx17("code", { children: call.name }),
+      /* @__PURE__ */ jsx17("span", { className: "lgk-tool-status", children: LABEL2[status] })
     ] }),
-    /* @__PURE__ */ jsxs12("div", { className: "lgk-tool-body", children: [
-      /* @__PURE__ */ jsx14("h4", { children: "Input" }),
-      hasArgs ? /* @__PURE__ */ jsx14(KeyValueTable, { data: call.args }) : /* @__PURE__ */ jsx14("code", { className: "lgk-inline-code", children: "{}" }),
-      result && /* @__PURE__ */ jsxs12(Fragment5, { children: [
-        /* @__PURE__ */ jsx14("h4", { children: "Output" }),
-        /* @__PURE__ */ jsx14(ToolOutput, { message: result })
+    /* @__PURE__ */ jsxs15("div", { className: "lgk-tool-body", children: [
+      /* @__PURE__ */ jsx17("h4", { children: "Input" }),
+      hasArgs ? /* @__PURE__ */ jsx17(KeyValueTable, { data: call.args }) : /* @__PURE__ */ jsx17("code", { className: "lgk-inline-code", children: "{}" }),
+      result && /* @__PURE__ */ jsxs15(Fragment5, { children: [
+        /* @__PURE__ */ jsx17("h4", { children: "Output" }),
+        /* @__PURE__ */ jsx17(ToolOutput, { message: result })
       ] })
     ] })
   ] });
 }
 function OrphanToolResult({ message }) {
-  return /* @__PURE__ */ jsxs12("details", { className: "lgk-tool", "data-status": "done", children: [
-    /* @__PURE__ */ jsxs12("summary", { children: [
-      /* @__PURE__ */ jsx14("span", { className: "lgk-dot", "aria-hidden": true }),
-      /* @__PURE__ */ jsx14("code", { children: message.name ?? "tool result" }),
-      /* @__PURE__ */ jsx14("span", { className: "lgk-tool-status", children: "Result" })
+  return /* @__PURE__ */ jsxs15("details", { className: "lgk-tool", "data-status": "done", children: [
+    /* @__PURE__ */ jsxs15("summary", { children: [
+      /* @__PURE__ */ jsx17("span", { className: "lgk-dot", "aria-hidden": true }),
+      /* @__PURE__ */ jsx17("code", { children: message.name ?? "tool result" }),
+      /* @__PURE__ */ jsx17("span", { className: "lgk-tool-status", children: "Result" })
     ] }),
-    /* @__PURE__ */ jsx14("div", { className: "lgk-tool-body", children: /* @__PURE__ */ jsx14(ToolOutput, { message }) })
+    /* @__PURE__ */ jsx17("div", { className: "lgk-tool-body", children: /* @__PURE__ */ jsx17(ToolOutput, { message }) })
   ] });
 }
 
 // src/components/messages/AssistantMessage.tsx
-import { Fragment as Fragment6, jsx as jsx15, jsxs as jsxs13 } from "react/jsx-runtime";
+import { Fragment as Fragment6, jsx as jsx18, jsxs as jsxs16 } from "react/jsx-runtime";
 function GenerativeUi({ message, components }) {
   const agent = useAgentContext();
   const artifact = useArtifact();
   const items = agent.ui.filter((u) => u.metadata?.message_id === message.id);
   if (!items.length) return null;
-  return /* @__PURE__ */ jsx15(Fragment6, { children: items.map((u) => /* @__PURE__ */ jsx15(
+  return /* @__PURE__ */ jsx18(Fragment6, { children: items.map((u) => /* @__PURE__ */ jsx18(
     LoadExternalComponent,
     {
       stream: agent.stream,
@@ -1831,16 +2151,16 @@ function AssistantMessage({
   if (!text && !reasoning && !calls.length && !hasUi) return null;
   const { branch, branchOptions, parentCheckpoint } = branching ? agent.getBranch(message) : {};
   const busy = agent.isLoading;
-  return /* @__PURE__ */ jsxs13("div", { className: "lgk-msg lgk-ai", children: [
-    reasoning && /* @__PURE__ */ jsxs13("details", { className: "lgk-reasoning", children: [
-      /* @__PURE__ */ jsx15("summary", { children: "Reasoning" }),
-      /* @__PURE__ */ jsx15("p", { children: reasoning })
+  return /* @__PURE__ */ jsxs16("div", { className: "lgk-msg lgk-ai", children: [
+    reasoning && /* @__PURE__ */ jsxs16("details", { className: "lgk-reasoning", children: [
+      /* @__PURE__ */ jsx18("summary", { children: "Reasoning" }),
+      /* @__PURE__ */ jsx18("p", { children: reasoning })
     ] }),
-    text && /* @__PURE__ */ jsx15(Markdown, { ...markdown, children: text }),
-    sources && sources.length > 0 && /* @__PURE__ */ jsxs13("div", { className: "lgk-sources", "aria-label": "Sources", children: [
-      /* @__PURE__ */ jsx15("span", { className: "lgk-sources-label", children: "Sources" }),
-      sources.map((s, i) => /* @__PURE__ */ jsxs13("span", { className: "lgk-source", children: [
-        /* @__PURE__ */ jsx15("b", { children: s.id ?? i + 1 }),
+    text && /* @__PURE__ */ jsx18(Markdown, { ...markdown, children: text }),
+    sources && sources.length > 0 && /* @__PURE__ */ jsxs16("div", { className: "lgk-sources", "aria-label": "Sources", children: [
+      /* @__PURE__ */ jsx18("span", { className: "lgk-sources-label", children: "Sources" }),
+      sources.map((s, i) => /* @__PURE__ */ jsxs16("span", { className: "lgk-source", children: [
+        /* @__PURE__ */ jsx18("b", { children: s.id ?? i + 1 }),
         " ",
         s.title,
         s.page ? ` \xB7 p. ${s.page}` : ""
@@ -1849,14 +2169,14 @@ function AssistantMessage({
     !hideToolCalls && calls.map((c, i) => {
       const res = c.id ? results.get(c.id) : void 0;
       const status = res ? res.status === "error" ? "error" : "done" : loading || c.id && agent.pendingToolCallIds.includes(c.id) ? "running" : "pending";
-      return /* @__PURE__ */ jsx15(ToolCallCard, { call: c, result: res, status }, c.id ?? i);
+      return /* @__PURE__ */ jsx18(ToolCallCard, { call: c, result: res, status }, c.id ?? i);
     }),
-    /* @__PURE__ */ jsx15(GenerativeUi, { message, components: uiComponents }),
-    text && !loading && /* @__PURE__ */ jsxs13("div", { className: "lgk-actions", children: [
-      /* @__PURE__ */ jsx15(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
-      copy && /* @__PURE__ */ jsx15(CopyButton, { text, disabled: busy }),
-      branching && parentCheckpoint && /* @__PURE__ */ jsx15(IconButton, { label: "Regenerate", disabled: busy, onClick: () => void agent.regenerate(parentCheckpoint), children: /* @__PURE__ */ jsx15(RefreshIcon, {}) }),
-      feedback && /* @__PURE__ */ jsx15("span", { className: "lgk-feedback", "aria-label": "Rate this answer", children: feedback.sent ? /* @__PURE__ */ jsx15("span", { className: "lgk-feedback-thanks", children: "Thanks for the feedback" }) : ["up", "down"].map((rating) => /* @__PURE__ */ jsx15(
+    /* @__PURE__ */ jsx18(GenerativeUi, { message, components: uiComponents }),
+    text && !loading && /* @__PURE__ */ jsxs16("div", { className: "lgk-actions", children: [
+      /* @__PURE__ */ jsx18(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
+      copy && /* @__PURE__ */ jsx18(CopyButton, { text, disabled: busy }),
+      branching && parentCheckpoint && /* @__PURE__ */ jsx18(IconButton, { label: "Regenerate", disabled: busy, onClick: () => void agent.regenerate(parentCheckpoint), children: /* @__PURE__ */ jsx18(RefreshIcon, {}) }),
+      feedback && /* @__PURE__ */ jsx18("span", { className: "lgk-feedback", "aria-label": "Rate this answer", children: feedback.sent ? /* @__PURE__ */ jsx18("span", { className: "lgk-feedback-thanks", children: "Thanks for the feedback" }) : ["up", "down"].map((rating) => /* @__PURE__ */ jsx18(
         "button",
         {
           type: "button",
@@ -1873,12 +2193,12 @@ function AssistantMessage({
 }
 
 // src/components/messages/HumanMessage.tsx
-import { useState as useState14 } from "react";
-import { Fragment as Fragment7, jsx as jsx16, jsxs as jsxs14 } from "react/jsx-runtime";
+import { useState as useState15 } from "react";
+import { Fragment as Fragment7, jsx as jsx19, jsxs as jsxs17 } from "react/jsx-runtime";
 function HumanMessage({ message, branching = true, copy = true }) {
   const agent = useAgentContext();
-  const [editing, setEditing] = useState14(false);
-  const [draft, setDraft] = useState14("");
+  const [editing, setEditing] = useState15(false);
+  const [draft, setDraft] = useState15("");
   const text = messageText(message.content);
   const blocks = Array.isArray(message.content) ? message.content.filter(isMultimodalBlock) : [];
   const { branch, branchOptions } = branching ? agent.getBranch(message) : {};
@@ -1889,8 +2209,8 @@ function HumanMessage({ message, branching = true, copy = true }) {
     setEditing(false);
     void agent.editMessage(message, next);
   };
-  return /* @__PURE__ */ jsxs14("div", { className: "lgk-msg lgk-human", "data-editing": editing || void 0, children: [
-    editing ? /* @__PURE__ */ jsx16(
+  return /* @__PURE__ */ jsxs17("div", { className: "lgk-msg lgk-human", "data-editing": editing || void 0, children: [
+    editing ? /* @__PURE__ */ jsx19(
       "textarea",
       {
         autoFocus: true,
@@ -1905,31 +2225,31 @@ function HumanMessage({ message, branching = true, copy = true }) {
           if (e.key === "Escape") setEditing(false);
         }
       }
-    ) : /* @__PURE__ */ jsxs14(Fragment7, { children: [
-      blocks.length > 0 && /* @__PURE__ */ jsx16("div", { className: "lgk-attachments", "data-align": "end", children: blocks.map((b, i) => /* @__PURE__ */ jsx16(MultimodalPreview, { block: b }, i)) }),
-      text && /* @__PURE__ */ jsx16("p", { children: text })
+    ) : /* @__PURE__ */ jsxs17(Fragment7, { children: [
+      blocks.length > 0 && /* @__PURE__ */ jsx19("div", { className: "lgk-attachments", "data-align": "end", children: blocks.map((b, i) => /* @__PURE__ */ jsx19(MultimodalPreview, { block: b }, i)) }),
+      text && /* @__PURE__ */ jsx19("p", { children: text })
     ] }),
-    /* @__PURE__ */ jsxs14("div", { className: "lgk-actions", children: [
-      /* @__PURE__ */ jsx16(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
-      editing ? /* @__PURE__ */ jsxs14(Fragment7, { children: [
-        /* @__PURE__ */ jsx16(IconButton, { label: "Cancel edit", onClick: () => setEditing(false), children: /* @__PURE__ */ jsx16(XIcon, {}) }),
-        /* @__PURE__ */ jsx16(IconButton, { label: "Send edit (Ctrl+Enter)", disabled: busy || !draft.trim(), onClick: submit, children: /* @__PURE__ */ jsx16(SendIcon, {}) })
-      ] }) : /* @__PURE__ */ jsxs14(Fragment7, { children: [
-        copy && /* @__PURE__ */ jsx16(CopyButton, { text, disabled: busy }),
-        branching && text && /* @__PURE__ */ jsx16(IconButton, { label: "Edit", disabled: busy, onClick: () => {
+    /* @__PURE__ */ jsxs17("div", { className: "lgk-actions", children: [
+      /* @__PURE__ */ jsx19(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
+      editing ? /* @__PURE__ */ jsxs17(Fragment7, { children: [
+        /* @__PURE__ */ jsx19(IconButton, { label: "Cancel edit", onClick: () => setEditing(false), children: /* @__PURE__ */ jsx19(XIcon, {}) }),
+        /* @__PURE__ */ jsx19(IconButton, { label: "Send edit (Ctrl+Enter)", disabled: busy || !draft.trim(), onClick: submit, children: /* @__PURE__ */ jsx19(SendIcon, {}) })
+      ] }) : /* @__PURE__ */ jsxs17(Fragment7, { children: [
+        copy && /* @__PURE__ */ jsx19(CopyButton, { text, disabled: busy }),
+        branching && text && /* @__PURE__ */ jsx19(IconButton, { label: "Edit", disabled: busy, onClick: () => {
           setDraft(text);
           setEditing(true);
-        }, children: /* @__PURE__ */ jsx16(PencilIcon, {}) })
+        }, children: /* @__PURE__ */ jsx19(PencilIcon, {}) })
       ] })
     ] })
   ] });
 }
 
 // src/components/Chat.tsx
-import { jsx as jsx17, jsxs as jsxs15 } from "react/jsx-runtime";
+import { jsx as jsx20, jsxs as jsxs18 } from "react/jsx-runtime";
 function Chat(props) {
   const agent = useAgent();
-  return /* @__PURE__ */ jsx17(AgentContext.Provider, { value: agent, children: /* @__PURE__ */ jsx17(ChatView, { ...props }) });
+  return /* @__PURE__ */ jsx20(AgentContext.Provider, { value: agent, children: /* @__PURE__ */ jsx20(ChatView, { ...props }) });
 }
 function hostOf(url) {
   try {
@@ -1953,9 +2273,10 @@ function ChatView({
 }) {
   const agent = useAgentContext();
   const kit = useKit();
-  const f = { upload: true, branching: true, copy: true, toolToggle: true, artifacts: true, connectionBadge: true, ...features };
+  const f = { upload: true, branching: true, copy: true, toolToggle: true, artifacts: true, connectionBadge: true, history: true, ...features };
   const branching = f.branching && kit.branching;
-  const [hideToolCalls, setHideToolCalls] = useState15(false);
+  const [hideToolCalls, setHideToolCalls] = useState16(false);
+  const [historyOpen, setHistoryOpen] = useState16(false);
   const [artifactOpen, closeArtifact] = useArtifactOpen();
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom();
@@ -1963,6 +2284,9 @@ function ChatView({
     closeArtifact();
     setArtifactContext({});
   }, [agent.threadId, closeArtifact, setArtifactContext]);
+  useEffect8(() => {
+    setHistoryOpen(false);
+  }, [agent.threadId]);
   const visible = agent.messages.filter((m) => !isHiddenMessage(m));
   const results = /* @__PURE__ */ new Map();
   const knownCalls = /* @__PURE__ */ new Set();
@@ -1978,10 +2302,10 @@ function ChatView({
   const showArtifact = f.artifacts && artifactOpen;
   const renderMessage = (m, i) => {
     const key = m.id ?? `${m.type}-${i}`;
-    if (m.type === "human") return /* @__PURE__ */ jsx17(HumanMessage, { message: m, branching, copy: f.copy }, key);
+    if (m.type === "human") return /* @__PURE__ */ jsx20(HumanMessage, { message: m, branching, copy: f.copy }, key);
     if (m.type === "ai") {
       const isLast = m === lastAi && !agent.isLoading;
-      return /* @__PURE__ */ jsx17(
+      return /* @__PURE__ */ jsx20(
         AssistantMessage,
         {
           message: m,
@@ -1999,55 +2323,56 @@ function ChatView({
       );
     }
     if (m.type === "tool" && !hideToolCalls && !knownCalls.has(m.tool_call_id)) {
-      return /* @__PURE__ */ jsx17(OrphanToolResult, { message: m }, key);
+      return /* @__PURE__ */ jsx20(OrphanToolResult, { message: m }, key);
     }
     return null;
   };
-  return /* @__PURE__ */ jsxs15("section", { className: `lgk lgk-chat ${className ?? ""}`, "aria-label": title ?? "Chat", "data-artifact": showArtifact || void 0, children: [
-    /* @__PURE__ */ jsxs15("header", { className: "lgk-chat-head", children: [
-      /* @__PURE__ */ jsxs15("div", { className: "lgk-chat-head-start", children: [
+  return /* @__PURE__ */ jsxs18("section", { className: `lgk lgk-chat ${className ?? ""}`, "aria-label": title ?? "Chat", "data-artifact": showArtifact || void 0, children: [
+    /* @__PURE__ */ jsxs18("header", { className: "lgk-chat-head", children: [
+      /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-head-start", children: [
         headerStart,
-        title && /* @__PURE__ */ jsx17("h2", { children: title }),
-        f.connectionBadge && kit.isConfigured && /* @__PURE__ */ jsx17("span", { className: "lgk-host", "data-status": kit.status, title: `${kit.status === "error" ? "Can't reach" : "Connected to"} ${kit.connection.apiUrl}`, children: hostOf(kit.connection.apiUrl) })
+        title && /* @__PURE__ */ jsx20("h2", { children: title }),
+        f.connectionBadge && kit.isConfigured && /* @__PURE__ */ jsx20("span", { className: "lgk-host", "data-status": kit.status, title: `${kit.status === "error" ? "Can't reach" : "Connected to"} ${kit.connection.apiUrl}`, children: hostOf(kit.connection.apiUrl) })
       ] }),
-      /* @__PURE__ */ jsxs15("div", { className: "lgk-chat-head-actions", children: [
-        kit.gateway && !agent.handoff && /* @__PURE__ */ jsx17("button", { type: "button", className: "lgk-hb-btn", onClick: () => void agent.requestHuman(), children: "Talk to a human" }),
-        started && /* @__PURE__ */ jsx17(IconButton, { label: "New chat", onClick: agent.newThread, children: /* @__PURE__ */ jsx17(NewChatIcon, {}) }),
+      /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-head-actions", children: [
+        kit.gateway && !agent.handoff && /* @__PURE__ */ jsx20("button", { type: "button", className: "lgk-hb-btn", onClick: () => void agent.requestHuman(), children: "Talk to a human" }),
+        f.history && started && /* @__PURE__ */ jsx20(IconButton, { label: "Chat history", onClick: () => setHistoryOpen(true), children: /* @__PURE__ */ jsx20(HistoryIcon, {}) }),
+        started && /* @__PURE__ */ jsx20(IconButton, { label: "New chat", onClick: agent.newThread, children: /* @__PURE__ */ jsx20(NewChatIcon, {}) }),
         headerActions
       ] })
     ] }),
-    /* @__PURE__ */ jsxs15("div", { className: "lgk-chat-body", children: [
-      /* @__PURE__ */ jsxs15("div", { className: "lgk-chat-main", children: [
-        /* @__PURE__ */ jsx17("div", { className: "lgk-scroll", ref: scrollRef, children: /* @__PURE__ */ jsxs15("div", { className: "lgk-thread", ref: contentRef, role: "log", "aria-live": "polite", children: [
-          empty && /* @__PURE__ */ jsxs15("div", { className: "lgk-empty", children: [
-            !kit.isConfigured ? /* @__PURE__ */ jsx17("p", { children: "Add a server URL and assistant to the provider to start chatting." }) : emptyState ?? /* @__PURE__ */ jsx17("p", { children: "Ask anything to start a conversation." }),
-            kit.isConfigured && suggestions && suggestions.length > 0 && /* @__PURE__ */ jsx17("div", { className: "lgk-suggest", children: suggestions.map((s) => /* @__PURE__ */ jsx17("button", { type: "button", onClick: () => void agent.send(s), children: s }, s)) })
+    /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-body", children: [
+      /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-main", children: [
+        /* @__PURE__ */ jsx20("div", { className: "lgk-scroll", ref: scrollRef, children: /* @__PURE__ */ jsxs18("div", { className: "lgk-thread", ref: contentRef, role: "log", "aria-live": "polite", children: [
+          empty && /* @__PURE__ */ jsxs18("div", { className: "lgk-empty", children: [
+            !kit.isConfigured ? /* @__PURE__ */ jsx20("p", { children: "Add a server URL and assistant to the provider to start chatting." }) : emptyState ?? /* @__PURE__ */ jsx20("p", { children: "Ask anything to start a conversation." }),
+            kit.isConfigured && suggestions && suggestions.length > 0 && /* @__PURE__ */ jsx20("div", { className: "lgk-suggest", children: suggestions.map((s) => /* @__PURE__ */ jsx20("button", { type: "button", onClick: () => void agent.send(s), children: s }, s)) })
           ] }),
           visible.map(renderMessage),
-          waiting && /* @__PURE__ */ jsxs15("div", { className: "lgk-typing", role: "status", "aria-label": "Agent is working", children: [
-            /* @__PURE__ */ jsx17("i", {}),
-            /* @__PURE__ */ jsx17("i", {}),
-            /* @__PURE__ */ jsx17("i", {})
+          waiting && /* @__PURE__ */ jsxs18("div", { className: "lgk-typing", role: "status", "aria-label": "Agent is working", children: [
+            /* @__PURE__ */ jsx20("i", {}),
+            /* @__PURE__ */ jsx20("i", {}),
+            /* @__PURE__ */ jsx20("i", {})
           ] }),
-          agent.handoff && /* @__PURE__ */ jsxs15("div", { className: "lgk-handoff", "data-status": agent.handoff.status, role: "status", children: [
-            /* @__PURE__ */ jsxs15("div", { className: "lgk-handoff-head", children: [
-              /* @__PURE__ */ jsx17("strong", { children: agent.handoff.status === "active" ? "A colleague has joined" : "Waiting for a colleague" }),
-              /* @__PURE__ */ jsx17("span", { children: agent.handoff.status === "active" ? "You're chatting with our team. Replies appear here." : "Our team has been notified. You can keep typing here." })
+          agent.handoff && /* @__PURE__ */ jsxs18("div", { className: "lgk-handoff", "data-status": agent.handoff.status, role: "status", children: [
+            /* @__PURE__ */ jsxs18("div", { className: "lgk-handoff-head", children: [
+              /* @__PURE__ */ jsx20("strong", { children: agent.handoff.status === "active" ? "A colleague has joined" : "Waiting for a colleague" }),
+              /* @__PURE__ */ jsx20("span", { children: agent.handoff.status === "active" ? "You're chatting with our team. Replies appear here." : "Our team has been notified. You can keep typing here." })
             ] }),
-            agent.handoffMessages.filter((m) => m.role === "staff").map((m) => /* @__PURE__ */ jsxs15("div", { className: "lgk-handoff-msg", children: [
-              /* @__PURE__ */ jsx17("b", { children: m.author || "Team" }),
+            agent.handoffMessages.filter((m) => m.role === "staff").map((m) => /* @__PURE__ */ jsxs18("div", { className: "lgk-handoff-msg", children: [
+              /* @__PURE__ */ jsx20("b", { children: m.author || "Team" }),
               " ",
               m.text
             ] }, m.id))
           ] }),
-          /* @__PURE__ */ jsx17(InterruptView, { interrupts: agent.interrupts, render: renderInterrupt }),
-          agent.error && /* @__PURE__ */ jsx17("div", { className: "lgk-error", role: "alert", children: agent.error })
+          /* @__PURE__ */ jsx20(InterruptView, { interrupts: agent.interrupts, render: renderInterrupt }),
+          agent.error && /* @__PURE__ */ jsx20("div", { className: "lgk-error", role: "alert", children: agent.error })
         ] }) }),
-        !isAtBottom && /* @__PURE__ */ jsxs15("button", { type: "button", className: "lgk-scroll-btn", onClick: () => scrollToBottom(), children: [
-          /* @__PURE__ */ jsx17(ArrowDownIcon, {}),
+        !isAtBottom && /* @__PURE__ */ jsxs18("button", { type: "button", className: "lgk-scroll-btn", onClick: () => scrollToBottom(), children: [
+          /* @__PURE__ */ jsx20(ArrowDownIcon, {}),
           " Scroll to bottom"
         ] }),
-        /* @__PURE__ */ jsx17(
+        /* @__PURE__ */ jsx20(
           Composer,
           {
             placeholder,
@@ -2059,118 +2384,42 @@ function ChatView({
             onStop: () => void agent.stop(),
             onError: (description) => kit.notify({ kind: "error", title: "Can't attach that", description })
           }
-        )
+        ),
+        historyOpen && /* @__PURE__ */ jsx20(HistoryPanel, { onClose: () => setHistoryOpen(false) })
       ] }),
-      showArtifact && /* @__PURE__ */ jsxs15("aside", { className: "lgk-artifact", "aria-label": "Artifact", children: [
-        /* @__PURE__ */ jsxs15("div", { className: "lgk-artifact-head", children: [
-          /* @__PURE__ */ jsx17(ArtifactTitle, { className: "lgk-artifact-title" }),
-          /* @__PURE__ */ jsx17(IconButton, { label: "Close panel", onClick: closeArtifact, children: /* @__PURE__ */ jsx17(XIcon, {}) })
+      showArtifact && /* @__PURE__ */ jsxs18("aside", { className: "lgk-artifact", "aria-label": "Artifact", children: [
+        /* @__PURE__ */ jsxs18("div", { className: "lgk-artifact-head", children: [
+          /* @__PURE__ */ jsx20(ArtifactTitle, { className: "lgk-artifact-title" }),
+          /* @__PURE__ */ jsx20(IconButton, { label: "Close panel", onClick: closeArtifact, children: /* @__PURE__ */ jsx20(XIcon, {}) })
         ] }),
-        /* @__PURE__ */ jsx17(ArtifactContent, { className: "lgk-artifact-body" })
+        /* @__PURE__ */ jsx20(ArtifactContent, { className: "lgk-artifact-body" })
       ] })
     ] })
   ] });
 }
 
 // src/components/ChatPopup.tsx
-import { useState as useState16 } from "react";
-import { jsx as jsx18, jsxs as jsxs16 } from "react/jsx-runtime";
+import { useState as useState17 } from "react";
+import { jsx as jsx21, jsxs as jsxs19 } from "react/jsx-runtime";
 function ChatPopup({ defaultOpen = false, launcherLabel = "Ask the agent", title = "Assistant", features, ...chat }) {
-  const [open, setOpen] = useState16(defaultOpen);
-  return /* @__PURE__ */ jsxs16("div", { className: "lgk lgk-popup-root", children: [
-    /* @__PURE__ */ jsx18("div", { className: "lgk-popup", role: "dialog", "aria-label": title, hidden: !open, children: /* @__PURE__ */ jsx18(
+  const [open, setOpen] = useState17(defaultOpen);
+  return /* @__PURE__ */ jsxs19("div", { className: "lgk lgk-popup-root", children: [
+    /* @__PURE__ */ jsx21("div", { className: "lgk-popup", role: "dialog", "aria-label": title, hidden: !open, children: /* @__PURE__ */ jsx21(
       Chat,
       {
         ...chat,
         title,
         features: { connectionBadge: false, toolToggle: false, artifacts: false, ...features },
-        headerActions: /* @__PURE__ */ jsx18(IconButton, { label: "Close", onClick: () => setOpen(false), children: /* @__PURE__ */ jsx18(XIcon, {}) })
+        headerActions: /* @__PURE__ */ jsx21(IconButton, { label: "Close", onClick: () => setOpen(false), children: /* @__PURE__ */ jsx21(XIcon, {}) })
       }
     ) }),
-    !open && /* @__PURE__ */ jsx18("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
+    !open && /* @__PURE__ */ jsx21("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
   ] });
 }
 
 // src/components/ChatSidebar.tsx
-import { useState as useState17 } from "react";
-
-// src/components/ThreadHistory.tsx
-import { jsx as jsx19, jsxs as jsxs17 } from "react/jsx-runtime";
-function formatRelative(iso) {
-  const seconds = (new Date(iso).getTime() - Date.now()) / 1e3;
-  const f = new Intl.RelativeTimeFormat(void 0, { numeric: "auto" });
-  const steps = [
-    [60, "second", 1],
-    [3600, "minute", 60],
-    [86400, "hour", 3600],
-    [604800, "day", 86400]
-  ];
-  for (const [limit, unit, div] of steps) {
-    if (Math.abs(seconds) < limit) return f.format(Math.round(seconds / div), unit);
-  }
-  return new Date(iso).toLocaleDateString();
-}
-function ThreadHistory({ onSelect }) {
-  const { threads, loading, remove } = useThreads();
-  const { threadId, setThreadId, isConfigured, notify } = useKit();
-  if (!isConfigured) return /* @__PURE__ */ jsx19("p", { className: "lgk-muted", children: "Connect to a server to see your chats." });
-  if (loading) {
-    return /* @__PURE__ */ jsx19("div", { className: "lgk-threads", "aria-busy": "true", "aria-label": "Loading chats", children: Array.from({ length: 8 }, (_, i) => /* @__PURE__ */ jsx19("div", { className: "lgk-skeleton" }, i)) });
-  }
-  if (!threads.length) return /* @__PURE__ */ jsx19("p", { className: "lgk-muted", children: "No chats yet. Send a message to start one." });
-  return /* @__PURE__ */ jsx19("nav", { className: "lgk-threads", "aria-label": "Chat history", children: threads.map((t) => /* @__PURE__ */ jsxs17("div", { className: "lgk-thread-row", "data-active": t.id === threadId, children: [
-    /* @__PURE__ */ jsxs17(
-      "button",
-      {
-        type: "button",
-        "aria-current": t.id === threadId ? "page" : void 0,
-        onClick: () => {
-          if (t.id !== threadId) setThreadId(t.id);
-          onSelect?.(t.id);
-        },
-        children: [
-          /* @__PURE__ */ jsx19("span", { className: "lgk-thread-title", children: t.title }),
-          /* @__PURE__ */ jsx19("span", { className: "lgk-muted", children: formatRelative(t.updatedAt) })
-        ]
-      }
-    ),
-    /* @__PURE__ */ jsx19(
-      IconButton,
-      {
-        label: `Delete "${t.title}"`,
-        onClick: () => {
-          remove(t.id).catch(() => notify({ kind: "error", title: "Couldn't delete that chat" }));
-        },
-        children: /* @__PURE__ */ jsx19(TrashIcon, {})
-      }
-    )
-  ] }, t.id)) });
-}
-
-// src/components/HistoryPanel.tsx
-import { jsx as jsx20, jsxs as jsxs18 } from "react/jsx-runtime";
-function HistoryPanel({ onClose, title = "Chats" }) {
-  const { setThreadId } = useKit();
-  return /* @__PURE__ */ jsxs18("div", { className: "lgk-dock-history", role: "region", "aria-label": "Chat history", children: [
-    /* @__PURE__ */ jsxs18("header", { className: "lgk-chat-head", children: [
-      /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-head-start", children: [
-        /* @__PURE__ */ jsx20(IconButton, { label: "Back to chat", onClick: onClose, children: /* @__PURE__ */ jsx20(ChevronLeftIcon, {}) }),
-        /* @__PURE__ */ jsx20("h2", { children: title })
-      ] }),
-      /* @__PURE__ */ jsx20("div", { className: "lgk-chat-head-actions", children: /* @__PURE__ */ jsxs18("button", { type: "button", className: "lgk-primary lgk-sm", onClick: () => {
-        setThreadId(null);
-        onClose();
-      }, children: [
-        /* @__PURE__ */ jsx20(PlusIcon, {}),
-        " New chat"
-      ] }) })
-    ] }),
-    /* @__PURE__ */ jsx20("div", { className: "lgk-dock-history-body", children: /* @__PURE__ */ jsx20(ThreadHistory, { onSelect: onClose }) })
-  ] });
-}
-
-// src/components/ChatSidebar.tsx
-import { Fragment as Fragment8, jsx as jsx21, jsxs as jsxs19 } from "react/jsx-runtime";
+import { useState as useState18 } from "react";
+import { Fragment as Fragment8, jsx as jsx22, jsxs as jsxs20 } from "react/jsx-runtime";
 function ChatSidebar({
   children,
   defaultOpen = true,
@@ -2181,97 +2430,97 @@ function ChatSidebar({
   features,
   ...chat
 }) {
-  const [open, setOpen] = useState17(defaultOpen);
-  const [view, setView] = useState17("chat");
+  const [open, setOpen] = useState18(defaultOpen);
+  const [view, setView] = useState18("chat");
   const style = { "--lgk-dock-w": `${width}px` };
-  return /* @__PURE__ */ jsxs19("div", { className: "lgk lgk-dock", "data-mode": mode, "data-open": open, style, children: [
-    /* @__PURE__ */ jsx21("div", { className: "lgk-dock-main", children }),
-    /* @__PURE__ */ jsxs19("aside", { className: "lgk-dock-side", hidden: !open, "aria-label": title, children: [
-      /* @__PURE__ */ jsx21(
+  return /* @__PURE__ */ jsxs20("div", { className: "lgk lgk-dock", "data-mode": mode, "data-open": open, style, children: [
+    /* @__PURE__ */ jsx22("div", { className: "lgk-dock-main", children }),
+    /* @__PURE__ */ jsxs20("aside", { className: "lgk-dock-side", hidden: !open, "aria-label": title, children: [
+      /* @__PURE__ */ jsx22(
         Chat,
         {
           ...chat,
           title,
           features: { connectionBadge: false, artifacts: false, ...features },
-          headerActions: /* @__PURE__ */ jsxs19(Fragment8, { children: [
-            /* @__PURE__ */ jsx21(IconButton, { label: "Chat history", onClick: () => setView("history"), children: /* @__PURE__ */ jsx21(HistoryIcon, {}) }),
-            /* @__PURE__ */ jsx21(IconButton, { label: "Close", onClick: () => {
+          headerActions: /* @__PURE__ */ jsxs20(Fragment8, { children: [
+            /* @__PURE__ */ jsx22(IconButton, { label: "Chat history", onClick: () => setView("history"), children: /* @__PURE__ */ jsx22(HistoryIcon, {}) }),
+            /* @__PURE__ */ jsx22(IconButton, { label: "Close", onClick: () => {
               setOpen(false);
               setView("chat");
-            }, children: /* @__PURE__ */ jsx21(XIcon, {}) })
+            }, children: /* @__PURE__ */ jsx22(XIcon, {}) })
           ] })
         }
       ),
-      view === "history" && /* @__PURE__ */ jsx21(HistoryPanel, { onClose: () => setView("chat") })
+      view === "history" && /* @__PURE__ */ jsx22(HistoryPanel, { onClose: () => setView("chat") })
     ] }),
-    !open && /* @__PURE__ */ jsx21("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
+    !open && /* @__PURE__ */ jsx22("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
   ] });
 }
 
 // src/components/Playground.tsx
-import { useEffect as useEffect9, useState as useState19 } from "react";
+import { useEffect as useEffect9, useState as useState20 } from "react";
 
 // src/components/ConnectionForm.tsx
-import { useState as useState18 } from "react";
-import { jsx as jsx22, jsxs as jsxs20 } from "react/jsx-runtime";
+import { useState as useState19 } from "react";
+import { jsx as jsx23, jsxs as jsxs21 } from "react/jsx-runtime";
 function ConnectionForm({ defaultApiUrl = "http://localhost:2024", defaultAssistantId = "agent", onConnected }) {
   const { connection, setConnection } = useKit();
-  const [apiUrl, setApiUrl] = useState18(connection.apiUrl || defaultApiUrl);
-  const [assistantId, setAssistantId] = useState18(connection.assistantId || defaultAssistantId);
-  const [token, setToken] = useState18(connection.token ?? "");
-  const [scheme, setScheme] = useState18(connection.authScheme ?? "bearer");
+  const [apiUrl, setApiUrl] = useState19(connection.apiUrl || defaultApiUrl);
+  const [assistantId, setAssistantId] = useState19(connection.assistantId || defaultAssistantId);
+  const [token, setToken] = useState19(connection.token ?? "");
+  const [scheme, setScheme] = useState19(connection.authScheme ?? "bearer");
   const submit = (e) => {
     e.preventDefault();
     setConnection({ apiUrl: apiUrl.trim(), assistantId: assistantId.trim(), token: token.trim() || void 0, authScheme: scheme });
     onConnected?.();
   };
-  return /* @__PURE__ */ jsx22("div", { className: "lgk lgk-setup", children: /* @__PURE__ */ jsxs20("form", { onSubmit: submit, children: [
-    /* @__PURE__ */ jsx22("h1", { children: "Connect to your agent" }),
-    /* @__PURE__ */ jsxs20("p", { className: "lgk-muted-block", children: [
+  return /* @__PURE__ */ jsx23("div", { className: "lgk lgk-setup", children: /* @__PURE__ */ jsxs21("form", { onSubmit: submit, children: [
+    /* @__PURE__ */ jsx23("h1", { children: "Connect to your agent" }),
+    /* @__PURE__ */ jsxs21("p", { className: "lgk-muted-block", children: [
       "Point this at a LangGraph server. Local (",
-      /* @__PURE__ */ jsx22("code", { children: "langgraph dev" }),
+      /* @__PURE__ */ jsx23("code", { children: "langgraph dev" }),
       ") or deployed both work."
     ] }),
-    /* @__PURE__ */ jsxs20("label", { children: [
-      /* @__PURE__ */ jsx22("span", { children: "Server URL" }),
-      /* @__PURE__ */ jsx22("input", { value: apiUrl, onChange: (e) => setApiUrl(e.target.value), required: true, spellCheck: false, placeholder: "http://localhost:2024" })
+    /* @__PURE__ */ jsxs21("label", { children: [
+      /* @__PURE__ */ jsx23("span", { children: "Server URL" }),
+      /* @__PURE__ */ jsx23("input", { value: apiUrl, onChange: (e) => setApiUrl(e.target.value), required: true, spellCheck: false, placeholder: "http://localhost:2024" })
     ] }),
-    /* @__PURE__ */ jsxs20("label", { children: [
-      /* @__PURE__ */ jsx22("span", { children: "Assistant or graph ID" }),
-      /* @__PURE__ */ jsx22("input", { value: assistantId, onChange: (e) => setAssistantId(e.target.value), required: true, spellCheck: false, placeholder: "agent" }),
-      /* @__PURE__ */ jsxs20("small", { children: [
+    /* @__PURE__ */ jsxs21("label", { children: [
+      /* @__PURE__ */ jsx23("span", { children: "Assistant or graph ID" }),
+      /* @__PURE__ */ jsx23("input", { value: assistantId, onChange: (e) => setAssistantId(e.target.value), required: true, spellCheck: false, placeholder: "agent" }),
+      /* @__PURE__ */ jsxs21("small", { children: [
         "The graph name from ",
-        /* @__PURE__ */ jsx22("code", { children: "langgraph.json" }),
+        /* @__PURE__ */ jsx23("code", { children: "langgraph.json" }),
         ", or an assistant UUID."
       ] })
     ] }),
-    /* @__PURE__ */ jsxs20("label", { children: [
-      /* @__PURE__ */ jsxs20("span", { children: [
+    /* @__PURE__ */ jsxs21("label", { children: [
+      /* @__PURE__ */ jsxs21("span", { children: [
         "Access token ",
-        /* @__PURE__ */ jsx22("em", { children: "(optional)" })
+        /* @__PURE__ */ jsx23("em", { children: "(optional)" })
       ] }),
-      /* @__PURE__ */ jsx22("input", { type: "password", value: token, onChange: (e) => setToken(e.target.value), autoComplete: "off", placeholder: "Not needed for a local server" }),
-      /* @__PURE__ */ jsx22("small", { children: "Stored in this browser only, and only sent to this server." })
+      /* @__PURE__ */ jsx23("input", { type: "password", value: token, onChange: (e) => setToken(e.target.value), autoComplete: "off", placeholder: "Not needed for a local server" }),
+      /* @__PURE__ */ jsx23("small", { children: "Stored in this browser only, and only sent to this server." })
     ] }),
-    /* @__PURE__ */ jsxs20("label", { children: [
-      /* @__PURE__ */ jsx22("span", { children: "How to send the token" }),
-      /* @__PURE__ */ jsxs20("select", { value: scheme, onChange: (e) => setScheme(e.target.value), children: [
-        /* @__PURE__ */ jsx22("option", { value: "bearer", children: "Authorization: Bearer (custom auth)" }),
-        /* @__PURE__ */ jsx22("option", { value: "api-key", children: "X-Api-Key (LangSmith / LangGraph Platform)" }),
-        /* @__PURE__ */ jsx22("option", { value: "agent-builder", children: "LangSmith Agent Builder" })
+    /* @__PURE__ */ jsxs21("label", { children: [
+      /* @__PURE__ */ jsx23("span", { children: "How to send the token" }),
+      /* @__PURE__ */ jsxs21("select", { value: scheme, onChange: (e) => setScheme(e.target.value), children: [
+        /* @__PURE__ */ jsx23("option", { value: "bearer", children: "Authorization: Bearer (custom auth)" }),
+        /* @__PURE__ */ jsx23("option", { value: "api-key", children: "X-Api-Key (LangSmith / LangGraph Platform)" }),
+        /* @__PURE__ */ jsx23("option", { value: "agent-builder", children: "LangSmith Agent Builder" })
       ] })
     ] }),
-    /* @__PURE__ */ jsx22("button", { type: "submit", className: "lgk-primary", children: "Connect" })
+    /* @__PURE__ */ jsx23("button", { type: "submit", className: "lgk-primary", children: "Connect" })
   ] }) });
 }
 
 // src/components/Playground.tsx
-import { Fragment as Fragment9, jsx as jsx23, jsxs as jsxs21 } from "react/jsx-runtime";
+import { Fragment as Fragment9, jsx as jsx24, jsxs as jsxs22 } from "react/jsx-runtime";
 function CommitInput({ value, onCommit, ...rest }) {
-  const [draft, setDraft] = useState19(value);
+  const [draft, setDraft] = useState20(value);
   useEffect9(() => setDraft(value), [value]);
   const commit = () => draft !== value && onCommit(draft.trim());
-  return /* @__PURE__ */ jsx23(
+  return /* @__PURE__ */ jsx24(
     "input",
     {
       ...rest,
@@ -2285,21 +2534,21 @@ function CommitInput({ value, onCommit, ...rest }) {
 function Playground(props) {
   const { connection, setConnection, setThreadId, isConfigured, status } = useKit();
   const { assistants, error, refresh } = useAssistants();
-  const [navOpen, setNavOpen] = useState19(false);
-  if (!isConfigured) return /* @__PURE__ */ jsx23(ConnectionForm, {});
+  const [navOpen, setNavOpen] = useState20(false);
+  if (!isConfigured) return /* @__PURE__ */ jsx24(ConnectionForm, {});
   const current = assistants.find((a) => a.assistant_id === connection.assistantId || a.graph_id === connection.assistantId);
   const known = assistants.some((a) => a.assistant_id === connection.assistantId);
-  return /* @__PURE__ */ jsxs21("div", { className: "lgk lgk-pg", "data-nav": navOpen, children: [
-    /* @__PURE__ */ jsxs21("aside", { className: "lgk-pg-side", children: [
-      /* @__PURE__ */ jsx23("div", { className: "lgk-pg-brand", children: "LangGraph" }),
-      /* @__PURE__ */ jsxs21("label", { className: "lgk-field", children: [
-        /* @__PURE__ */ jsx23("span", { children: "Endpoint" }),
-        /* @__PURE__ */ jsx23(CommitInput, { value: connection.apiUrl, onCommit: (v) => setConnection({ apiUrl: v }), spellCheck: false })
+  return /* @__PURE__ */ jsxs22("div", { className: "lgk lgk-pg", "data-nav": navOpen, children: [
+    /* @__PURE__ */ jsxs22("aside", { className: "lgk-pg-side", children: [
+      /* @__PURE__ */ jsx24("div", { className: "lgk-pg-brand", children: "LangGraph" }),
+      /* @__PURE__ */ jsxs22("label", { className: "lgk-field", children: [
+        /* @__PURE__ */ jsx24("span", { children: "Endpoint" }),
+        /* @__PURE__ */ jsx24(CommitInput, { value: connection.apiUrl, onCommit: (v) => setConnection({ apiUrl: v }), spellCheck: false })
       ] }),
-      /* @__PURE__ */ jsxs21("div", { className: "lgk-field", children: [
-        /* @__PURE__ */ jsx23("span", { children: "Access token" }),
-        /* @__PURE__ */ jsxs21("div", { className: "lgk-field-row", children: [
-          /* @__PURE__ */ jsx23(
+      /* @__PURE__ */ jsxs22("div", { className: "lgk-field", children: [
+        /* @__PURE__ */ jsx24("span", { children: "Access token" }),
+        /* @__PURE__ */ jsxs22("div", { className: "lgk-field-row", children: [
+          /* @__PURE__ */ jsx24(
             CommitInput,
             {
               type: "password",
@@ -2310,45 +2559,45 @@ function Playground(props) {
               "aria-label": "Access token"
             }
           ),
-          /* @__PURE__ */ jsxs21(
+          /* @__PURE__ */ jsxs22(
             "select",
             {
               value: connection.authScheme ?? "bearer",
               "aria-label": "How to send the token",
               onChange: (e) => setConnection({ authScheme: e.target.value }),
               children: [
-                /* @__PURE__ */ jsx23("option", { value: "bearer", children: "Bearer" }),
-                /* @__PURE__ */ jsx23("option", { value: "api-key", children: "X-Api-Key" }),
-                /* @__PURE__ */ jsx23("option", { value: "agent-builder", children: "Agent Builder" })
+                /* @__PURE__ */ jsx24("option", { value: "bearer", children: "Bearer" }),
+                /* @__PURE__ */ jsx24("option", { value: "api-key", children: "X-Api-Key" }),
+                /* @__PURE__ */ jsx24("option", { value: "agent-builder", children: "Agent Builder" })
               ]
             }
           )
         ] })
       ] }),
-      /* @__PURE__ */ jsxs21("label", { className: "lgk-field", children: [
-        /* @__PURE__ */ jsx23("span", { children: "Agent" }),
-        /* @__PURE__ */ jsxs21("select", { value: connection.assistantId, onChange: (e) => setConnection({ assistantId: e.target.value }), children: [
-          !known && /* @__PURE__ */ jsx23("option", { value: connection.assistantId, children: connection.assistantId }),
-          assistants.map((a) => /* @__PURE__ */ jsx23("option", { value: a.assistant_id, children: a.name || a.graph_id }, a.assistant_id))
+      /* @__PURE__ */ jsxs22("label", { className: "lgk-field", children: [
+        /* @__PURE__ */ jsx24("span", { children: "Agent" }),
+        /* @__PURE__ */ jsxs22("select", { value: connection.assistantId, onChange: (e) => setConnection({ assistantId: e.target.value }), children: [
+          !known && /* @__PURE__ */ jsx24("option", { value: connection.assistantId, children: connection.assistantId }),
+          assistants.map((a) => /* @__PURE__ */ jsx24("option", { value: a.assistant_id, children: a.name || a.graph_id }, a.assistant_id))
         ] })
       ] }),
-      /* @__PURE__ */ jsx23("p", { className: "lgk-status", "data-state": status === "error" || error ? "error" : status, children: status === "error" || error ? /* @__PURE__ */ jsxs21(Fragment9, { children: [
+      /* @__PURE__ */ jsx24("p", { className: "lgk-status", "data-state": status === "error" || error ? "error" : status, children: status === "error" || error ? /* @__PURE__ */ jsxs22(Fragment9, { children: [
         "Can't reach ",
         connection.apiUrl,
         ". ",
-        /* @__PURE__ */ jsx23("button", { type: "button", onClick: refresh, children: "Retry" })
+        /* @__PURE__ */ jsx24("button", { type: "button", onClick: refresh, children: "Retry" })
       ] }) : status === "checking" ? "Connecting\u2026" : `Connected \xB7 ${assistants.length} agent${assistants.length === 1 ? "" : "s"}` }),
-      /* @__PURE__ */ jsx23("button", { type: "button", className: "lgk-primary", onClick: () => {
+      /* @__PURE__ */ jsx24("button", { type: "button", className: "lgk-primary", onClick: () => {
         setThreadId(null);
         setNavOpen(false);
       }, children: "New chat" }),
-      /* @__PURE__ */ jsx23(ThreadHistory, { onSelect: () => setNavOpen(false) })
+      /* @__PURE__ */ jsx24(ThreadHistory, { onSelect: () => setNavOpen(false) })
     ] }),
-    /* @__PURE__ */ jsx23("main", { className: "lgk-pg-main", children: /* @__PURE__ */ jsx23(
+    /* @__PURE__ */ jsx24("main", { className: "lgk-pg-main", children: /* @__PURE__ */ jsx24(
       Chat,
       {
         ...props,
-        headerStart: /* @__PURE__ */ jsx23(IconButton, { label: "Chats", className: "lgk-burger", onClick: () => setNavOpen((o) => !o), children: /* @__PURE__ */ jsx23(PanelLeftIcon, {}) }),
+        headerStart: /* @__PURE__ */ jsx24(IconButton, { label: "Chats", className: "lgk-burger", onClick: () => setNavOpen((o) => !o), children: /* @__PURE__ */ jsx24(PanelLeftIcon, {}) }),
         title: props.title ?? current?.name ?? current?.graph_id ?? "Chat"
       }
     ) })

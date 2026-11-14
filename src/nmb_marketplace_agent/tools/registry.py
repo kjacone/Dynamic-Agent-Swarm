@@ -32,6 +32,10 @@ def _materialize(cfg: ToolConfig) -> BaseTool:
             raise ValueError(f"HTTP tool '{cfg.name}' missing endpoint")
         return make_http_tool(cfg.name, endpoint, cfg.description)
 
+    if cfg.type == "frontend":
+        from nmb_marketplace_agent.tools.builtin.frontend import make_frontend_tool
+        return make_frontend_tool(cfg.name, cfg.description, cfg.config.get("parameters"))
+
     if cfg.type == "python":
         dotted = cfg.config.get("dotted_path")
         if not dotted:

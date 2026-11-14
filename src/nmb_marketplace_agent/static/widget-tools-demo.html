@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>NMB Demo Store — widget + page tools</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { --teal:#0f766e; --teal-dark:#115e59; --ink:#0f172a; --muted:#52627a; --line:#dbe3ec; --bg:#f3f6fa; --card:#fff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:linear-gradient(135deg,var(--teal),var(--teal-dark)); color:#fff; }
+  .bar { max-width:1080px; margin:0 auto; padding:0 20px; height:64px; display:flex; align-items:center; gap:24px; }
+  .brand { font-weight:800; letter-spacing:-.02em; font-size:19px; }
+  .brand span { opacity:.75; font-weight:500; }
+  nav { display:flex; gap:18px; margin-left:auto; font-size:14px; }
+  nav a { color:#e7fffb; text-decoration:none; opacity:.85; }
+  nav a:hover { opacity:1; }
+  main { max-width:1080px; margin:0 auto; padding:26px 20px 90px; display:grid; grid-template-columns:1.55fr .9fr; gap:22px; align-items:start; }
+  .pill { display:inline-flex; align-items:center; gap:6px; background:#e7fffb; color:var(--teal-dark); border-radius:999px; padding:3px 9px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+  h1 { margin:6px 0 2px; font-size:26px; letter-spacing:-.02em; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:0 1px 2px rgb(15 23 42 / .04); }
+  .sect { margin-top:18px; }
+  .head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
+  .head h2 { font-size:16px; margin:0; letter-spacing:-.01em; }
+  .count { color:var(--muted); font-size:12px; }
+  .btn { border:0; border-radius:9px; padding:8px 14px; font:inherit; font-weight:600; cursor:pointer; }
+  .btn-ghost { background:#fff; color:var(--teal-dark); border:1px solid var(--line); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 0; }
+  .chip { font-size:11px; color:var(--teal-dark); background:#e7fffb; border-radius:999px; padding:2px 9px; }
+  .listings { margin-top:14px; border-top:1px solid var(--line); }
+  .item, .r { display:flex; justify-content:space-between; align-items:center; gap:14px; padding:11px 0; border-bottom:1px solid var(--line); }
+  .item:last-child, .r:last-child { border-bottom:0; }
+  .item { cursor:pointer; }
+  .item:hover { background:#f8fafc; }
+  .thumb { width:44px; height:44px; flex:0 0 44px; border-radius:8px; object-fit:cover; background:#e2e8f0; }
+  .item > .grow { flex:1; min-width:0; }
+  .item b, .r b { display:block; font-size:14px; }
+  .item span, .r span { color:var(--muted); font-size:12px; }
+  .price { white-space:nowrap; font-size:14px; font-variant-numeric:tabular-nums; }
+  .total { display:flex; justify-content:space-between; font-weight:700; border-top:1px solid var(--line); margin-top:8px; padding-top:8px; font-size:14px; }
+  .empty { padding:18px 0; text-align:center; color:var(--muted); font-size:13px; }
+  .note { color:var(--muted); font-size:12px; margin:14px 0 0; }
+  aside .card:first-child { position:sticky; top:20px; }
+  aside h3 { margin:0 0 6px; font-size:15px; }
+  aside p { margin:0 0 12px; color:var(--muted); font-size:13px; }
+  .asks { display:flex; flex-direction:column; gap:7px; }
+  .asks button { text-align:left; }
+  .warn { border:1px solid #fde68a; background:#fffbeb; color:#92400e; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:14px; }
+  code { font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:#f1f5f9; border-radius:5px; padding:1px 5px; }
+  .btn-primary { background:var(--teal); color:#fff; }
+  .btn:disabled { opacity:.55; cursor:default; }
+  .flash { animation:flash 1.4s ease; }
+  .pd { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; background:rgb(15 23 42 / .45); }
+  .pd[hidden] { display:none; }
+  .pd-card { width:100%; max-width:420px; overflow:hidden; background:#fff; border-radius:16px; box-shadow:0 24px 60px rgb(2 6 23 / .3); }
+  .pd-img { display:block; width:100%; height:190px; object-fit:cover; background:#e2e8f0; }
+  .pd-body { padding:16px 18px 18px; }
+  .pd-body h2 { margin:0; font-size:18px; letter-spacing:-.01em; }
+  .pd-meta { margin-top:2px; color:var(--muted); font-size:12px; }
+  .pd-price { margin-top:10px; font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .pd-row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; font-size:13px; color:var(--muted); }
+  .pd-row b { color:var(--ink); font-weight:600; }
+  .pd-actions { display:flex; gap:8px; margin-top:14px; }
+  @keyframes flash { 0% { box-shadow:0 0 0 3px rgb(15 118 110 / .35); } 100% { box-shadow:0 0 0 0 rgb(15 118 110 / 0); } }
+  @media (max-width: 860px) { main { grid-template-columns:1fr; } aside .card:first-child { position:static; } nav a:not(:first-child) { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">NMB <span>Demo Store</span></div>
+    <nav>
+      <a href="#catalogue">Catalogue</a>
+      <a href="#stores">Stores</a>
+      <a href="#orders">Orders</a>
+      <a href="#support">Support</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section>
+    <span class="pill">Demo store · an ordinary client page</span>
+    <h1>Marketplace listings</h1>
+    <p class="sub">The assistant can render product lists in the chat, move you around this page, show order status and add items to your cart.</p>
+
+    <div id="setup" class="warn" hidden>
+      Open this page with a publishable key for an agent that has the marketplace browser tools, for example
+      <code>/widget-tools-demo?key=pk_…</code>. Mint one from the dashboard’s Live demo page.
+    </div>
+
+    <div class="card" id="catalogue">
+      <div class="head">
+        <div>
+          <h2>Catalogue · this page</h2>
+          <div id="count" class="count">9 of 9 listings</div>
+        </div>
+        <button id="clear" class="btn btn-ghost" hidden>Clear filter</button>
+      </div>
+      <div id="chips" class="chips"></div>
+      <div id="listings" class="listings"></div>
+      <p class="note">Ask for products and the assistant renders a horizontal card strip in the chat - tap a card for details. “Only fashion items” changes this page instead, after you approve.</p>
+    </div>
+
+    <div class="card sect" id="stores">
+      <div class="head"><h2>Stores</h2><span class="count">3 nearest</span></div>
+      <div id="store-list"></div>
+    </div>
+
+    <div class="card sect" id="orders">
+      <div class="head"><h2>Orders</h2><span class="count">2 recent</span></div>
+      <div id="order-list"></div>
+    </div>
+
+    <div class="card sect" id="support">
+      <div class="head"><h2>Support</h2><span class="count">Mon–Sat · 08:00–18:00</span></div>
+      <p class="note">Returns are accepted within 14 days for unused items with the receipt. Refunds are processed to the original payment method. For disputes the assistant can connect you with a colleague.</p>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card" id="cart">
+      <div class="head"><h2>Cart</h2><span id="cart-count" class="count">empty</span></div>
+      <div id="cart-lines"></div>
+      <div id="cart-total" class="total" hidden><span>Total</span><span id="cart-total-v"></span></div>
+      <button id="cart-clear" class="btn btn-ghost" style="margin-top:10px" hidden>Empty cart</button>
+      <p class="note">Only added when you confirm in the chat.</p>
+    </div>
+
+    <div class="card sect">
+      <h3>Try it</h3>
+      <p>These prompts exercise the browser tools.</p>
+      <div class="asks">
+        <button class="btn btn-ghost" data-ask="Show me the cheapest phones">Show me the cheapest phones</button>
+        <button class="btn btn-ghost" data-ask="Only fashion items">Only fashion items</button>
+        <button class="btn btn-ghost" data-ask="Add the Sucre watch to my cart">Add the Sucre watch to my cart</button>
+        <button class="btn btn-ghost" data-ask="Where is order ORD-100245?">Where is order ORD-100245?</button>
+        <button class="btn btn-ghost" data-ask="Take me to your stores">Take me to your stores</button>
+      </div>
+      <p class="note">Product lists, navigation and order cards render without a prompt; cart and catalogue changes wait for Apply.</p>
+    </div>
+  </aside>
+</main>
+
+<div id="pd" class="pd" hidden>
+  <div class="pd-card" role="dialog" aria-modal="true" aria-labelledby="pd-name">
+    <img id="pd-img" class="pd-img" alt="" />
+    <div class="pd-body">
+      <h2 id="pd-name"></h2>
+      <div id="pd-meta" class="pd-meta"></div>
+      <div id="pd-price" class="pd-price"></div>
+      <div class="pd-row"><span>Availability</span><b id="pd-stock"></b></div>
+      <div class="pd-row"><span>Store</span><b id="pd-store"></b></div>
+      <div class="pd-row"><span>Category</span><b id="pd-cat"></b></div>
+      <div class="pd-actions">
+        <button type="button" class="btn btn-primary" id="pd-add">Add to cart</button>
+        <button type="button" class="btn btn-ghost" id="pd-close">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    var qs = new URLSearchParams(location.search);
+    var key = qs.get("key") || "";
+    var api = qs.get("api") || location.origin;
+    var title = qs.get("title") || "Demo Store Assistant";
+    var color = qs.get("color") || "#0f766e";
+    var greeting = qs.get("greeting") || "Hi! I can show products here, move you around the page, check an order or add something to your cart.";
+
+    var PRODUCTS = [
+      { id: "344", name: "Iphone 18 Duo", brand: "Apple", price: 200000, category: "electronics", stock: 10, store: "74", tags: "phone smartphone 256gb" },
+      { id: "341", name: "Iphone 16 Promax", brand: "Apple", price: 200000, category: "electronics", stock: 144, store: "66", tags: "phone smartphone 5g" },
+      { id: "349", name: "Sucre Rollex Grande", brand: "Sucre", price: 200000, category: "fashion & apparel", stock: 20, store: "59", tags: "watch luxury" },
+      { id: "410", name: "Techno Spark 30", brand: "Tecno", price: 380000, category: "electronics", stock: 35, store: "74", tags: "phone budget" },
+      { id: "380", name: "Sony WH-1000XM5", brand: "Sony", price: 320000, category: "electronics", stock: 12, store: "66", tags: "headphones audio noise cancelling" },
+      { id: "392", name: "JBL Flip 6", brand: "JBL", price: 95000, category: "electronics", stock: 48, store: "74", tags: "speaker bluetooth audio" },
+      { id: "355", name: "Apple Watch SE", brand: "Apple", price: 210000, category: "electronics", stock: 26, store: "66", tags: "watch wearable smart" },
+      { id: "366", name: "Nike Air Zoom", brand: "Nike", price: 120000, category: "fashion & apparel", stock: 18, store: "59", tags: "shoes sport running" },
+      { id: "371", name: "Ceramic Dinner Set", brand: "Kariba", price: 45000, category: "home & living", stock: 30, store: "74", tags: "kitchen plates home" },
+    ];
+
+    // Inline SVG thumbnails keep the demo offline and give the card strip
+    // something to show; a real catalogue returns its own image URLs.
+    function thumb(p) {
+      var hue = (parseInt(p.id, 10) * 47) % 360;
+      var esc = function (s) { return String(s).replace(/[&<>"']/g, function (x) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[x];
+      }); };
+      var initials = esc((p.brand.charAt(0) + p.name.charAt(0)).toUpperCase());
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="288" height="180">' +
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+        '<stop offset="0" stop-color="hsl(' + hue + ' 55% 46%)"/>' +
+        '<stop offset="1" stop-color="hsl(' + ((hue + 38) % 360) + ' 60% 28%)"/></linearGradient></defs>' +
+        '<rect width="288" height="180" fill="url(#g)"/>' +
+        '<circle cx="144" cy="78" r="34" fill="rgba(255,255,255,.14)"/>' +
+        '<text x="144" y="88" text-anchor="middle" font-family="system-ui,sans-serif" font-size="26" font-weight="700" fill="rgba(255,255,255,.95)">' + initials + '</text>' +
+        '<text x="144" y="150" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="rgba(255,255,255,.75)">' + esc(p.brand) + '</text></svg>';
+      return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    }
+    PRODUCTS.forEach(function (p) { p.image = thumb(p); });
+
+    var ORDERS = [
+      { id: "ORD-100245", date: "2026-11-04", status: "In transit", items: "Iphone 16 Promax ×1", total: 200000, eta: "Today, by 18:00", courier: "NMB Express" },
+      { id: "ORD-100246", date: "2026-11-08", status: "Processing", items: "Sucre Rollex Grande ×1", total: 200000, eta: "13 Nov", courier: "Not assigned yet" },
+    ];
+
+    var STORES = [
+      { name: "Kariakoo Flagship", market: "Dar es Salaam", hours: "08:00–18:00" },
+      { name: "NMB House Store", market: "Dar es Salaam", hours: "09:00–17:00" },
+      { name: "Arusha Central", market: "Arusha", hours: "08:30–17:30" },
+    ];
+
+    var SECTIONS = { catalogue: "Catalogue", stores: "Stores", orders: "Orders", cart: "Cart", support: "Support" };
+    var cart = [];
+    var filter = {};
+
+    var $ = function (id) { return document.getElementById(id); };
+
+    function blank(v) {
+      if (typeof v === "number") return !isFinite(v);
+      var s = typeof v === "string" ? v.trim().toLowerCase() : "";
+      return s === "" || s === "null" || s === "none" || s === "undefined";
+    }
+    function normalize(f) {
+      var max = f.max_price === null || f.max_price === undefined || blank(f.max_price)
+        ? undefined : Number(f.max_price);
+      var sort = blank(f.sort) ? undefined : String(f.sort).trim().toLowerCase().replace(/\s+/g, "_");
+      if (sort) {
+        if (/cheap|low|asc/.test(sort)) sort = "price_asc";
+        else if (/expen|high|premium|desc/.test(sort)) sort = "price_desc";
+        else if (/rel|popular|best/.test(sort)) sort = "relevance";
+      }
+      return {
+        label: blank(f.label) ? undefined : String(f.label).trim(),
+        title: blank(f.title) ? undefined : String(f.title).trim(),
+        query: blank(f.query) ? undefined : String(f.query).trim(),
+        category: blank(f.category) ? undefined : String(f.category).trim(),
+        max_price: max !== undefined && isFinite(max) ? max : undefined,
+        sort: sort,
+      };
+    }
+    function matches(p, f) {
+      var hay = (p.name + " " + p.brand + " " + p.category + " " + p.tags).toLowerCase();
+      var q = (f.query || "").toLowerCase();
+      if (q && !q.split(/\s+/).every(function (w) { return hay.indexOf(w.replace(/s$/, "")) >= 0; })) return false;
+      var c = (f.category || "").toLowerCase();
+      if (c) {
+        var words = c.split(/[^a-z0-9]+/).filter(function (w) { return w && w !== "and"; });
+        if (words.length && !words.every(function (w) { return hay.indexOf(w.replace(/s$/, "")) >= 0; })) return false;
+      }
+      if (f.max_price !== undefined && p.price > f.max_price) return false;
+      return true;
+    }
+    function visible(f) {
+      var out = PRODUCTS.filter(function (p) { return matches(p, f); });
+      if ((f.sort || "").indexOf("asc") >= 0) out.sort(function (a, b) { return a.price - b.price; });
+      else if ((f.sort || "").indexOf("desc") >= 0) out.sort(function (a, b) { return b.price - a.price; });
+      return out;
+    }
+    function chips() {
+      var bits = [];
+      if (filter.query) bits.push("\u201c" + filter.query + "\u201d");
+      if (filter.category) bits.push(filter.category);
+      if (filter.max_price !== undefined) bits.push("\u2264 TZS " + Number(filter.max_price).toLocaleString());
+      if (filter.sort) bits.push(String(filter.sort).replace("_", " "));
+      return bits;
+    }
+    function render() {
+      var shown = visible(filter);
+      $("count").textContent = shown.length + " of " + PRODUCTS.length + " listings";
+      $("chips").innerHTML = chips().map(function (c) {
+        return '<span class="chip">' + c.replace(/[&<>"']/g, function (x) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[x];
+        }) + "</span>";
+      }).join("");
+      $("clear").hidden = chips().length === 0;
+      $("listings").innerHTML = shown.length ? shown.map(function (p) {
+        return '<div class="item" data-id="' + p.id + '" role="button" tabindex="0" title="View ' + p.name + '">' +
+          '<img class="thumb" src="' + p.image + '" alt="" loading="lazy">' +
+          '<div class="grow"><b>' + p.name + "</b><span>" + p.brand + " \u00b7 " +
+          p.category + " \u00b7 store #" + p.store + " \u00b7 " + p.stock + ' in stock</span></div>' +
+          '<div class="price">TZS ' + p.price.toLocaleString() + "</div></div>";
+      }).join("") : '<div class="empty">Nothing matches this view.</div>';
+    }
+
+    // ── page sections ────────────────────────────────────────────────
+    $("store-list").innerHTML = STORES.map(function (s) {
+      return "<div class=\"r\"><div><b>" + s.name + "</b><span>" + s.market + " \u00b7 " + s.hours + "</span></div></div>";
+    }).join("");
+    $("order-list").innerHTML = ORDERS.map(function (o) {
+      return '<div class="r" id="o-' + o.id + '"><div><b>' + o.id + " \u00b7 " + o.status +
+        "</b><span>" + o.items + " \u00b7 placed " + o.date + '</span></div><div class="price">TZS ' + o.total.toLocaleString() + "</div></div>";
+    }).join("");
+
+    function cartCount() { return cart.reduce(function (n, l) { return n + l.qty; }, 0); }
+    function cartTotal() { return cart.reduce(function (n, l) { return n + l.qty * l.price; }, 0); }
+    function renderCart() {
+      var n = cartCount();
+      $("cart-count").textContent = n ? n + " item" + (n === 1 ? "" : "s") : "empty";
+      $("cart-lines").innerHTML = cart.length ? cart.map(function (l) {
+        return '<div class="r"><div><b>' + l.name + " \u00d7 " + l.qty + '</b><span>TZS ' + l.price.toLocaleString() +
+          ' each</span></div><div class="price">TZS ' + (l.price * l.qty).toLocaleString() + "</div></div>";
+      }).join("") : '<div class="empty">Your cart is empty.</div>';
+      $("cart-total").hidden = !n;
+      $("cart-total-v").textContent = "TZS " + cartTotal().toLocaleString();
+      $("cart-clear").hidden = !n;
+    }
+    $("cart-clear").onclick = function () { cart = []; renderCart(); };
+
+    // ── product details ──────────────────────────────────────────────
+    var detail = null;
+    function openProduct(id) {
+      var p = PRODUCTS.filter(function (x) { return String(x.id) === String(id); })[0];
+      if (!p) return;
+      detail = p;
+      $("pd-img").src = p.image || "";
+      $("pd-img").hidden = !p.image;
+      $("pd-name").textContent = p.name;
+      $("pd-meta").textContent = p.brand + " \u00b7 " + p.category;
+      $("pd-price").textContent = "TZS " + p.price.toLocaleString();
+      $("pd-stock").textContent = p.stock + " in stock";
+      $("pd-store").textContent = "Store #" + p.store;
+      $("pd-cat").textContent = p.category;
+      $("pd-add").disabled = false;
+      $("pd-add").textContent = "Add to cart";
+      $("pd").hidden = false;
+      $("pd-close").focus();
+    }
+    function closeProduct() { $("pd").hidden = true; detail = null; }
+    $("pd-close").onclick = closeProduct;
+    $("pd").addEventListener("click", function (e) { if (e.target === $("pd")) closeProduct(); });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !$("pd").hidden) closeProduct();
+    });
+    $("pd-add").onclick = function () {
+      if (!detail) return;
+      addToCart({ product_id: detail.id, quantity: 1 });
+      $("pd-add").textContent = "Added to cart";
+      $("pd-add").disabled = true;
+    };
+    $("listings").addEventListener("click", function (e) {
+      var row = e.target.closest("[data-id]");
+      if (row) openProduct(row.dataset.id);
+    });
+    $("listings").addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      var row = e.target.closest("[data-id]");
+      if (row) { e.preventDefault(); openProduct(row.dataset.id); }
+    });
+
+    // ── browser tools ────────────────────────────────────────────────
+    function setFilter(raw) {
+      filter = normalize(raw || {});
+      render();
+      return { ok: true, applied: filter, visible: visible(filter).length, total: PRODUCTS.length };
+    }
+    function showProducts(raw) {
+      var f = normalize(raw || {});
+      var out = visible(f);
+      return {
+        ok: true,
+        title: f.title || f.label || "Listings",
+        shown: out.length,
+        total: PRODUCTS.length,
+        items: out.map(function (p) {
+          // No image here: the result is sent back to the model, so keep it lean.
+          // The renderer resolves p.image from the local catalogue.
+          return { id: p.id, name: p.name, brand: p.brand, price: p.price, category: p.category, stock: p.stock, store: p.store };
+        }),
+      };
+    }
+    function navigate(raw) {
+      var t = String((raw && raw.target) || "").toLowerCase().trim();
+      var el = SECTIONS[t] ? $(t) : null;
+      if (!el) return { ok: false, error: "Unknown page section: " + (t || "none") };
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+      return { ok: true, target: t, label: SECTIONS[t] };
+    }
+    function showOrder(raw) {
+      var id = String((raw && raw.order_id) || "").trim().toUpperCase();
+      var o = ORDERS.filter(function (x) { return x.id.toUpperCase() === id; })[0];
+      if (!o) return { ok: false, error: "No order " + (id || "(missing id)") + " on this demo account." };
+      var row = $("o-" + o.id);
+      if (row) { row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash"); }
+      return { ok: true, order: o };
+    }
+    function addToCart(raw) {
+      var qty = Math.max(1, parseInt((raw && raw.quantity) || 1, 10) || 1);
+      var id = String((raw && raw.product_id) || "").trim();
+      var name = String((raw && raw.name) || "").trim().toLowerCase();
+      var tokens = name.split(/\s+/).filter(Boolean);
+      var p = PRODUCTS.filter(function (x) { return id && String(x.id) === id; })[0] ||
+        (tokens.length ? PRODUCTS.filter(function (x) {
+          var hay = (x.name + " " + x.brand + " " + x.tags).toLowerCase();
+          return tokens.every(function (t) { return hay.indexOf(t) >= 0; });
+        })[0] : null);
+      if (!p) return { ok: false, error: "That listing is not in this demo catalogue." };
+      var line = cart.filter(function (l) { return l.id === p.id; })[0];
+      if (line) line.qty += qty; else cart.push({ id: p.id, name: p.name, price: p.price, qty: qty });
+      renderCart();
+      return {
+        ok: true,
+        added: { name: p.name, qty: qty, price: p.price },
+        count: cartCount(),
+        total: cartTotal(),
+        cart: cart.map(function (l) { return { name: l.name, qty: l.qty, price: l.price }; }),
+      };
+    }
+
+    $("clear").onclick = function () { filter = {}; render(); };
+    Array.prototype.forEach.call(document.querySelectorAll("[data-ask]"), function (btn) {
+      btn.addEventListener("click", function () {
+        if (!window.NMB) return;
+        window.NMB.open();
+        window.NMB.send(btn.dataset.ask);
+      });
+    });
+
+    render();
+    renderCart();
+
+    if (!key) { $("setup").hidden = false; return; }
+    var s = document.createElement("script");
+    s.src = api.replace(/\/$/, "") + "/embed.js";
+    s.dataset.key = key;
+    s.dataset.api = api;
+    s.dataset.title = title;
+    s.dataset.color = color;
+    s.dataset.greeting = greeting;
+    s.onload = function () {
+      if (!window.NMB) return;
+      NMB.tool("set_filter", setFilter, {
+        title: "Filter the catalogue?", applyLabel: "Apply filter", doneTitle: "Catalogue filtered",
+      });
+      NMB.tool("add_to_cart", addToCart, {
+        title: "Add to cart?", applyLabel: "Add to cart", declineLabel: "Not now", doneTitle: "Added to cart",
+      });
+      NMB.tool("show_products", showProducts, { auto: true });
+      NMB.tool("navigate", navigate, { auto: true });
+      NMB.tool("show_order", showOrder, { auto: true });
+
+      NMB.ui("show_products", renderProducts);
+      NMB.ui("add_to_cart", renderCartResult);
+      NMB.ui("show_order", renderOrder);
+      NMB.ui("navigate", renderNavigate);
+    };
+    document.body.appendChild(s);
+
+    // ── generative UI renderers ──────────────────────────────────────
+    function renderProducts(args, res) {
+      res = res || {};
+      var mk = NMB.el;
+      var box = mk("div");
+      box.appendChild(mk("div", { class: "gen-h", text: res.title || "Listings" }));
+      if (res.error) { box.appendChild(mk("div", { class: "gen-foot", text: res.error })); return box; }
+      if (!res.items || !res.items.length) {
+        box.appendChild(mk("div", { class: "gen-foot", text: "Nothing matches that view." }));
+        return box;
+      }
+      var strip = mk("div", { class: "gen-cards" });
+      res.items.forEach(function (p) {
+        var local = PRODUCTS.filter(function (x) { return String(x.id) === String(p.id); })[0];
+        var image = p.image || (local && local.image);
+        var kids = [];
+        if (image) kids.push(mk("img", { class: "gen-card-img", src: image, alt: "", loading: "lazy" }));
+        kids.push(mk("span", { class: "gen-card-b", text: p.name }));
+        kids.push(mk("span", { class: "gen-card-s", text: p.brand + " \u00b7 " + p.category }));
+        kids.push(mk("span", { class: "gen-price", text: "TZS " + p.price.toLocaleString() }));
+        strip.appendChild(mk("button", {
+          type: "button", class: "gen-card", title: "View " + p.name,
+          onclick: function () { openProduct(p.id); },
+        }, kids));
+      });
+      box.appendChild(strip);
+      box.appendChild(mk("div", { class: "gen-foot", text: res.shown + " of " + res.total + " listings \u00b7 tap a card for details" }));
+      return box;
+    }
+
+    function renderCartResult(args, res) {
+      res = res || {};
+      var mk = NMB.el;
+      var box = mk("div");
+      box.appendChild(mk("div", { class: "gen-h", text: "Cart" }));
+      if (res.error) { box.appendChild(mk("div", { class: "gen-foot", text: res.error })); return box; }
+      var list = mk("div", { class: "gen-list" });
+      (res.cart || []).forEach(function (l) {
+        var left = mk("div");
+        left.appendChild(mk("b", { text: l.name }));
+        left.appendChild(mk("span", { text: "Qty " + l.qty }));
+        list.appendChild(mk("div", { class: "gen-item" }, [
+          left, mk("div", { class: "gen-price", text: "TZS " + (l.price * l.qty).toLocaleString() }),
+        ]));
+      });
+      box.appendChild(list);
+      box.appendChild(mk("div", { class: "gen-total" }, [
+        mk("span", { text: "Total" }), mk("span", { text: "TZS " + Number(res.total || 0).toLocaleString() }),
+      ]));
+      box.appendChild(mk("div", { class: "gen-foot", text: (res.added ? res.added.name + " added. " : "") + (res.count || 0) + " item(s) in the cart." }));
+      return box;
+    }
+
+    function renderOrder(args, res) {
+      res = res || {};
+      var mk = NMB.el;
+      var box = mk("div");
+      if (res.error || !res.order) {
+        box.appendChild(mk("div", { class: "gen-h", text: "Order" }));
+        box.appendChild(mk("div", { class: "gen-foot", text: res.error || "Order not found." }));
+        return box;
+      }
+      var o = res.order;
+      box.appendChild(mk("div", { class: "gen-h" }, [
+        "Order " + o.id + " ",
+        mk("span", { class: "gen-chip" + (o.status === "Cancelled" ? " bad" : ""), text: o.status || "" }),
+      ]));
+      [
+        ["Items", o.items],
+        ["Total", "TZS " + Number(o.total || 0).toLocaleString()],
+        ["Delivery", o.eta],
+        ["Courier", o.courier],
+        ["Placed", o.date],
+      ].forEach(function (kv) {
+        box.appendChild(mk("div", { class: "gen-row" }, [
+          mk("span", { text: kv[0] }), mk("b", { text: kv[1] || "\u2014" }),
+        ]));
+      });
+      return box;
+    }
+
+    function renderNavigate(args, res) {
+      res = res || {};
+      var mk = NMB.el;
+      var box = mk("div");
+      box.appendChild(mk("div", { class: "gen-h", text: res.error ? "Page navigation" : "Jumped to " + (res.label || res.target) }));
+      if (res.error) box.appendChild(mk("div", { class: "gen-foot", text: res.error }));
+      var row = mk("div", { class: "gen-actions" });
+      Object.keys(SECTIONS).forEach(function (t) {
+        row.appendChild(mk("button", {
+          type: "button", text: SECTIONS[t], onclick: function () { navigate({ target: t }); },
+        }));
+      });
+      box.appendChild(row);
+      box.appendChild(mk("div", { class: "gen-foot", text: "Pick a section to move around the page." }));
+      return box;
+    }
+  })();
+</script>
+</body>
+</html>

@@ -63,7 +63,11 @@ The kit exchanges the publishable key for a short-lived session at `/v1/session`
 - `agent.feedback("up" | "down")` — sends `/v1/feedback`.
 - `useAgentReadable` values and per-send `context` are forwarded as fenced host-app context; the gateway screens them with the tenant policy.
 
-Gateway mode does not support graph commands (frontend-tool resumes), thread history or branching yet. Only ever ship a `pk_` key to the browser; allow your site origin in the gateway's `CORS_ORIGINS` and in `connect-src` / `script-src`.
+Gateway mode resumes frontend tools (`useAgentTool` with a `handler`): the gateway
+streams the pause, the browser runs the handler and calls `/v1/chat/resume`, and the
+run continues in the same server-side thread. Thread history and branching are not
+supported yet. Only ever ship a `pk_` key to the browser; allow your site origin in
+the gateway's `CORS_ORIGINS` and in `connect-src` / `script-src`.
 
 ### Custom tool UI
 ```tsx
@@ -85,6 +89,8 @@ Your graph needs a `messages` key in state. Everything else is opt-in. See `exam
   value = reply.get(call["id"], reply)   # resume value is {tool_call_id: result}
   ```
   The browser runs your `useAgentTool` handler and resumes. If the handler throws, the graph receives `{"error": "..."}`.
+  The gateway can materialize these for you: create a tool with `type: "frontend"` (pack or
+  `ToolConfig`) and `config.parameters` = the JSON schema the model should fill.
 - **Human-in-the-loop**: any other `interrupt(...)` shows a card in the chat. Customize with `<Chat renderInterrupt={({ value, resume }) => ...} />`.
 - **Reasoning**: `thinking` / `reasoning` content blocks render in a collapsible "Reasoning" section.
 

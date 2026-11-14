@@ -144,6 +144,43 @@ export async function sendFeedback(cfg: GatewayConfig, body: {
   if (!res.ok) throw new Error(`feedback failed (${res.status})`);
 }
 
+export interface GatewayThread {
+  id: string;
+  title: string;
+  updated_at?: string | null;
+}
+
+export interface GatewayThreadMessage {
+  id: string;
+  role: "user" | "assistant" | string;
+  text: string;
+}
+
+/** Recent conversations for this end user, newest first. */
+export async function listGatewayThreads(cfg: GatewayConfig, limit = 20): Promise<GatewayThread[]> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (cfg.userId) qs.set("user_id", cfg.userId);
+  const res = await gatewayFetch(cfg, `/v1/threads?${qs}`);
+  if (!res.ok) throw new Error(`threads failed (${res.status})`);
+  const data = await res.json() as { threads?: GatewayThread[] };
+  return (data.threads ?? []).map((t) => ({ id: t.id, title: t.title || "Untitled chat", updated_at: t.updated_at ?? null }));
+}
+
+/** Transcript of one owned thread, for reopening it from history. */
+export async function gatewayThreadMessages(cfg: GatewayConfig, threadId: string): Promise<GatewayThreadMessage[]> {
+  const qs = cfg.userId ? `?user_id=${encodeURIComponent(cfg.userId)}` : "";
+  const res = await gatewayFetch(cfg, `/v1/threads/${encodeURIComponent(threadId)}/messages${qs}`);
+  if (!res.ok) throw new Error(`thread messages failed (${res.status})`);
+  const data = await res.json() as { messages?: GatewayThreadMessage[] };
+  return (data.messages ?? []).filter((m) => m && m.text);
+}
+
+export async function deleteGatewayThread(cfg: GatewayConfig, threadId: string): Promise<void> {
+  const qs = cfg.userId ? `?user_id=${encodeURIComponent(cfg.userId)}` : "";
+  const res = await gatewayFetch(cfg, `/v1/threads/${encodeURIComponent(threadId)}${qs}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`delete thread failed (${res.status})`);
+}
+
 // ── transport ────────────────────────────────────────────────────────
 type Chunk = { id?: string; event: string; data: unknown };
 
@@ -203,6 +240,32 @@ async function* readSse(res: Response): AsyncGenerator<{ data: unknown }> {
   }
 }
 
+const stringify = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
+};
+
+/** Tool results in a resume payload, whether keyed by interrupt id or call id. */
+function resumeResults(resume: unknown): Array<[string, unknown]> {
+  const out: Array<[string, unknown]> = [];
+  if (!resume || typeof resume !== "object" || Array.isArray(resume)) return out;
+  for (const value of Object.values(resume as Record<string, unknown>)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    for (const [callId, result] of Object.entries(value as Record<string, unknown>)) {
+      out.push([callId, result]);
+    }
+  }
+  return out;
+}
+
+function interruptToolCall(value: unknown): { id?: string; name: string; args?: unknown } | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as { type?: string; toolCall?: unknown; tool_call?: unknown };
+  if (v.type !== "tool") return null;
+  const call = (v.toolCall ?? v.tool_call) as { id?: string; name?: string; args?: unknown } | undefined;
+  return call && call.name ? { id: call.id, name: call.name, args: call.args } : null;
+}
+
 /**
  * SDK custom transport: maps `/v1/chat` SSE onto the LangGraph event shape the
  * kit already understands (`messages` chunks + `custom` events).
@@ -242,45 +305,80 @@ export class GatewayTransport {
   }
 
   async *stream(payload: TransportPayload): AsyncGenerator<Chunk> {
-    if (payload.command) {
-      throw new Error("This assistant runs on the NMB gateway; resuming graph commands is not supported yet.");
-    }
-    const text = lastUserText(payload.input);
-    if (!text) throw new Error("The gateway transport needs a user message.");
-
     const clientThread = (payload.config?.configurable?.thread_id as string | undefined) ?? null;
     if (clientThread !== this.boundThread) {
       this.boundThread = clientThread;
-      this.serverThread = clientThread ? this.restore(clientThread) : null;
+      // History lists server thread ids; a mapped client id resolves to its
+      // server thread. An unknown id is sent as-is — the gateway creates a new
+      // thread when ownership does not match.
+      this.serverThread = clientThread ? (this.restore(clientThread) ?? clientThread) : null;
     }
 
     const cfgurable = payload.config?.configurable as Record<string, unknown> | undefined;
-    const context = payload.context ?? (cfgurable?.context as unknown) ?? undefined;
-    const readables = cfgurable?.readables as unknown;
-
-    const token = await gatewayToken(this.cfg);
-    const res = await gatewayFetch(this.cfg, "/v1/chat", {
-      method: "POST",
-      headers: { Accept: "text/event-stream" },
-      signal: payload.signal,
-      body: JSON.stringify({
-        message: text,
-        thread_id: this.serverThread,
-        ...(this.cfg.userId ? { user_id: this.cfg.userId } : {}),
-        ...(context !== undefined ? { context } : {}),
-        ...(readables !== undefined ? { readables } : {}),
-      }),
-    });
-
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(res.status === 429
-        ? "Too many messages. Please wait a moment."
-        : `Gateway error (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ""}`);
-    }
-    void token;
-
     const aiId = `ai_${crypto.randomUUID()}`;
+    let res: Response;
+
+    if (payload.command) {
+      const command = payload.command as { resume?: unknown };
+      if (!("resume" in command)) {
+        throw new Error("This assistant runs on the NMB gateway; only frontend-tool resumes are supported.");
+      }
+      if (!this.serverThread) throw new Error("There is no paused gateway conversation to resume.");
+
+      res = await gatewayFetch(this.cfg, "/v1/chat/resume", {
+        method: "POST",
+        headers: { Accept: "text/event-stream" },
+        signal: payload.signal,
+        body: JSON.stringify({
+          thread_id: this.serverThread,
+          resume: command.resume,
+          ...(this.cfg.userId ? { user_id: this.cfg.userId } : {}),
+        }),
+      });
+      if (!res.ok) throw await this.failure(res);
+
+      // Show the handler's results; the final `state` event clears the pause.
+      for (const [callId, value] of resumeResults(command.resume)) {
+        yield {
+          event: "messages",
+          data: [
+            { id: `tool_${callId}`, type: "tool", tool_call_id: callId, content: stringify(value) },
+            { langgraph_node: "agent" },
+          ],
+        };
+      }
+    } else {
+      const text = lastUserText(payload.input);
+      if (!text) throw new Error("The gateway transport needs a user message.");
+      const context = payload.context ?? (cfgurable?.context as unknown) ?? undefined;
+      const readables = cfgurable?.readables as unknown;
+
+      res = await gatewayFetch(this.cfg, "/v1/chat", {
+        method: "POST",
+        headers: { Accept: "text/event-stream" },
+        signal: payload.signal,
+        body: JSON.stringify({
+          message: text,
+          thread_id: this.serverThread,
+          ...(this.cfg.userId ? { user_id: this.cfg.userId } : {}),
+          ...(context !== undefined ? { context } : {}),
+          ...(readables !== undefined ? { readables } : {}),
+        }),
+      });
+      if (!res.ok) throw await this.failure(res);
+    }
+
+    yield* this.consume(res, aiId);
+  }
+
+  private async failure(res: Response): Promise<Error> {
+    const detail = await res.text().catch(() => "");
+    return new Error(res.status === 429
+      ? "Too many messages. Please wait a moment."
+      : `Gateway error (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+  }
+
+  private async *consume(res: Response, aiId: string): AsyncGenerator<Chunk> {
     for await (const frame of readSse(res)) {
       const ev = frame.data as Record<string, unknown>;
       switch (ev.type) {
@@ -300,6 +398,33 @@ export class GatewayTransport {
               event: "messages",
               data: [{ id: aiId, type: "AIMessageChunk", content: delta }, { langgraph_node: "agent" }],
             };
+          }
+          break;
+        }
+        case "interrupt": {
+          const interrupts = Array.isArray(ev.interrupts) ? ev.interrupts as Array<{ id?: string; value?: unknown }> : [];
+          for (const [index, raw] of interrupts.entries()) {
+            const call = interruptToolCall(raw?.value);
+            // Stream the host tool call so the UI can show running/done status.
+            if (!call) continue;
+            yield {
+              event: "messages",
+              data: [{
+                id: aiId,
+                type: "AIMessageChunk",
+                content: "",
+                tool_call_chunks: [{ name: call.name, args: stringify(call.args ?? {}), id: call.id ?? `call_${index}`, index }],
+              }, { langgraph_node: "agent" }],
+            };
+          }
+          yield { event: "values", data: { __interrupt__: interrupts } };
+          break;
+        }
+        case "state": {
+          // The settled thread state: replaces the streamed view and, because it
+          // carries no `__interrupt__`, clears the pause the run was resumed from.
+          if (ev.values && typeof ev.values === "object") {
+            yield { event: "values", data: ev.values };
           }
           break;
         }

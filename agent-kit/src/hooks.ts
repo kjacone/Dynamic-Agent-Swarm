@@ -2,6 +2,7 @@
 import type { Assistant, Message } from "@langchain/langgraph-sdk";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { messageText } from "./content";
+import { deleteGatewayThread, listGatewayThreads } from "./gateway";
 import { useKit } from "./provider";
 import type { AgentToolDefinition } from "./types";
 
@@ -63,34 +64,47 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const threadMetadata = (assistantId: string) => (UUID.test(assistantId) ? { assistant_id: assistantId } : { graph_id: assistantId });
 
 export function useThreads({ limit = 100 }: { limit?: number } = {}) {
-  const { client, connection, isConfigured, threadsRevision, bumpThreads, threadId, setThreadId } = useKit();
+  const { client, connection, isConfigured, threadsRevision, bumpThreads, threadId, setThreadId, gateway } = useKit();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loading, setLoading] = useState(isConfigured);
+  const gwBase = gateway?.baseUrl;
+  const gwKey = gateway?.publishableKey;
+  const gwUser = gateway?.userId;
+  const gwFetch = gateway?.fetch;
   useEffect(() => {
     if (!isConfigured) { setThreads([]); setLoading(false); return; }
     let off = false;
-    client.threads.search({
-      limit, sortBy: "updated_at", sortOrder: "desc",
-      metadata: threadMetadata(connection.assistantId),
-    }).then((rows) => {
+    setLoading(true);
+    const load = gateway !== undefined
+      ? listGatewayThreads(
+          { baseUrl: gateway.baseUrl, publishableKey: gateway.publishableKey, userId: gateway.userId, fetch: gateway.fetch },
+          Math.min(limit, 50),
+        ).then((rows) => rows.map((t) => ({ id: t.id, title: t.title, updatedAt: t.updated_at ?? new Date().toISOString() })))
+      : client.threads.search({
+          limit, sortBy: "updated_at", sortOrder: "desc",
+          metadata: threadMetadata(connection.assistantId),
+        }).then((rows) => rows.map((t) => {
+          const msgs = ((t.values as { messages?: Message[] } | null)?.messages ?? []);
+          const first = msgs.find((m) => m.type === "human");
+          let title = first ? messageText(first.content).trim().slice(0, 80) : "";
+          if (!title && first && Array.isArray(first.content) && first.content.length) title = "Attachment";
+          return { id: t.thread_id, title: title || "Untitled chat", updatedAt: t.updated_at };
+        }));
+    load.then((rows) => {
       if (off) return;
-      setThreads(rows.map((t) => {
-        const msgs = ((t.values as { messages?: Message[] } | null)?.messages ?? []);
-        const first = msgs.find((m) => m.type === "human");
-        let title = first ? messageText(first.content).trim().slice(0, 80) : "";
-        if (!title && first && Array.isArray(first.content) && first.content.length) title = "Attachment";
-        return { id: t.thread_id, title: title || "Untitled chat", updatedAt: t.updated_at };
-      }));
+      setThreads(rows);
       setLoading(false);
     }).catch(() => !off && setLoading(false));
     return () => { off = true; };
-  }, [client, connection.assistantId, isConfigured, threadsRevision, limit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, connection.assistantId, isConfigured, threadsRevision, limit, gwBase, gwKey, gwUser, gwFetch]);
 
   const remove = useCallback(async (id: string) => {
-    await client.threads.delete(id);
+    if (gateway) await deleteGatewayThread(gateway, id);
+    else await client.threads.delete(id);
     if (id === threadId) setThreadId(null);
     bumpThreads();
-  }, [client, threadId, setThreadId, bumpThreads]);
+  }, [client, threadId, setThreadId, bumpThreads, gateway]);
 
   return { threads, loading, remove };
 }

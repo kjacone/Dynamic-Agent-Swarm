@@ -33,6 +33,10 @@ async def create_tool(body: ToolCreate, db: AsyncSession = Depends(get_db)):
             check_endpoint((body.config or {}).get("endpoint", ""))
         except ValueError as e:
             raise HTTPException(400, str(e))
+    if body.type == "frontend":
+        params = (body.config or {}).get("parameters")
+        if params is not None and not isinstance(params, dict):
+            raise HTTPException(400, "config.parameters must be a JSON schema object")
     tool = ToolConfig(id=str(uuid.uuid4()), **body.model_dump())
     db.add(tool)
     await db.commit()
@@ -67,6 +71,8 @@ async def test_tool(tool_id: str, body: ToolTest, tenant_id: str = "default",
     tool = await db.get(ToolConfig, tool_id)
     if not tool or tool.tenant_id != tenant_id:
         raise HTTPException(404, "Tool not found")
+    if tool.type == "frontend":
+        raise HTTPException(400, "Frontend tools run in the host page; try them from the widget")
     from nmb_marketplace_agent.tools.registry import resolve_tool
     try:
         t = await resolve_tool(tool_id)

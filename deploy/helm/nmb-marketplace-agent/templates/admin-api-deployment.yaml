@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nmb.componentName" (dict "root" . "component" "admin-api") }}
+  labels:
+    {{- include "nmb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-api
+spec:
+  replicas: {{ .Values.adminApi.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "nmb.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admin-api
+  template:
+    metadata:
+      labels:
+        {{- include "nmb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: admin-api
+      {{- with .Values.adminApi.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nmb.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.adminApi.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: admin-api
+          image: {{ include "nmb.image" (dict "root" . "image" .Values.images.adminApi) }}
+          imagePullPolicy: {{ .Values.images.adminApi.pullPolicy }}
+          {{- with .Values.adminApi.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.adminApi.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "nmb.configMapName" . }}
+          env:
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" . }}
+                  key: ADMIN_TOKEN
+            - name: NMB_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" . }}
+                  key: NMB_JWT_SECRET
+                  optional: true
+            - name: NMB_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" . }}
+                  key: NMB_DATABASE_URL
+                  optional: true
+            - name: AUTO_CREATE_TABLES
+              value: {{ .Values.adminApi.autoCreateTables | quote }}
+            {{- with .Values.adminApi.redisUrl }}
+            - name: REDIS_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.encryption.enabled }}
+            - name: NMB_ENCRYPTION_KEY_FILE
+              value: {{ printf "%s/%s" .Values.encryption.mountPath .Values.encryption.fileName | quote }}
+            - name: NMB_ENCRYPTION_REQUIRED
+              value: {{ .Values.encryption.required | quote }}
+            - name: NMB_ENCRYPTION_KEYS_OLD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" . }}
+                  key: NMB_ENCRYPTION_KEYS_OLD
+                  optional: true
+            {{- end }}
+            {{- range $key := list "OPENAI_API_KEY" "ANTHROPIC_API_KEY" "GOOGLE_API_KEY" "TAVILY_API_KEY" "LANGFUSE_PUBLIC_KEY" "LANGFUSE_SECRET_KEY" "QDRANT_API_KEY" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" $ }}
+                  key: {{ $key }}
+                  optional: true
+            {{- end }}
+            {{- with .Values.adminApi.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          volumeMounts:
+            {{- if .Values.encryption.enabled }}
+            - name: encryption-key
+              mountPath: {{ .Values.encryption.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /app/data
+            {{- end }}
+          {{- with .Values.adminApi.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{- if .Values.encryption.enabled }}
+        - name: encryption-key
+          secret:
+            secretName: {{ include "nmb.secretName" . }}
+            defaultMode: 0400
+            items:
+              - key: NMB_ENCRYPTION_KEY
+                path: {{ .Values.encryption.fileName }}
+        {{- end }}
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "nmb.dataClaimName" . }}
+        {{- end }}
+      {{- with .Values.adminApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -4,6 +4,8 @@ from typing import Optional
 from sqlalchemy import JSON, Column, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
+from nmb_marketplace_agent.crypto import EncryptedText
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -55,6 +57,7 @@ class AgentConfig(SQLModel, table=True):
     tool_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     rag_collection_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     subagent_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    locale_profile_id: Optional[str] = Field(default=None)
     tenant_id: str = Field(default="default", index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     limits: dict = Field(default_factory=dict, sa_column=Column(JSON))
@@ -64,7 +67,7 @@ class ModelConfig(SQLModel, table=True):
     __tablename__ = "models"
     id: str = Field(primary_key=True)
     name: str = Field(index=True)
-    provider: str = Field(default="openai")  # anthropic | openai | google_genai | ollama
+    provider: str = Field(default="openai")  # openai | groq | openrouter | litellm | openai_compatible | anthropic | google_genai | ollama | sample
     model_name: str = Field(default="")
     base_url: Optional[str] = Field(default=None)
     api_key_env: Optional[str] = Field(default=None)  # env var NAME, never the key
@@ -184,6 +187,8 @@ class ThreadOwner(SQLModel, table=True):
     agent_id: str = Field(index=True)
     user_id: Optional[str] = Field(default=None, index=True)
     customer_id: Optional[str] = Field(default=None, index=True)
+    # First user message, so thread history lists do not need the LangGraph store.
+    title: Optional[str] = Field(default=None, max_length=160)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_active_at: Optional[datetime] = Field(default=None, index=True)
 
@@ -201,7 +206,7 @@ class Handoff(SQLModel, table=True):
     agent_id: str = Field(index=True)
     thread_id: str = Field(index=True)
     status: str = Field(default="requested", index=True)
-    reason: str = Field(default="", sa_column=Column(Text))
+    reason: str = Field(default="", sa_column=Column(EncryptedText(aad="handoffs.reason")))
     requested_by: str = Field(default="customer")
     user_id: Optional[str] = Field(default=None, index=True)
     customer_id: Optional[str] = Field(default=None, index=True)
@@ -224,5 +229,5 @@ class HandoffMessage(SQLModel, table=True):
     handoff_id: str = Field(index=True)
     role: str = Field(default="customer")  # customer | staff
     author: str = Field(default="")
-    text: str = Field(default="", sa_column=Column(Text))
+    text: str = Field(default="", sa_column=Column(EncryptedText(aad="handoff_messages.text")))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

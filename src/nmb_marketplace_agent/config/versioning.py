@@ -10,6 +10,7 @@ FIELDS = [
     "tool_ids",
     "rag_collection_ids",
     "subagent_ids",
+    "locale_profile_id",
     "limits",
 ]
 

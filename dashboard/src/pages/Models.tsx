@@ -21,10 +21,33 @@ import { cn } from "@/lib/utils";
 
 const PROVIDER_TONE: Record<string, string> = {
   openai: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  openai_compatible: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  groq: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  openrouter: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
+  litellm: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
+  vllm: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
   anthropic: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   google_genai: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
   ollama: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  sample: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
 };
+
+type ProviderInfo = {
+  id: string; label: string; base_url: string | null;
+  api_key_env: string | null; local: boolean; hint: string;
+};
+
+const FALLBACK_PROVIDERS: ProviderInfo[] = [
+  { id: "openai", label: "OpenAI", base_url: null, api_key_env: "OPENAI_API_KEY", local: false, hint: "gpt-4o-mini" },
+  { id: "groq", label: "Groq", base_url: "https://api.groq.com/openai/v1", api_key_env: "GROQ_API_KEY", local: false, hint: "openai/gpt-oss-120b" },
+  { id: "openrouter", label: "OpenRouter", base_url: "https://openrouter.ai/api/v1", api_key_env: "OPENROUTER_API_KEY", local: false, hint: "openai/gpt-oss-120b" },
+  { id: "litellm", label: "LiteLLM gateway", base_url: null, api_key_env: "LITELLM_API_KEY", local: true, hint: "groq/openai/gpt-oss-120b" },
+  { id: "openai_compatible", label: "OpenAI-compatible server", base_url: null, api_key_env: null, local: true, hint: "model name as served" },
+  { id: "ollama", label: "Ollama", base_url: null, api_key_env: null, local: true, hint: "llama3.1:8b" },
+  { id: "anthropic", label: "Anthropic", base_url: null, api_key_env: "ANTHROPIC_API_KEY", local: false, hint: "claude-3-5-sonnet-latest" },
+  { id: "google_genai", label: "Google Gemini", base_url: null, api_key_env: "GOOGLE_API_KEY", local: false, hint: "gemini-2.0-flash" },
+  { id: "sample", label: "Sample (canned demo responses)", base_url: null, api_key_env: null, local: true, hint: "demo" },
+];
 
 export function Models({ tenant }: { tenant: string }) {
   return (
@@ -47,6 +70,7 @@ export function Models({ tenant }: { tenant: string }) {
 function Registry({ tenant }: { tenant: string }) {
   const [rows, setRows] = useState<ModelCfg[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>(FALLBACK_PROVIDERS);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ModelCfg | null>(null);
   const [deleting, setDeleting] = useState<ModelCfg | null>(null);
@@ -59,6 +83,7 @@ function Registry({ tenant }: { tenant: string }) {
     } catch (e: any) { toast.push(e.message, "error"); }
   }
   useEffect(() => { refresh(); }, [tenant]);
+  useEffect(() => { api.listProviders().then(setProviders).catch(() => {}); }, []);
 
   const usage = useMemo(() => {
     const counts = new Map<string, number>();
@@ -127,9 +152,14 @@ function Registry({ tenant }: { tenant: string }) {
                           {m.base_url || "default endpoint"}{m.api_key_env ? ` · ${m.api_key_env}` : ""}
                         </div>
                       </div>
-                      <Button size="icon" variant="ghost" className="h-8 w-8" title="Test"
+                      <Button size="icon" variant="ghost" className="h-8 w-8" title="Test (reply + tool calling)"
                         onClick={async () => {
-                          try { const r = await api.testModel(m.id); toast.push(`OK · ${r.latency_ms}ms · ${r.reply.slice(0, 60)}`, "success"); }
+                          try {
+                            const r = await api.testModel(m.id);
+                            const tc = r.tool_calls;
+                            const tools = !tc ? "" : tc.skipped ? " · tools n/a" : tc.ok ? " · tools ✓" : ` · tools ✗ ${tc.error?.slice(0, 60) ?? ""}`;
+                            toast.push(`OK · ${r.latency_ms}ms${tools} · ${r.reply.slice(0, 50)}`, "success");
+                          }
                           catch (e: any) { toast.push(e.message, "error"); }
                         }}>
                         <Play className="h-3.5 w-3.5" />
@@ -152,12 +182,14 @@ function Registry({ tenant }: { tenant: string }) {
       {creating && (
         <ModelForm
           tenant={tenant}
+          providers={providers}
           onClose={() => { setCreating(false); refresh(); }}
         />
       )}
       {editing && (
         <ModelForm
           tenant={tenant}
+          providers={providers}
           initial={editing}
           onClose={() => { setEditing(null); refresh(); }}
         />
@@ -180,10 +212,11 @@ function Registry({ tenant }: { tenant: string }) {
 }
 
 function ModelForm({
-  tenant, initial, onClose,
+  tenant, initial, providers, onClose,
 }: {
   tenant: string;
   initial?: ModelCfg;
+  providers: ProviderInfo[];
   onClose: () => void;
 }) {
   const [name, setName] = useState(initial?.name || "");
@@ -193,6 +226,17 @@ function ModelForm({
   const [apiKeyEnv, setApiKeyEnv] = useState(initial?.api_key_env || "");
   const [params, setParams] = useState(JSON.stringify(initial?.params || {}, null, 2));
   const toast = useToast();
+  const preset = providers.find((p) => p.id === provider);
+
+  function pickProvider(id: string) {
+    const prev = providers.find((p) => p.id === provider);
+    const next = providers.find((p) => p.id === id);
+    setProvider(id);
+    if (!next) return;
+    // Replace only values that came from a preset; keep anything the user typed.
+    if (!baseUrl || baseUrl === (prev?.base_url ?? "")) setBaseUrl(next.base_url ?? "");
+    if (!apiKeyEnv || apiKeyEnv === (prev?.api_key_env ?? "")) setApiKeyEnv(next.api_key_env ?? "");
+  }
 
   async function save() {
     try {
@@ -230,15 +274,24 @@ function ModelForm({
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
               <Label>Provider</Label>
-              <select value={provider} onChange={(e) => setProvider(e.target.value)}
+              <select value={provider} onChange={(e) => pickProvider(e.target.value)}
                 className="h-9 w-full rounded-lg border bg-background px-2 text-sm">
-                <option value="openai">openai</option>
-                <option value="anthropic">anthropic</option>
-                <option value="google_genai">google_genai</option>
-                <option value="ollama">ollama</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+                {!providers.some((p) => p.id === provider) && (
+                  <option value={provider}>{provider} · current</option>
+                )}
               </select>
+              <div className="text-xs text-muted-foreground">
+                {preset?.local
+                  ? "Runs without an API key — set the Base URL for a self-hosted gateway."
+                  : preset?.api_key_env
+                    ? `Key is read from ${preset.api_key_env} on the server.`
+                    : "Set the Base URL and API key env var."}
+              </div>
             </div>
-            <div className="space-y-1.5"><Label>Model name</Label><Input className="font-mono text-xs" value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder="gpt-4o-mini" /></div>
+            <div className="space-y-1.5"><Label>Model name</Label><Input className="font-mono text-xs" value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder={preset?.hint || "gpt-4o-mini"} /></div>
           </div>
           <div className="space-y-1.5"><Label>Base URL (optional)</Label><Input className="font-mono text-xs" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.openai.com/v1" /></div>
           <div className="space-y-1.5"><Label>API key env var (optional)</Label><Input className="font-mono text-xs" value={apiKeyEnv} onChange={(e) => setApiKeyEnv(e.target.value)}

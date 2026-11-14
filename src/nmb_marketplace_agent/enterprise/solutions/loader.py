@@ -53,7 +53,7 @@ DOCS_ROOT = Path("data/docs")
 _NS = uuid.UUID("6f1c2f0e-7d1a-4d57-9b0e-3c4f5a6b7c8d")
 _VAR = re.compile(r"\$\{(\w+)\}")
 BUILTIN_TOOLS = {"calculator", "tavily_search"}
-TOOL_TYPES = {"builtin", "python", "http"}
+TOOL_TYPES = {"builtin", "python", "http", "frontend"}
 DELIVERY_VALUES = {"workflow", "agent_kit", "both"}
 
 # Prepended to every supervisor prompt so the contract is enforced in every pack.
@@ -336,6 +336,9 @@ def _validate_tools(pack: dict) -> None:
                 raise PackError(f"Tool '{name}' dotted_path must start with one of {prefixes}")
         elif ttype == "http" and not config.get("endpoint"):
             raise PackError(f"HTTP tool '{name}' needs config.endpoint")
+        elif ttype == "frontend" and config.get("parameters") is not None \
+                and not isinstance(config["parameters"], dict):
+            raise PackError(f"Frontend tool '{name}' config.parameters must be a JSON schema object")
         elif ttype == "builtin" and name not in BUILTIN_TOOLS:
             raise PackError(f"Unknown builtin tool '{name}'")
 

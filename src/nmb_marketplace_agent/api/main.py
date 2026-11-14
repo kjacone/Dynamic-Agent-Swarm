@@ -21,6 +21,7 @@ from nmb_marketplace_agent.api.routes import (
     inference,
     keys,
     lg_proxy,
+    locale,
     manifest,
     models,
     prompts,
@@ -51,6 +52,9 @@ admin = [Depends(require_admin)]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from nmb_marketplace_agent.crypto import preflight as crypto_preflight
+
+    crypto_preflight()  # fail closed in NMB_ENCRYPTION_REQUIRED mode
     await init_db()
     sweeper = asyncio.create_task(sweeper_loop()) if os.environ.get("ENTERPRISE_SWEEPER", "on") == "on" else None
     notifier = asyncio.create_task(dispatcher_loop()) if os.environ.get("ENTERPRISE_NOTIFY", "on") == "on" else None
@@ -82,6 +86,7 @@ for mod, prefix in [
     (runs, "/runs"),
     (models, "/models"),
     (keys, "/keys"),
+    (locale, "/locale"),
     (versions, "/agents"),
     (evals, "/evals"),
     (feedback, "/feedback"),
@@ -154,6 +159,12 @@ async def marketplace_page():
 async def widget_demo():
     """A simulated client site that embeds the chat widget."""
     return _serve("widget-demo.html")
+
+
+@app.get("/widget-tools-demo", include_in_schema=False)
+async def widget_tools_demo():
+    """A client site where the widget runs a page tool (set_filter) and resumes."""
+    return _serve("widget-tools-demo.html")
 
 
 @app.get("/embed.js", include_in_schema=False)

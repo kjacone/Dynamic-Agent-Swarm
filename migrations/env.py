@@ -7,6 +7,7 @@ from sqlmodel import SQLModel
 
 import nmb_marketplace_agent.config.models  # noqa: F401
 import nmb_marketplace_agent.enterprise.models  # noqa: F401
+import nmb_marketplace_agent.locale.models  # noqa: F401
 
 target_metadata = SQLModel.metadata
 

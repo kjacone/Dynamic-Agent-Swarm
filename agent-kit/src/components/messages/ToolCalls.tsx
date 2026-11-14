@@ -4,6 +4,7 @@ import { messageText, type ToolCallLike } from "../../content";
 import { useKit } from "../../provider";
 import type { ToolStatus } from "../../types";
 import { ExpandableText, KeyValueTable } from "../ui/KeyValueTable";
+import { listItems, ResultCards } from "./ResultCards";
 
 const LABEL: Record<ToolStatus, string> = { running: "Running", done: "Done", error: "Failed", pending: "Not run" };
 
@@ -11,9 +12,10 @@ function parse(content: string): unknown {
   try { return JSON.parse(content); } catch { return content; }
 }
 
-/** A tool's output: tables for objects and arrays, clipped text for everything else. */
+/** A tool's output: card strips for lists, tables for objects, clipped text otherwise. */
 export function ToolOutput({ message }: { message: ToolMessage }) {
   const parsed = parse(messageText(message.content));
+  if (listItems(parsed)?.length) return <ResultCards value={parsed} />;
   if (parsed && typeof parsed === "object") {
     return <KeyValueTable data={parsed as Record<string, unknown> | unknown[]} maxRows={Array.isArray(parsed) ? 5 : undefined} />;
   }
@@ -31,8 +33,9 @@ export function ToolCallCard({ call, result, status }: { call: ToolCallLike; res
     return <div className="lgk-tool-custom">{custom({ name: call.name, args: call.args, status, result: result ? parse(messageText(result.content)) : undefined })}</div>;
   }
   const hasArgs = Object.keys(call.args ?? {}).length > 0;
+  const resultItems = result ? listItems(parse(messageText(result.content))) : null;
   return (
-    <details className="lgk-tool" data-status={status} open={status === "running" || status === "error" ? true : undefined}>
+    <details className="lgk-tool" data-status={status} open={status === "running" || status === "error" || !!resultItems?.length || undefined}>
       <summary>
         <span className="lgk-dot" aria-hidden />
         <code>{call.name}</code>

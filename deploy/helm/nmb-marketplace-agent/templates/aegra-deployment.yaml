@@ -1,0 +1,162 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nmb.componentName" (dict "root" . "component" "aegra") }}
+  labels:
+    {{- include "nmb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: aegra
+spec:
+  replicas: {{ .Values.aegra.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "nmb.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: aegra
+  template:
+    metadata:
+      labels:
+        {{- include "nmb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: aegra
+      {{- with .Values.aegra.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nmb.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.aegra.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: aegra
+          image: {{ include "nmb.image" (dict "root" . "image" .Values.images.aegra) }}
+          imagePullPolicy: {{ .Values.images.aegra.pullPolicy }}
+          {{- with .Values.aegra.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.aegra.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "nmb.configMapName" . }}
+          env:
+            # Aegra's own store (threads, runs, checkpoints) — component vars on
+            # purpose: DATABASE_URL stays unset so it cannot hijack either DB.
+            - name: POSTGRES_HOST
+              value: {{ .Values.aegra.postgres.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.aegra.postgres.port | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.aegra.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.aegra.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_BROKER_ENABLED
+              value: {{ .Values.aegra.redis.enabled | quote }}
+            - name: REDIS_URL
+              value: {{ .Values.aegra.redis.url | quote }}
+            - name: WORKER_COUNT
+              value: {{ .Values.aegra.workerCount | quote }}
+            - name: N_JOBS_PER_WORKER
+              value: {{ .Values.aegra.jobsPerWorker | quote }}
+            - name: AUTH_TYPE
+              value: {{ .Values.aegra.authType | quote }}
+            # Platform registry (agents, tools, packs, RAG collections).
+            - name: NMB_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" . }}
+                  key: NMB_DATABASE_URL
+                  optional: true
+            {{- if .Values.encryption.enabled }}
+            - name: NMB_ENCRYPTION_KEY_FILE
+              value: {{ printf "%s/%s" .Values.encryption.mountPath .Values.encryption.fileName | quote }}
+            - name: NMB_ENCRYPTION_REQUIRED
+              value: {{ .Values.encryption.required | quote }}
+            - name: NMB_ENCRYPTION_KEYS_OLD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" . }}
+                  key: NMB_ENCRYPTION_KEYS_OLD
+                  optional: true
+            {{- end }}
+            {{- range $key := list "OPENAI_API_KEY" "ANTHROPIC_API_KEY" "GOOGLE_API_KEY" "TAVILY_API_KEY" "LANGFUSE_PUBLIC_KEY" "LANGFUSE_SECRET_KEY" "QDRANT_API_KEY" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nmb.secretName" $ }}
+                  key: {{ $key }}
+                  optional: true
+            {{- end }}
+            {{- with .Values.aegra.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          volumeMounts:
+            {{- if .Values.encryption.enabled }}
+            - name: encryption-key
+              mountPath: {{ .Values.encryption.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /app/data
+            {{- end }}
+          {{- with .Values.aegra.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{- if .Values.encryption.enabled }}
+        - name: encryption-key
+          secret:
+            secretName: {{ include "nmb.secretName" . }}
+            defaultMode: 0400
+            items:
+              - key: NMB_ENCRYPTION_KEY
+                path: {{ .Values.encryption.fileName }}
+        {{- end }}
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "nmb.dataClaimName" . }}
+        {{- end }}
+      {{- with .Values.aegra.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aegra.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aegra.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -20,6 +20,11 @@ services:
       N_JOBS_PER_WORKER: ${N_JOBS_PER_WORKER:-10}
       AUTH_TYPE: ${AUTH_TYPE:-noop}
 
+      # Field encryption: required here to seal LangGraph checkpoint blobs
+      NMB_ENCRYPTION_KEY: ${NMB_ENCRYPTION_KEY:-}
+      NMB_ENCRYPTION_KEYS_OLD: ${NMB_ENCRYPTION_KEYS_OLD:-}
+      NMB_ENCRYPTION_REQUIRED: ${NMB_ENCRYPTION_REQUIRED:-false}
+
       MAIN_MODEL: ${MAIN_MODEL:-ollama:llama3.1:8b}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-ollama:nomic-embed-text}
       ASYNC_RESEARCHER_URL: http://agent-server:2026
@@ -105,6 +110,9 @@ services:
       - "8000:8000"
     environment:
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      NMB_ENCRYPTION_KEY: ${NMB_ENCRYPTION_KEY:-}
+      NMB_ENCRYPTION_KEYS_OLD: ${NMB_ENCRYPTION_KEYS_OLD:-}
+      NMB_ENCRYPTION_REQUIRED: ${NMB_ENCRYPTION_REQUIRED:-false}
       MAIN_MODEL: ${MAIN_MODEL:-ollama:llama3.1:8b}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-ollama:nomic-embed-text}
 

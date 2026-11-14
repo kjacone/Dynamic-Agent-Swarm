@@ -5,6 +5,8 @@ from typing import Optional
 from sqlalchemy import JSON, Column, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
+from nmb_marketplace_agent.crypto import EncryptedText
+
 
 def now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -107,7 +109,7 @@ class Notification(SQLModel, table=True):
     channel: str = Field(default="webhook")
     target: str = Field(default="")
     subject: str = Field(default="")
-    body: str = Field(default="", sa_column=Column(Text))
+    body: str = Field(default="", sa_column=Column(EncryptedText(aad="notifications.body")))
     status: str = Field(default="pending", index=True)  # pending|sent|dead
     attempts: int = Field(default=0)
     next_attempt_at: str = Field(default_factory=now_iso, index=True)

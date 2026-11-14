@@ -1,0 +1,167 @@
+# Defaults sized for a pilot. Every secret lives in one Kubernetes Secret:
+# either bring your own (secrets.existingSecret, e.g. from External Secrets or
+# Vault) or let the chart create it from the values below (dev only).
+#
+# The Secret must expose these keys when you manage it yourself:
+#   ADMIN_TOKEN              (required)
+#   POSTGRES_PASSWORD        (required by the Aegra deployment)
+#   NMB_ENCRYPTION_KEY       (required when encryption.enabled)
+#   NMB_JWT_SECRET           (recommended)
+#   NMB_DATABASE_URL         (optional: platform registry Postgres DSN;
+#                             defaults to SQLite on the data volume)
+#   NMB_ENCRYPTION_KEYS_OLD  (optional: comma-separated decrypt-only keys)
+#   REDIS_URL                (optional: admin-api Redis URL when it needs AUTH;
+#                             also used for Aegra via extraEnv)
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, TAVILY_API_KEY,
+#   LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, QDRANT_API_KEY (optional)
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+images:
+  adminApi:
+    repository: nmb-marketplace-admin-api
+    tag: ""
+    pullPolicy: IfNotPresent
+  aegra:
+    repository: nmb-marketplace-aegra
+    tag: ""
+    pullPolicy: IfNotPresent
+  # VITE_API_BASE is baked in at build time — build this image with the
+  # browser-facing admin API URL (or serve it same-origin behind the ingress).
+  dashboard:
+    repository: nmb-marketplace-dashboard
+    tag: ""
+    pullPolicy: IfNotPresent
+
+secrets:
+  # Use a Secret managed outside the release (Vault, External Secrets, ...).
+  # When empty the chart creates "<fullname>-secrets" from the values below.
+  existingSecret: ""
+  adminToken: ""
+  jwtSecret: ""
+  databaseUrl: ""
+  encryptionKey: ""
+  encryptionOldKeys: ""
+  postgresPassword: ""
+  openaiApiKey: ""
+  anthropicApiKey: ""
+  googleApiKey: ""
+  tavilyApiKey: ""
+  langfusePublicKey: ""
+  langfuseSecretKey: ""
+  qdrantApiKey: ""
+
+encryption:
+  # Mounts NMB_ENCRYPTION_KEY from the Secret as a file and points both the
+  # admin API and Aegra at NMB_ENCRYPTION_KEY_FILE. Aegra seals LangGraph
+  # checkpoint blobs, the admin API seals handoff/notification text.
+  enabled: true
+  # Set true in production: startup fails if no key is configured.
+  required: false
+  mountPath: /etc/nmb/encryption
+  fileName: key
+
+# Shared volume for /app/data: SQLite registry (unless NMB_DATABASE_URL is
+# set), FAISS indexes, docs and training files. ReadWriteMany when the admin
+# API and Aegra may land on different nodes.
+persistence:
+  enabled: true
+  existingClaim: ""
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  storageClass: ""
+
+config:
+  mainModel: "ollama:llama3.1:8b"
+  embeddingModel: "ollama:nomic-embed-text"
+  # Defaults to the chart's own Aegra service when empty.
+  langgraphUrl: ""
+  qdrantUrl: "http://qdrant:6333"
+  ollamaUrl: ""
+  litellmUrl: ""
+  vllmUrl: ""
+  langfuseHost: ""
+  langfusePublicUrl: ""
+  corsOrigins: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+adminApi:
+  replicaCount: 1
+  port: 8000
+  autoCreateTables: true
+  # Shared rate limits across API replicas (optional; needs the redis package).
+  # Keep credentials out of values: when Redis requires AUTH, leave this empty
+  # and set REDIS_URL from the Secret via extraEnv instead.
+  redisUrl: ""
+  podAnnotations: {}
+  podSecurityContext: {}
+  securityContext: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+aegra:
+  replicaCount: 1
+  port: 2026
+  workerCount: 3
+  jobsPerWorker: 10
+  authType: noop
+  postgres:
+    host: postgres
+    port: 5432
+    database: aegra
+    user: aegra
+  redis:
+    enabled: true
+    url: redis://redis:6379/0
+  podAnnotations: {}
+  podSecurityContext: {}
+  securityContext: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+dashboard:
+  replicaCount: 1
+  port: 80
+  podAnnotations: {}
+  podSecurityContext: {}
+  securityContext: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# Runs `alembic upgrade head` as a pre-install/pre-upgrade hook. Keep
+# adminApi.autoCreateTables=true only for empty databases; with migrations the
+# schema is owned by Alembic.
+migrations:
+  enabled: false
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: nmb.example.com
+      service: dashboard
+      paths: ["/"]
+    - host: api.nmb.example.com
+      service: admin-api
+      paths: ["/"]
+  tls: []

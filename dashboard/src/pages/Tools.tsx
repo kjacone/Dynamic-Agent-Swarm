@@ -22,6 +22,7 @@ const TYPE_TONE: Record<string, string> = {
   builtin: "bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/20",
   http: "bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-500/20",
   python: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
+  frontend: "bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/20",
 };
 
 export function Tools({ tenant }: { tenant: string }) {
@@ -45,7 +46,7 @@ export function Tools({ tenant }: { tenant: string }) {
   return (
     <div>
       <PageHeader icon={Wrench} title="Tools"
-        description="Builtin, HTTP, and Python tools agents can call at runtime."
+        description="Builtin, HTTP, Python and browser tools agents can call at runtime."
         actions={<Button onClick={() => setCreating(true)}>New tool</Button>} />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -75,7 +76,9 @@ export function Tools({ tenant }: { tenant: string }) {
                   <TD className="max-w-[220px] truncate font-mono text-[11px] text-muted-foreground">{truncate(JSON.stringify(t.config), 40)}</TD>
                   <TD>
                     <div className="flex justify-end gap-1 opacity-80 transition-opacity group-hover:opacity-100">
-                      <Button size="sm" variant="outline" onClick={() => setTesting(t)}>Test</Button>
+                      {t.type !== "frontend" && (
+                        <Button size="sm" variant="outline" onClick={() => setTesting(t)}>Test</Button>
+                      )}
                       <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleting(t)}>Delete</Button>
                     </div>
                   </TD>
@@ -107,7 +110,7 @@ export function Tools({ tenant }: { tenant: string }) {
 
 function CreateTool({ onClose, tenant }: { onClose: () => void; tenant: string }) {
   const [name, setName] = useState("");
-  const [type, setType] = useState<"builtin" | "http" | "python">("builtin");
+  const [type, setType] = useState<"builtin" | "http" | "python" | "frontend">("builtin");
   const [description, setDescription] = useState("");
   const [config, setConfig] = useState("{}");
   const toast = useToast();
@@ -132,13 +135,16 @@ function CreateTool({ onClose, tenant }: { onClose: () => void; tenant: string }
           <div className="space-y-1.5">
             <Label>Type</Label>
             <FilterTabs value={type} onChange={setType}
-              options={[{ id: "builtin", label: "Builtin" }, { id: "http", label: "HTTP" }, { id: "python", label: "Python" }]} />
+              options={[{ id: "builtin", label: "Builtin" }, { id: "http", label: "HTTP" }, { id: "python", label: "Python" }, { id: "frontend", label: "Browser" }]} />
           </div>
           <div className="space-y-1.5"><Label>Description</Label>
             <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What does this tool do?" /></div>
           <div className="space-y-1.5"><Label>Config (JSON)</Label>
             <Textarea rows={5} className="font-mono text-xs" value={config} onChange={(e) => setConfig(e.target.value)}
-              placeholder={type === "http" ? '{"endpoint":"https://example.com"}' : type === "python" ? '{"dotted_path":"nmb_marketplace_agent.custom_tools.my_tool.fn"}' : '{}'} />
+              placeholder={type === "http" ? '{"endpoint":"https://example.com"}'
+                : type === "python" ? '{"dotted_path":"nmb_marketplace_agent.custom_tools.my_tool.fn"}'
+                : type === "frontend" ? '{"parameters":{"type":"object","properties":{"path":{"type":"string"}}}}'
+                : '{}'} />
           </div>
         </div>
         <DialogFooter>

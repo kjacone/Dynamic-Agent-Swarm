@@ -85,6 +85,11 @@ async def check_rate(key: ApiKey) -> None:
 def _check_origin(key: ApiKey, request: Request) -> None:
     if key.kind != "publishable":
         return
+    # Browsers omit Origin on same-origin GET/HEAD, so a missing header on a safe
+    # method is normal (the bearer session still proves who is asking, and CORS
+    # keeps other sites from reading the reply). Writes must name their origin.
+    if not request.headers.get("origin") and request.method in ("GET", "HEAD"):
+        return
     allowed = key.allowed_origins or []
     # An empty allow-list is treated as "unconfigured" and rejects all browser
     # origins; the admin must explicitly set ["*"] or specific origins.

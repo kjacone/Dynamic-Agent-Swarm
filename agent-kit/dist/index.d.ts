@@ -107,6 +107,8 @@ declare class GatewayTransport {
     private restore;
     private remember;
     stream(payload: TransportPayload): AsyncGenerator<Chunk>;
+    private failure;
+    private consume;
 }
 
 type ToastKind = "info" | "success" | "error";
@@ -473,12 +475,14 @@ interface ChatFeatures {
     /** Edit your messages, regenerate answers and switch between versions. Needs provider `branching`. */
     branching?: boolean;
     copy?: boolean;
-    /** "Hide tool calls" switch in the composer. */
+    /** "Hide background tasks" switch in the composer (the tool-call cards). */
     toolToggle?: boolean;
     /** Side panel for artifacts opened from tool cards or generative UI. */
     artifacts?: boolean;
     /** Show the server host and a connection dot in the header. */
     connectionBadge?: boolean;
+    /** Header button for past conversations (and a new chat). */
+    history?: boolean;
 }
 interface ChatProps {
     title?: string;
@@ -590,7 +594,7 @@ interface ToolCallLike {
  */
 declare function messageToolCalls(m: Message): ToolCallLike[];
 
-/** A tool's output: tables for objects and arrays, clipped text for everything else. */
+/** A tool's output: card strips for lists, tables for objects, clipped text otherwise. */
 declare function ToolOutput({ message }: {
     message: ToolMessage;
 }): react.JSX.Element;

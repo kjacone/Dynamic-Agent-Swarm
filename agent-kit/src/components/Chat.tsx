@@ -8,12 +8,13 @@ import { useKit } from "../provider";
 import { useStickToBottom } from "../use-stick-to-bottom";
 import { useAgent } from "../use-agent";
 import { Composer } from "./Composer";
+import { HistoryPanel } from "./HistoryPanel";
 import { InterruptView, type InterruptRenderProps } from "./interrupts/InterruptView";
 import type { MarkdownOptions } from "./Markdown";
 import { AssistantMessage, type UiComponents } from "./messages/AssistantMessage";
 import { HumanMessage } from "./messages/HumanMessage";
 import { OrphanToolResult } from "./messages/ToolCalls";
-import { ArrowDownIcon, NewChatIcon, XIcon } from "./ui/icons";
+import { ArrowDownIcon, HistoryIcon, NewChatIcon, XIcon } from "./ui/icons";
 import { IconButton } from "./ui/IconButton";
 
 export interface ChatFeatures {
@@ -22,12 +23,14 @@ export interface ChatFeatures {
   /** Edit your messages, regenerate answers and switch between versions. Needs provider `branching`. */
   branching?: boolean;
   copy?: boolean;
-  /** "Hide tool calls" switch in the composer. */
+  /** "Hide background tasks" switch in the composer (the tool-call cards). */
   toolToggle?: boolean;
   /** Side panel for artifacts opened from tool cards or generative UI. */
   artifacts?: boolean;
   /** Show the server host and a connection dot in the header. */
   connectionBadge?: boolean;
+  /** Header button for past conversations (and a new chat). */
+  history?: boolean;
 }
 
 export interface ChatProps {
@@ -67,16 +70,18 @@ function ChatView({
 }: ChatProps) {
   const agent = useAgentContext();
   const kit = useKit();
-  const f = { upload: true, branching: true, copy: true, toolToggle: true, artifacts: true, connectionBadge: true, ...features };
+  const f = { upload: true, branching: true, copy: true, toolToggle: true, artifacts: true, connectionBadge: true, history: true, ...features };
   const branching = f.branching && kit.branching;
 
   const [hideToolCalls, setHideToolCalls] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [artifactOpen, closeArtifact] = useArtifactOpen();
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom();
 
   // A different thread means a different artifact.
   useEffect(() => { closeArtifact(); setArtifactContext({}); }, [agent.threadId, closeArtifact, setArtifactContext]);
+  useEffect(() => { setHistoryOpen(false); }, [agent.threadId]);
 
   const visible = agent.messages.filter((m) => !isHiddenMessage(m));
   const results = new Map<string, ToolMessage>();
@@ -131,6 +136,9 @@ function ChatView({
             <button type="button" className="lgk-hb-btn" onClick={() => void agent.requestHuman()}>
               Talk to a human
             </button>
+          )}
+          {f.history && started && (
+            <IconButton label="Chat history" onClick={() => setHistoryOpen(true)}><HistoryIcon /></IconButton>
           )}
           {started && <IconButton label="New chat" onClick={agent.newThread}><NewChatIcon /></IconButton>}
           {headerActions}
@@ -197,6 +205,7 @@ function ChatView({
             onStop={() => void agent.stop()}
             onError={(description) => kit.notify({ kind: "error", title: "Can't attach that", description })}
           />
+          {historyOpen && <HistoryPanel onClose={() => setHistoryOpen(false)} />}
         </div>
 
         {showArtifact && (

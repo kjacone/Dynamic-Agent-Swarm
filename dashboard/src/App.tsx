@@ -5,11 +5,13 @@ import type { TabId } from "@/components/layout/nav";
 import { Login } from "@/pages/Login";
 import { Overview } from "@/pages/Overview";
 import { Agents } from "@/pages/Agents";
+import { LiveDemo } from "@/pages/LiveDemo";
 import { Subagents } from "@/pages/Subagents";
 import { Prompts } from "@/pages/Prompts";
 import { Tools } from "@/pages/Tools";
 import { Knowledge } from "@/pages/Knowledge";
 import { Models } from "@/pages/Models";
+import { Locale } from "@/pages/Locale";
 import { Training } from "@/pages/Training";
 import { Evaluations } from "@/pages/Evaluations";
 import { Observability } from "@/pages/Observability";
@@ -72,12 +74,14 @@ export default function App() {
         <main className="flex-1 overflow-auto p-6">
           {tab === "overview" && <Overview tenant={tenant} />}
           {tab === "agents" && <Agents tenant={tenant} />}
+          {tab === "demo" && <LiveDemo key={tenant} tenant={tenant} onOpenSolutions={() => setTab("solutions")} />}
           {tab === "subagents" && <Subagents tenant={tenant} />}
           {tab === "connectors" && <Connectors key={tenant} me={me} />}
           {tab === "prompts" && <Prompts />}
           {tab === "tools" && <Tools tenant={tenant} />}
           {tab === "knowledge" && <Knowledge tenant={tenant} />}
           {tab === "models" && <Models tenant={tenant} />}
+          {tab === "locale" && <Locale tenant={tenant} />}
           {tab === "training" && <Training />}
           {tab === "evals" && <Evaluations tenant={tenant} />}
           {tab === "observability" && <Observability />}

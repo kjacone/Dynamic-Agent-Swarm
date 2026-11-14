@@ -8,7 +8,10 @@ from nmb_marketplace_agent.config.database import async_session
 from nmb_marketplace_agent.config.models import AgentConfig
 from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.config.versioning import effective_config
+from nmb_marketplace_agent.checkpoint_store import install_checkpoint_encryption
 from nmb_marketplace_agent.enterprise.middleware.delegation import DelegationMiddleware
+from nmb_marketplace_agent.locale.middleware import LocaleMiddleware
+from nmb_marketplace_agent.locale.service import load_examples, load_profile
 from nmb_marketplace_agent.llm.registry import resolve_model
 from nmb_marketplace_agent.observability import attach
 from nmb_marketplace_agent.prompts.resolver import resolve_system_prompt
@@ -23,13 +26,25 @@ from nmb_marketplace_agent.tools.registry import resolve_tools
 
 log = logging.getLogger(__name__)
 
+# Aegra initializes the checkpointer, then imports graph modules: wrap it here
+# so even graphs compiled before the first factory call write sealed blobs.
+install_checkpoint_encryption()
 
-def _fallback_graph():
+
+def _fallback_graph(model=None):
     return create_deep_agent(
-        model=settings.main_model,
+        model=model or settings.main_model,
         tools=[calculator],
         system_prompt=FALLBACK_SYSTEM_PROMPT,
     )
+
+
+async def _default_model():
+    try:
+        return await resolve_model(settings.main_model)
+    except Exception as e:  # registry unavailable should not take the fallback down
+        log.warning("Could not resolve default model %s: %s", settings.main_model, e)
+        return settings.main_model
 
 
 async def _load_agent(agent_id: str) -> AgentConfig | None:
@@ -46,6 +61,10 @@ def _thread_id(config: RunnableConfig, cfgurable: dict) -> str | None:
 
 
 async def make_graph(config: RunnableConfig):
+    # Aegra creates the checkpointer before graph modules load; wrapping the
+    # serde here seals every checkpoint blob this process writes. Outside the
+    # try so required mode fails the run instead of writing plaintext state.
+    install_checkpoint_encryption()
     try:
         cfgurable = config.get("configurable", {}) if config else {}
         agent_id = cfgurable.get("agent_id")
@@ -53,16 +72,16 @@ async def make_graph(config: RunnableConfig):
 
         if not agent_id:
             log.info("No agent_id in config; returning fallback graph.")
-            return _fallback_graph()
+            return _fallback_graph(await _default_model())
 
         agent = await _load_agent(agent_id)
         if not agent:
             log.warning("AgentConfig %s not found; fallback.", agent_id)
-            return _fallback_graph()
+            return _fallback_graph(await _default_model())
 
         if agent.tenant_id != tenant_id:
             log.warning("Tenant mismatch for agent %s; fallback.", agent_id)
-            return _fallback_graph()
+            return _fallback_graph(await _default_model())
 
         cfg, version = await effective_config(agent, bool(cfgurable.get("use_draft")))
 
@@ -82,10 +101,21 @@ async def make_graph(config: RunnableConfig):
 
         delegation_mw = DelegationMiddleware()
 
+        locale_mw = None
+        try:
+            async with async_session() as s:
+                profile = await load_profile(s, cfg.get("locale_profile_id"), tenant_id)
+                if profile and profile.enabled:
+                    locale_mw = LocaleMiddleware(profile, await load_examples(s, profile.id))
+        except Exception as e:  # a broken locale profile must not take the graph down
+            log.warning("Locale profile %s could not be loaded: %s", cfg.get("locale_profile_id"), e)
+
+        middleware = [delegation_mw] + ([locale_mw] if locale_mw else [])
+
         subagents = await build_subagents(
             cfg["subagent_ids"],
             tenant_id=tenant_id,
-            middleware=[delegation_mw],
+            middleware=middleware,
         )
 
         # Replace the auto-added `general-purpose` subagent with an inert stub so it
@@ -105,7 +135,7 @@ async def make_graph(config: RunnableConfig):
                     "escalate.'"
                 ),
                 "tools": [],
-                "middleware": [delegation_mw],
+                "middleware": list(middleware),
             }]
 
         model = await resolve_model(cfg["model"] or settings.main_model, tenant_id)
@@ -116,7 +146,7 @@ async def make_graph(config: RunnableConfig):
             tools=tools,
             subagents=subagents,
             system_prompt=system_prompt,
-            middleware=[delegation_mw],
+            middleware=middleware,
             name=f"supervisor:{agent.id}",
         )
         graph = graph.with_config({

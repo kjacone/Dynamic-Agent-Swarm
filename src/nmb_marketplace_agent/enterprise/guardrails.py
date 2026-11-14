@@ -419,11 +419,32 @@ def guard_tools(tools: list, engine: PolicyEngine, *, tenant_id: str, agent_id: 
                 emit("tool.result_redacted", {"tool": tool.name, **dec.as_dict()})
             return screened
 
+        # frontend tools declare an injected tool_call_id; the runtime passes it
+        # for the interrupt payload, not for the policy scan or the model.
+        def _call_args(args: dict, call_id: str | None):
+            if call_id:
+                return {"type": "tool_call", "name": tool.name, "args": args, "id": call_id}
+            return args
+
+        # A frontend tool re-executes when the graph resumes from its interrupt,
+        # so metering the call before it runs would count it twice. Emit it once,
+        # after the browser's result arrives.
+        is_frontend = bool((getattr(tool, "metadata", None) or {}).get("frontend"))
+
+        def _before():
+            if not is_frontend:
+                emit("tool.call", {"tool": tool.name})
+
+        def _after():
+            if is_frontend:
+                emit("tool.call", {"tool": tool.name})
+
         def sync(**kw):
+            call_id = kw.pop("tool_call_id", None)
             args, refusal = _gate(kw)
             if refusal:
                 return refusal
-            emit("tool.call", {"tool": tool.name})
+            _before()
             # Retrieval tools are async (they do network + DB work); the agent
             # runtime always takes the async path, but keep sync callers working.
             if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
@@ -431,16 +452,23 @@ def guard_tools(tools: list, engine: PolicyEngine, *, tenant_id: str, agent_id: 
                 try:
                     asyncio.get_running_loop()
                 except RuntimeError:
-                    return _post(asyncio.run(tool.ainvoke(args)))
+                    out = asyncio.run(tool.ainvoke(_call_args(args, call_id)))
+                    _after()
+                    return _post(out)
                 raise RuntimeError(f"Tool '{tool.name}' is async; await it instead of calling invoke()")
-            return _post(tool.invoke(args))
+            out = tool.invoke(_call_args(args, call_id))
+            _after()
+            return _post(out)
 
         async def asyn(**kw):
+            call_id = kw.pop("tool_call_id", None)
             args, refusal = _gate(kw)
             if refusal:
                 return refusal
-            emit("tool.call", {"tool": tool.name})
-            return _post(await tool.ainvoke(args))
+            _before()
+            out = await tool.ainvoke(_call_args(args, call_id))
+            _after()
+            return _post(out)
 
         return StructuredTool(name=tool.name, description=tool.description,
                               args_schema=getattr(tool, "args_schema", None), func=sync, coroutine=asyn)

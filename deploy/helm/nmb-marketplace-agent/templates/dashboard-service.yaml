@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nmb.componentName" (dict "root" . "component" "dashboard") }}
+  labels:
+    {{- include "nmb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.dashboard.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "nmb.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard

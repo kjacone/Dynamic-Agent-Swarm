@@ -5,6 +5,10 @@ import { cn } from "@/lib/utils";
 import type { ModelCfg } from "@/lib/api";
 
 export const MODEL_PRESETS = [
+  "groq:openai/gpt-oss-120b",
+  "groq:qwen/qwen3.8-27b",
+  "openrouter:openai/gpt-oss-120b",
+  "litellm:groq/openai/gpt-oss-120b",
   "ollama:llama3.1:8b",
   "ollama:qwen2.5:7b-instruct",
   "ollama:qwen2.5:3b-instruct",

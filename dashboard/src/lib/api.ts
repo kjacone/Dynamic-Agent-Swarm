@@ -1,4 +1,4 @@
-const BASE = (import.meta.env.VITE_API_BASE || "http://localhost:8000").replace(/\/$/, "");
+export const API_BASE = (import.meta.env.VITE_API_BASE || "http://localhost:8000").replace(/\/$/, "");
 const TOKEN_KEY = "nmb_admin_token";
 
 
@@ -32,7 +32,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   // Enterprise routes are tenant-scoped; for named (JWT/SSO) users the server uses the token's tenant instead.
   if (path.startsWith("/enterprise")) headers.set("X-Tenant-Id", sessionStorage.getItem("nmb_tenant") || "default");
 
-  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   const text = await res.text();
   const body = text ? safeJson(text) : null;
   if (!res.ok) {
@@ -113,12 +113,64 @@ export interface EvalRun {
 }
 
 
-export interface TrainingJob {
-  id: string; name: string; status: string;
+export interface LocaleProfile {
+  id: string; name: string; locale_code: string; languages: string[]; default_language: string;
+  register_style: "formal" | "neutral" | "casual";
+  code_switch_policy: "off" | "allowed" | "encouraged";
+  currency_code: string; currency_symbol: string; currency_position: "before" | "after";
+  decimal_sep: string; thousand_sep: string; date_format: string;
+  glossary: Array<{ source: string; target?: string; keep?: boolean }>;
+  replacements: Array<{ from: string; to: string }>;
+  required_phrases: string[]; banned_phrases: string[];
+  sample_cases: Array<{ input: string; expected_contains?: string; criteria?: string }>;
+  notes: string; enabled: boolean; tenant_id: string; created_at: string; updated_at: string;
+}
+export type LocaleProfileInput = Omit<LocaleProfile, "id" | "tenant_id" | "created_at" | "updated_at">;
+export interface LocaleProfileRow extends LocaleProfile { attached_agents: number; attached_to: string[] }
+export interface LocaleExample {
+  id: string; profile_id: string; tenant_id: string; agent_id: string | null;
+  input: string; bad_output: string | null; corrected_output: string; note: string;
+  source: "manual" | "conversation" | "feedback"; feedback_id: string | null;
+  enabled: boolean; created_at: string;
+}
+export interface LocaleDetail {
+  profile: LocaleProfile;
+  examples: LocaleExample[];
+  agents: Array<{ id: string; name: string; model: string }>;
+}
+export interface LocalePreview {
+  specialist: { name: string; description: string; system_prompt: string };
+  rules: string;
+  formatted: string | null;
+}
+
+export interface TrainingJob {  id: string; name: string; status: string;
   params: Record<string, unknown>;
   created_at: number;
   progress?: { step?: number; total?: number; percentage?: number; loss?: number; epoch?: number };
   loss_series?: { step: number; loss: number }[];
+}
+
+export interface PlaygroundPreview {
+  generation: string;
+  predictions: Array<{ token: string; p: number }>;
+}
+export interface PlaygroundResult {
+  vocab_size: number;
+  parameters: number;
+  sentences: number;
+  tokens: number;
+  steps: number;
+  elapsed_ms: number;
+  loss_series: Array<{ step: number; loss: number }>;
+  final_loss: number;
+  prefix: string;
+  before: PlaygroundPreview;
+  after: PlaygroundPreview;
+}
+export interface PlaygroundInfo {
+  corpus: string;
+  defaults: { epochs: number; learning_rate: number; temperature: number; prefix: string };
 }
 export interface Connection {
   host?: string; public_url?: string; public_key?: string; secret_key?: string;
@@ -314,7 +366,7 @@ async function download(path: string, filename: string) {
     Authorization: `Bearer ${getToken()}`,
     "X-Tenant-Id": sessionStorage.getItem("nmb_tenant") || "default"
   };
-  const res = await fetch(`${BASE}${path}`, { headers });
+  const res = await fetch(`${API_BASE}${path}`, { headers });
   if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement("a");
@@ -509,7 +561,7 @@ export const api = {
   uploadRag: async (id: string, files: File[]) => {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
-    const res = await fetch(`${BASE}/rag/${id}/upload`, {
+    const res = await fetch(`${API_BASE}/rag/${id}/upload`, {
       method: "POST",
       body: form,
       headers: { Authorization: `Bearer ${getToken()}` },
@@ -531,7 +583,15 @@ export const api = {
     request<ModelCfg>(`/models/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteModel: (id: string) => request(`/models/${id}`, { method: "DELETE" }),
   testModel: (id: string) =>
-    request<{ ok: boolean; latency_ms: number; reply: string }>(`/models/${id}/test`, { method: "POST" }),
+    request<{
+      ok: boolean; latency_ms: number; reply: string;
+      tool_calls?: { ok: boolean; name?: string; args?: Record<string, unknown>; error?: string; skipped?: string; latency_ms?: number };
+    }>(`/models/${id}/test`, { method: "POST" }),
+  listProviders: () =>
+    request<Array<{
+      id: string; label: string; base_url: string | null;
+      api_key_env: string | null; local: boolean; hint: string;
+    }>>("/models/providers"),
 
   // inference
   listOllama: () =>
@@ -541,7 +601,7 @@ export const api = {
   deleteOllama: (name: string) =>
     request(`/inference/ollama/models/${encodeURIComponent(name)}`, { method: "DELETE" }),
   pullOllama: (name: string) =>
-    fetch(`${BASE}/inference/ollama/pull`, {
+    fetch(`${API_BASE}/inference/ollama/pull`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
       body: JSON.stringify({ name }),
@@ -561,6 +621,19 @@ export const api = {
     request<Array<{ name: string; rows: number; updated_at: number }>>("/training/datasets"),
   createTrainingDataset: (body: { name: string; source?: string; rows?: unknown[]; agent_id?: string }) =>
     request("/training/datasets", { method: "POST", body: JSON.stringify(body) }),
+  deleteTrainingDataset: (name: string) =>
+    request<{ ok: boolean }>(`/training/datasets/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  downloadTrainingDataset: async (name: string) => {
+    const res = await fetch(`${API_BASE}/training/datasets/${encodeURIComponent(name)}/download`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json())?.detail ?? detail; } catch { /* not JSON */ }
+      throw new ApiError(res.status, `${res.status} ${detail}`);
+    }
+    return res.blob();
+  },
   listTrainingJobs: () =>
     request<{ runner_online: boolean; jobs: TrainingJob[] }>("/training/jobs"),
   createTrainingJob: (body: Record<string, unknown>) =>
@@ -570,6 +643,9 @@ export const api = {
     request<{ log: string }>(`/training/jobs/${id}/log?lines=${lines}`),
   cancelTrainingJob: (id: string) =>
     request(`/training/jobs/${id}/cancel`, { method: "POST" }),
+  getTrainingPlayground: () => request<PlaygroundInfo>("/training/playground"),
+  runTrainingPlayground: (body: { corpus: string; epochs: number; learning_rate: number; temperature: number; prefix: string }) =>
+    request<PlaygroundResult>("/training/playground/train", { method: "POST", body: JSON.stringify(body) }),
 
   // evals
   listEvalDatasets: (t = "default") => request<EvalDataset[]>(`/evals/datasets?tenant_id=${t}`),
@@ -583,6 +659,42 @@ export const api = {
   runEval: (dsId: string, target: "draft" | "published" = "published") =>
     request<EvalRun>(`/evals/datasets/${dsId}/run`, { method: "POST", body: JSON.stringify({ target }) }),
   listEvalRuns: (dsId: string) => request<EvalRun[]>(`/evals/runs?dataset_id=${dsId}`),
+
+  // locale
+  listLocaleProfiles: (t = "default") =>
+    request<LocaleProfileRow[]>(`/locale/profiles?tenant_id=${t}`),
+  createLocaleProfile: (body: LocaleProfileInput & { tenant_id?: string }) =>
+    request<LocaleProfile>("/locale/profiles", { method: "POST", body: JSON.stringify(body) }),
+  getLocaleProfile: (id: string) => request<LocaleDetail>(`/locale/profiles/${id}`),
+  patchLocaleProfile: (id: string, body: Partial<LocaleProfileInput>) =>
+    request<LocaleProfile & { agents_refreshed: number }>(`/locale/profiles/${id}`, {
+      method: "PATCH", body: JSON.stringify(body),
+    }),
+  deleteLocaleProfile: (id: string) =>
+    request<{ deleted: string; agents_detached: number }>(`/locale/profiles/${id}`, { method: "DELETE" }),
+  listLocaleExamples: (pid: string) => request<LocaleExample[]>(`/locale/profiles/${pid}/examples`),
+  createLocaleExample: (
+    pid: string,
+    body: { input: string; corrected_output: string; bad_output?: string | null; note?: string; source?: string },
+  ) => request<LocaleExample & { agents_refreshed: number }>(`/locale/profiles/${pid}/examples`, {
+    method: "POST", body: JSON.stringify(body),
+  }),
+  patchLocaleExample: (id: string, body: Partial<Pick<LocaleExample, "input" | "corrected_output" | "bad_output" | "note" | "enabled">>) =>
+    request<LocaleExample & { agents_refreshed: number }>(`/locale/examples/${id}`, {
+      method: "PATCH", body: JSON.stringify(body),
+    }),
+  deleteLocaleExample: (id: string) =>
+    request<{ deleted: string; agents_refreshed: number }>(`/locale/examples/${id}`, { method: "DELETE" }),
+  attachLocale: (pid: string, agent_id: string) =>
+    request<{ agent_id: string; profile_id: string; subagent_id: string; subagent_ids: string[]; examples?: number }>(
+      `/locale/profiles/${pid}/attach`, { method: "POST", body: JSON.stringify({ agent_id }) },
+    ),
+  detachLocale: (pid: string, agent_id: string) =>
+    request<{ agent_id: string; profile_id: string; subagent_id: string; subagent_ids: string[] }>(
+      `/locale/profiles/${pid}/detach`, { method: "POST", body: JSON.stringify({ agent_id }) },
+    ),
+  previewLocale: (pid: string, body: { text?: string; language?: string } = {}) =>
+    request<LocalePreview>(`/locale/profiles/${pid}/preview`, { method: "POST", body: JSON.stringify(body) }),
 
   // observability
   listTraces: (params: Record<string, string | number> = {}) =>

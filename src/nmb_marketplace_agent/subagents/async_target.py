@@ -2,13 +2,17 @@
 from deepagents import create_deep_agent
 from langchain_core.runnables import RunnableConfig
 
+from nmb_marketplace_agent.checkpoint_store import install_checkpoint_encryption
 from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.enterprise.hooks import guard_agent_tools
 from nmb_marketplace_agent.subagents.defaults import RESEARCHER_PROMPT
 from nmb_marketplace_agent.tools.builtin.search import tavily_search
 
+install_checkpoint_encryption()  # Aegra loads graph modules after the checkpointer exists
+
 
 async def make_researcher_graph(config: RunnableConfig):
+    install_checkpoint_encryption()
     cfgurable = (config or {}).get("configurable", {}) or {}
     tenant_id = cfgurable.get("tenant_id")
     if not tenant_id:

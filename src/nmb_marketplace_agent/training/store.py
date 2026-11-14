@@ -68,6 +68,37 @@ def list_datasets() -> list[dict]:
     return out
 
 
+def dataset_path(name: str) -> Path:
+    if not NAME.match(name):
+        raise TrainingError("Dataset name may use letters, digits, - and _ (max 64).")
+    path = root() / "datasets" / f"{name}.json"
+    if not path.exists():
+        raise TrainingError(f"Unknown dataset: {name}")
+    return path
+
+
+def delete_dataset(name: str) -> dict:
+    path = dataset_path(name)
+    active = [
+        j for j in list_jobs()
+        if j.get("status") in ("queued", "running") and j.get("params", {}).get("dataset") == name
+    ]
+    if active:
+        raise TrainingError(
+            f"Dataset is used by {active[0]['status']} job '{active[0]['name']}'; cancel it first."
+        )
+    path.unlink()
+    info_path = root() / "datasets" / "dataset_info.json"
+    if info_path.exists():
+        try:
+            info = json.loads(info_path.read_text())
+        except ValueError:
+            info = {}
+        info.pop(name, None)
+        info_path.write_text(json.dumps(info, indent=1))
+    return {"ok": True}
+
+
 # ---------- jobs ----------
 def make_config(job: dict) -> dict:
     """LLaMA-Factory SFT + LoRA config. Paths are as seen inside the trainer container."""

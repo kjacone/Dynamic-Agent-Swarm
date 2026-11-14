@@ -1,0 +1,34 @@
+Release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+Components
+  {{- if .Values.ingress.enabled }}
+  dashboard  http://{{ (index .Values.ingress.hosts 0).host }}/
+  {{- else }}
+  dashboard  {{ include "nmb.componentName" (dict "root" . "component" "dashboard") }}:{{ .Values.dashboard.port }} (ingress disabled)
+  {{- end }}
+  admin-api  {{ include "nmb.componentName" (dict "root" . "component" "admin-api") }}:{{ .Values.adminApi.port }}
+  aegra      {{ include "nmb.componentName" (dict "root" . "component" "aegra") }}:{{ .Values.aegra.port }}
+
+Secrets
+  {{- if .Values.secrets.existingSecret }}
+  Using existing Secret "{{ .Values.secrets.existingSecret }}".
+  {{- else }}
+  Chart-created Secret "{{ include "nmb.secretName" . }}" — dev only, values are stored in the release.
+  {{- end }}
+
+First steps
+  1. Generate an encryption key (once) and put it in the Secret:
+       python -m nmb_marketplace_agent.crypto generate
+  2. Seal existing rows after upgrading from an unencrypted install:
+       kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "nmb.componentName" (dict "root" . "component" "admin-api") }} -- python -m nmb_marketplace_agent.crypto reencrypt
+       kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "nmb.componentName" (dict "root" . "component" "aegra") }} -- python -m nmb_marketplace_agent.checkpoint_store rewrap
+     Check coverage first with `crypto status` / `checkpoint_store status`.
+  3. Set encryption.required=true in production so a missing key fails startup.
+  4. The dashboard image must be built with VITE_API_BASE pointing at the
+     browser-facing admin API URL.
+
+Backup, restore and key-rotation procedures: deploy/helm/BACKUP_RESTORE.md
+
+{{- if not .Values.ingress.enabled }}
+Ingress is disabled: use kubectl port-forward or enable ingress in values.yaml.
+{{- end }}

@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
-import { Activity, Bot, Boxes, Cpu, Database, Gauge, Layers, LayoutDashboard, RotateCw, Server, ShieldCheck, TriangleAlert, Wrench } from "lucide-react";
-import { api, type SystemStatus } from "@/lib/api";
+import { Activity, ArrowUpRight, Bot, Boxes, Crown, Cpu, Database, Gauge, Layers, LayoutDashboard, RotateCw, Server, ShieldCheck, TriangleAlert, Wrench } from "lucide-react";
+import { api, type LicenceView, type SystemStatus } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/common/StatCard";
-import { StatusBadge } from "@/components/common/StatusBadge";
+import { StatusBadge, Chip } from "@/components/common/StatusBadge";
+import { UpgradeDialog } from "@/components/common/UpgradeDialog";
 import { cn } from "@/lib/utils";
+
+const STATE_TONE: Record<string, "green" | "amber" | "red" | "blue" | "gray"> = {
+  valid: "green", grace: "amber", expired: "red", invalid: "red", unenforced: "blue", development: "blue",
+};
 
 const COUNTS: Array<{ key: string; label: string; icon: typeof Bot; tone: "sky" | "violet" | "emerald" | "amber" | "indigo" | "slate" }> = [
   { key: "agents", label: "Agents", icon: Bot, tone: "violet" },
@@ -18,10 +23,12 @@ const COUNTS: Array<{ key: string; label: string; icon: typeof Bot; tone: "sky" 
   { key: "datasets", label: "Eval datasets", icon: Database, tone: "slate" },
 ];
 
-export function Overview({ tenant }: { tenant: string }) {
+export function Overview({ tenant, onManageLicence }: { tenant: string; onManageLicence?: () => void }) {
   const [data, setData] = useState<SystemStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [licence, setLicence] = useState<LicenceView | null>(null);
+  const [upgrade, setUpgrade] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -41,10 +48,16 @@ export function Overview({ tenant }: { tenant: string }) {
     return () => clearInterval(id);
   }, [tenant]);
 
+  useEffect(() => {
+    // The licence card is supplementary; a missing permission must not blank the status page.
+    api.licencePlan().then(setLicence).catch(() => {});
+  }, []);
+
   const services = data?.services ?? [];
   const healthy = services.filter((s) => s.ok).length;
   const broken = services.filter((s) => !s.ok && s.configured).length;
   const unset = services.filter((s) => !s.ok && !s.configured).length;
+  const planFeatures = licence ? licence.features.filter((f) => licence.plan.features.includes(f.id)) : [];
 
   return (
     <div>
@@ -101,6 +114,46 @@ export function Overview({ tenant }: { tenant: string }) {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {licence && (
+        <Card className="mb-6">
+          <CardContent className="flex flex-wrap items-center gap-4 p-4">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400">
+              <Crown className="h-5 w-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                <span>{licence.plan.customer || "This deployment"}</span>
+                <span className="capitalize text-muted-foreground">· {licence.plan.edition}</span>
+                <StatusBadge value={licence.license.state} tone={STATE_TONE[licence.license.state] ?? "gray"} />
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                {planFeatures.length} of {licence.features.length} features active · {licence.plan.seats.toLocaleString()} seats
+                {licence.plan.expires_on ? ` · renews ${new Date(`${licence.plan.expires_on}T00:00:00`).toLocaleDateString()}` : ""}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {planFeatures.length === 0
+                  ? <span className="text-[11px] text-muted-foreground">No features switched on in the plan.</span>
+                  : planFeatures.map((f) => <Chip key={f.id}>{f.label}</Chip>)}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setUpgrade(true)}>
+                <ArrowUpRight className="h-4 w-4" /> Request upgrade
+              </Button>
+              {onManageLicence && <Button variant="ghost" onClick={onManageLicence}>Manage</Button>}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {upgrade && licence && (
+        <UpgradeDialog
+          view={licence}
+          onClose={() => setUpgrade(false)}
+          onDone={() => { setUpgrade(false); api.licencePlan().then(setLicence).catch(() => {}); }}
+        />
       )}
 
       <section className="mb-8">

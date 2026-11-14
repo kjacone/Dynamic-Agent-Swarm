@@ -12,6 +12,7 @@ from sqlmodel import select
 
 from nmb_marketplace_agent.api.deps import get_db
 from nmb_marketplace_agent.config.models import ApiKey
+from nmb_marketplace_agent.enterprise.rbac import principal_from_token
 from nmb_marketplace_agent.enterprise.sessions import decode_session, is_session_token
 
 
@@ -19,13 +20,28 @@ def hash_key(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _platform_admin(raw: str) -> bool:
+    if raw.count(".") != 2:  # signed tokens only
+        return False
+    try:
+        principal = principal_from_token(f"Bearer {raw}")
+    except HTTPException:
+        return False
+    return "platform_admin" in principal.roles
+
+
 def require_admin(authorization: str = Header(default="")):
     token = os.environ.get("ADMIN_TOKEN", "")
+    given = authorization.removeprefix("Bearer ").strip().strip('"').strip("'")
+    if token and hmac.compare_digest(given, token):
+        return
+    # SSO/demo platform admins minted with NMB_JWT_SECRET carry the same authority
+    # as the legacy admin token; check them through the shared RBAC verifier.
+    if given and _platform_admin(given):
+        return
     if not token:
         raise HTTPException(503, "ADMIN_TOKEN is not set on the server")
-    given = authorization.removeprefix("Bearer ").strip()
-    if not hmac.compare_digest(given, token):
-        raise HTTPException(401, "Invalid admin token")
+    raise HTTPException(401, "Invalid admin token")
 
 
 log = logging.getLogger(__name__)

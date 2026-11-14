@@ -21,6 +21,20 @@ ALL_MODULES = ["core", "audit", "guardrails", "workflows", "approvals", "connect
                "solutions", "compliance", "sso"]
 COMMUNITY = {"core", "audit", "guardrails"}
 ALWAYS_ON = {"audit"}  # never lock customers out of evidence
+EDITIONS = ["community", "professional", "enterprise", "sovereign"]
+
+# What the console shows in the licence plan editor; ids match licence modules.
+FEATURE_CATALOG = [
+    {"id": "core", "label": "Agent platform", "description": "Agents, subagents, tools, knowledge, models and the training playground."},
+    {"id": "audit", "label": "Audit trail", "description": "Hash-chained, verifiable audit trail. Always included."},
+    {"id": "guardrails", "label": "Guardrails", "description": "PII screening, prompt-injection shield and tenant policy enforcement."},
+    {"id": "workflows", "label": "Workflows", "description": "Deterministic multi-step workflows with shadow replay and rules."},
+    {"id": "approvals", "label": "Approvals & notifications", "description": "Human approvals, escalation and notification routes."},
+    {"id": "connectors", "label": "Connectors", "description": "Bank system connectors with egress policy and test calls."},
+    {"id": "solutions", "label": "Solutions marketplace", "description": "Industry packs, install, upgrade and rollback."},
+    {"id": "compliance", "label": "Compliance", "description": "ISO 27001 / SOC 2 / DPPA readiness and evidence export."},
+    {"id": "sso", "label": "SSO & RBAC", "description": "OIDC single sign-on with role-based access control."},
+]
 
 
 @dataclass

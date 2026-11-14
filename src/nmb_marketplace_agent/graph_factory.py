@@ -10,6 +10,8 @@ from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.config.versioning import effective_config
 from nmb_marketplace_agent.checkpoint_store import install_checkpoint_encryption
 from nmb_marketplace_agent.enterprise.middleware.delegation import DelegationMiddleware
+from nmb_marketplace_agent.enterprise.middleware.injection import InjectionShieldMiddleware
+from nmb_marketplace_agent.enterprise.runtime import load_guards
 from nmb_marketplace_agent.locale.middleware import LocaleMiddleware
 from nmb_marketplace_agent.locale.service import load_examples, load_profile
 from nmb_marketplace_agent.llm.registry import resolve_model
@@ -102,6 +104,7 @@ async def make_graph(config: RunnableConfig):
         delegation_mw = DelegationMiddleware()
 
         locale_mw = None
+        shield_mw = None
         try:
             async with async_session() as s:
                 profile = await load_profile(s, cfg.get("locale_profile_id"), tenant_id)
@@ -109,8 +112,15 @@ async def make_graph(config: RunnableConfig):
                     locale_mw = LocaleMiddleware(profile, await load_examples(s, profile.id))
         except Exception as e:  # a broken locale profile must not take the graph down
             log.warning("Locale profile %s could not be loaded: %s", cfg.get("locale_profile_id"), e)
+        try:
+            async with async_session() as s:
+                guards = await load_guards(s, tenant_id)
+                if guards:
+                    shield_mw = InjectionShieldMiddleware(guards)
+        except Exception as e:  # guardrail rows must not take the graph down either
+            log.warning("Guardrail instructions could not be loaded: %s", e)
 
-        middleware = [delegation_mw] + ([locale_mw] if locale_mw else [])
+        middleware = [delegation_mw] + ([locale_mw] if locale_mw else []) + ([shield_mw] if shield_mw else [])
 
         subagents = await build_subagents(
             cfg["subagent_ids"],

@@ -361,6 +361,37 @@ export interface PolicyDecision {
   findings: Array<{ kind: string; start: number; end: number; severity: string; score: number }>;
 }
 
+export interface Guardrail {
+  id: string; title: string; instruction: string; watch_phrases: string[];
+  action: "block" | "log"; enabled: boolean; created_at: string; updated_at: string;
+}
+export interface GuardrailInput {
+  title: string; instruction: string; watch_phrases: string[];
+  action: "block" | "log"; enabled?: boolean;
+}
+export interface LicenceFeature { id: string; label: string; description: string }
+export interface LicencePlan {
+  id: string; tenant_id: string; customer: string; edition: string; features: string[];
+  seats: number; expires_on: string | null; note: string; updated_by: string;
+  updated_at: string | null; derived: boolean;
+}
+export interface LicenceView {
+  plan: LicencePlan;
+  license: {
+    customer: string; edition: string; state: string; modules: string[]; solutions: string[];
+    max_tenants: number; max_seats: number; deployment: string;
+    quotas: Record<string, number>; exp: number | null; grace_days: number;
+  };
+  features: LicenceFeature[];
+  editions: string[];
+}
+export interface LicenceUpgradeRequest {
+  id: string; tenant_id: string; current_edition: string; target_edition: string;
+  add_features: string[]; message: string; status: string; requested_by: string; created_at: string;
+}
+export interface DemoAccount { id: string; name: string; title: string; description: string; roles: string[] }
+export interface DemoAccounts { enabled: boolean; ready?: boolean; tenant?: string; accounts: DemoAccount[] }
+
 async function download(path: string, filename: string) {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${getToken()}`,
@@ -843,6 +874,38 @@ export const api = {
   exportUsage: () => download("/enterprise/usage/export.csv", "usage.csv"),
   testPolicy: (text: string, direction: string) =>
     request<PolicyDecision>("/enterprise/policies/test", { method: "POST", body: JSON.stringify({ text, direction }) }),
+
+  // guardrails / injection shield
+  guardrails: () => request<Guardrail[]>("/enterprise/guardrails"),
+  createGuardrail: (body: GuardrailInput) =>
+    request<Guardrail>("/enterprise/guardrails", { method: "POST", body: JSON.stringify(body) }),
+  patchGuardrail: (id: string, body: Partial<GuardrailInput>) =>
+    request<Guardrail>(`/enterprise/guardrails/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteGuardrail: (id: string) =>
+    request(`/enterprise/guardrails/${id}`, { method: "DELETE" }),
+  guardrailPresets: () =>
+    request<{ added: number; instructions: Guardrail[] }>("/enterprise/guardrails/presets", { method: "POST" }),
+  testGuardrail: (text: string, direction = "input") =>
+    request<PolicyDecision>("/enterprise/guardrails/test", { method: "POST", body: JSON.stringify({ text, direction }) }),
+
+  // licence plan + upgrade requests
+  licencePlan: () => request<LicenceView>("/enterprise/licence/plan"),
+  saveLicencePlan: (body: {
+    customer: string; edition: string; features: string[]; seats: number;
+    expires_on: string | null; note: string;
+  }) => request<{ plan: LicencePlan; features: LicenceFeature[]; editions: string[] }>(
+    "/enterprise/licence/plan", { method: "PUT", body: JSON.stringify(body) }),
+  licenceRequests: () => request<LicenceUpgradeRequest[]>("/enterprise/licence/upgrade-requests"),
+  requestLicenceUpgrade: (body: { target_edition: string; add_features: string[]; message: string }) =>
+    request<LicenceUpgradeRequest>("/enterprise/licence/upgrade-requests", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+
+  // demo sign-in (disabled outside demo deployments)
+  demoAccounts: () => request<DemoAccounts>("/auth/demo/accounts"),
+  demoLogin: (account: string) =>
+    request<{ token: string; account: DemoAccount; tenant: string; expires_in: number }>(
+      "/auth/demo/login", { method: "POST", body: JSON.stringify({ account }) }),
 
   
 };

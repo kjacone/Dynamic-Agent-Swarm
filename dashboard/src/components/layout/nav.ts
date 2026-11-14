@@ -3,6 +3,7 @@ import {
   Bot,
   Boxes,
   ClipboardCheck,
+  Crown,
   Database,
   FlaskConical,
   Gauge,
@@ -17,6 +18,7 @@ import {
   ScrollText,
   Settings as SettingsIcon,
   ShieldAlert,
+  ShieldBan,
   ShieldCheck,
   Sparkles,
   Users,
@@ -45,6 +47,8 @@ export const NAV = [
   { id: "connectors", label: "Connectors", icon: Plug, section: "enterprise", perm: "connectors:read" },
   { id: "audit", label: "Audit trail", icon: ScrollText, section: "enterprise", perm: "audit:read" },
   { id: "privacy", label: "Privacy", icon: ShieldAlert, section: "enterprise", perm: "privacy:read" },
+  { id: "guardrails", label: "Guardrails", icon: ShieldBan, section: "enterprise", perm: "policies:read" },
+  { id: "licence", label: "Licence", icon: Crown, section: "enterprise", perm: "license:read" },
   { id: "governance", label: "Governance", icon: ShieldCheck, section: "enterprise", perm: "compliance:read" },
 ] as const;
 

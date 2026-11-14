@@ -16,6 +16,7 @@ from nmb_marketplace_agent.api.auth import require_admin, verify_api_key
 from nmb_marketplace_agent.api.routes import (
     agents,
     catalog,
+    demo,
     evals,
     feedback,
     inference,
@@ -107,6 +108,9 @@ for mod, prefix in [
 
 # ── Enterprise layer (RBAC/SSO-protected; license-gated per module) ──
 app.include_router(enterprise_router, prefix="/enterprise", tags=["enterprise"])
+
+# ── Demo sign-in (public by design; disabled outside demo deployments) ─
+app.include_router(demo.router, prefix="/auth/demo", tags=["demo"])
 
 
 # ── Public (API-key / embed) endpoints ───────────────────────────────

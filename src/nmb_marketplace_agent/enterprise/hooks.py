@@ -13,7 +13,7 @@ from nmb_marketplace_agent.enterprise import audit
 from nmb_marketplace_agent.enterprise.guardrails import PolicyEngine, guard_tools
 from nmb_marketplace_agent.enterprise.licensing import current_license
 from nmb_marketplace_agent.enterprise.metering import quota_status, record_usage
-from nmb_marketplace_agent.enterprise.runtime import load_policy
+from nmb_marketplace_agent.enterprise.runtime import load_guards, load_policy
 
 log = logging.getLogger(__name__)
 _tasks: set[asyncio.Task] = set()
@@ -33,7 +33,7 @@ async def enforce_chat(db: AsyncSession, *, tenant_id: str, agent_id: str, actor
     ``meter=False`` screens the text (host-app context attached to the same turn)
     without counting it as another agent run.
     """
-    engine = PolicyEngine(await load_policy(db, tenant_id))
+    engine = PolicyEngine(await load_policy(db, tenant_id), await load_guards(db, tenant_id))
     dec = engine.check_text(message, "input")
     digest = hashlib.sha256(message.encode()).hexdigest()[:16]
     if dec.blocked:
@@ -103,7 +103,7 @@ async def guard_agent_tools(tools: list, tenant_id: str, agent_id: str) -> list:
         return tools
     from nmb_marketplace_agent.config.database import async_session
     async with async_session() as db:
-        engine = PolicyEngine(await load_policy(db, tenant_id))
+        engine = PolicyEngine(await load_policy(db, tenant_id), await load_guards(db, tenant_id))
 
     def emit(kind: str, payload: dict):
         async def _w():

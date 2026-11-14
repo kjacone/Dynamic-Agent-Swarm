@@ -218,6 +218,58 @@ class PrivacyRequest(SQLModel, table=True):
     completed_at: Optional[str] = Field(default=None)
 
 
+class GuardrailInstruction(SQLModel, table=True):
+    """Tenant-authored prompt-injection defence.
+
+    Two jobs: the text is injected into every model call as a security directive,
+    and ``watch_phrases`` are matched against inbound text so matching messages
+    are blocked (or logged) before they ever reach the model.
+    """
+    __tablename__ = "guardrail_instructions"
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    title: str
+    instruction: str = Field(default="", sa_column=Column(Text))
+    watch_phrases: list = Field(default_factory=list, sa_column=Column(JSON))
+    action: str = Field(default="block")  # block | log
+    enabled: bool = Field(default=True)
+    created_by: str = Field(default="")
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class LicencePlan(SQLModel, table=True):
+    """What the console shows as this tenant's licence ("pilot plan").
+
+    Display/management only: the Ed25519-signed licence in licensing.py stays the
+    enforcement source. One row per tenant, keyed by tenant_id.
+    """
+    __tablename__ = "licence_plans"
+    id: str = Field(primary_key=True)  # tenant_id
+    tenant_id: str = Field(index=True)
+    customer: str = Field(default="")
+    edition: str = Field(default="enterprise")
+    features: list = Field(default_factory=list, sa_column=Column(JSON))
+    seats: int = Field(default=100)
+    expires_on: Optional[str] = Field(default=None)  # YYYY-MM-DD
+    note: str = Field(default="", sa_column=Column(Text))
+    updated_by: str = Field(default="")
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class LicenceUpgradeRequest(SQLModel, table=True):
+    __tablename__ = "licence_upgrade_requests"
+    id: str = Field(primary_key=True)
+    tenant_id: str = Field(index=True)
+    current_edition: str = Field(default="")
+    target_edition: str
+    add_features: list = Field(default_factory=list, sa_column=Column(JSON))
+    message: str = Field(default="", sa_column=Column(Text))
+    status: str = Field(default="requested", index=True)  # requested | quoted | applied | declined
+    requested_by: str = Field(default="")
+    created_at: str = Field(default_factory=now_iso)
+
+
 class WorkflowRule(SQLModel, table=True):
     """Tenant-scoped rule layered on top of a workflow.
 

@@ -23,6 +23,8 @@ import { Solutions } from "@/pages/Solutions";
 import { Audit } from "@/pages/Audit";
 import { Privacy } from "@/pages/Privacy";
 import { Governance } from "@/pages/Governance";
+import { Guardrails } from "@/pages/Guardrails";
+import { Licence } from "@/pages/Licence";
 import { getToken, api, can, clearToken, type Me } from "@/lib/api";
 import { Connectors } from "@/pages/Connectors";
 const TENANT_KEY = "nmb_tenant";
@@ -72,7 +74,7 @@ export default function App() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar tenant={tenant} onTenant={setTenant} onLogout={() => { clearToken(); setAuthed(false); }} lockedTenant={!!me && me.auth !== "admin_token"} user={me ? `${me.sub} · ${me.roles.join(", ") || "no roles"}` : undefined} />
         <main className="flex-1 overflow-auto p-6">
-          {tab === "overview" && <Overview tenant={tenant} />}
+          {tab === "overview" && <Overview tenant={tenant} onManageLicence={() => setTab("licence")} />}
           {tab === "agents" && <Agents tenant={tenant} />}
           {tab === "demo" && <LiveDemo key={tenant} tenant={tenant} onOpenSolutions={() => setTab("solutions")} />}
           {tab === "subagents" && <Subagents tenant={tenant} />}
@@ -93,6 +95,8 @@ export default function App() {
           {tab === "audit" && <Audit key={tenant} me={me} />}
           {tab === "privacy" && <Privacy key={tenant} me={me} />}
           {tab === "governance" && <Governance key={tenant} me={me} />}
+          {tab === "guardrails" && <Guardrails key={tenant} me={me} />}
+          {tab === "licence" && <Licence key={tenant} me={me} />}
         </main>
       </div>
     </div>

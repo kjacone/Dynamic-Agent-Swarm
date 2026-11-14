@@ -18,7 +18,7 @@ from fastapi import Header, HTTPException
 PERMISSIONS: dict[str, set[str]] = {
     "platform_admin": {"*"},
     "tenant_admin": {"agents:*", "workflows:*", "approvals:*", "solutions:*", "connectors:*", "policies:*",
-                     "handoffs:*", "privacy:*", "audit:read", "usage:read", "compliance:read", "license:read"},
+                     "handoffs:*", "privacy:*", "audit:read", "usage:read", "compliance:read", "license:*"},
     "agent_builder": {"agents:*", "solutions:read", "policies:read", "connectors:read"},
     "workflow_designer": {"workflows:*", "solutions:read", "connectors:read", "policies:read"},
     "operator": {"workflows:run", "workflows:read", "approvals:read", "agents:read",

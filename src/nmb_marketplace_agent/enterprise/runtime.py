@@ -12,7 +12,7 @@ from nmb_marketplace_agent.config.models import AgentConfig
 from nmb_marketplace_agent.enterprise.connectors import EgressPolicy, build_connector
 from nmb_marketplace_agent.enterprise.connectors.base import ConnectorError
 from nmb_marketplace_agent.enterprise.guardrails import DEFAULT_POLICY, Policy, PolicyEngine
-from nmb_marketplace_agent.enterprise.models import ConnectorConfig, PolicySet
+from nmb_marketplace_agent.enterprise.models import ConnectorConfig, GuardrailInstruction, PolicySet
 from nmb_marketplace_agent.enterprise.workflows.engine import Runtime
 
 log = logging.getLogger(__name__)
@@ -33,6 +33,17 @@ async def load_policy(db: AsyncSession, tenant_id: str) -> Policy:
                 rules.append(r)
         tool_rules += p.tool_rules
     return Policy(name="merged", rules=rules, tool_rules=tool_rules)
+
+
+async def load_guards(db: AsyncSession, tenant_id: str) -> list[dict]:
+    """Enabled tenant injection-shield instructions, in creation order."""
+    rows = (await db.execute(
+        select(GuardrailInstruction)
+        .where(GuardrailInstruction.tenant_id == tenant_id, GuardrailInstruction.enabled == True)  # noqa: E712
+        .order_by(GuardrailInstruction.created_at)
+    )).scalars().all()
+    return [{"id": r.id, "title": r.title, "instruction": r.instruction,
+             "action": r.action, "watch_phrases": list(r.watch_phrases or [])} for r in rows]
 
 
 def _limits_for(agent: AgentConfig | None) -> dict:

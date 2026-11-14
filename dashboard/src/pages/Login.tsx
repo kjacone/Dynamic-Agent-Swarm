@@ -12,16 +12,32 @@ const PERSONA_ICONS: Record<string, typeof ShieldCheck> = {
   auditor: ScrollText,
 };
 
+// Shown even when /auth/demo/accounts cannot be reached, so the demo-account
+// sign-in never silently disappears. The server mints the tokens.
+const DEMO_FALLBACK: DemoAccount[] = [
+  { id: "admin", name: "Demo admin", title: "Platform administrator",
+    description: "The full console — build agents, govern, manage the licence.", roles: ["platform_admin"] },
+  { id: "tenant-admin", name: "Demo tenant admin", title: "Bank workspace administrator",
+    description: "Runs the bank workspace: workflows, approvals, connectors, guardrails.", roles: ["tenant_admin"] },
+  { id: "approver", name: "Demo approver", title: "Compliance approver",
+    description: "Sees the approval queue and decides requests; no build access.", roles: ["approver"] },
+  { id: "auditor", name: "Demo auditor", title: "Internal auditor",
+    description: "Read-only: audit chain, compliance posture, usage and licence.", roles: ["auditor"] },
+];
+
 export function Login({ onAuthed }: { onAuthed: () => void }) {
   const [token, setTok] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [show, setShow] = useState(false);
   const [demo, setDemo] = useState<DemoAccounts | null>(null);
+  const [demoErr, setDemoErr] = useState<string | null>(null);
   const [demoBusy, setDemoBusy] = useState<string | null>(null);
 
   useEffect(() => {
-    api.demoAccounts().then(setDemo).catch(() => setDemo(null));
+    api.demoAccounts()
+      .then((d) => { setDemo(d); setDemoErr(null); })
+      .catch((e: any) => { setDemo(null); setDemoErr(e.message || "The console API is unreachable."); });
   }, []);
 
   async function submit(e: React.FormEvent) {
@@ -54,6 +70,9 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
     }
   }
 
+  const demoAvailable = demoErr !== null || !!demo?.enabled;
+  const demoAccounts = demo?.accounts?.length ? demo.accounts : DEMO_FALLBACK;
+
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60rem_40rem_at_50%_-10%,hsl(var(--primary)/0.12),transparent)]" />
@@ -70,20 +89,25 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
           </p>
         </div>
 
-        {demo?.enabled && demo.accounts.length > 0 && (
+        {demoAvailable && (
           <div className="mb-5">
             <div className="mb-2 flex items-center justify-between">
               <Label>Demo accounts</Label>
               <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">one click</span>
             </div>
-            {demo.ready === false ? (
+            {demoErr ? (
+              <p className="mb-2 rounded-lg border border-amber-500/35 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+                Cannot reach the console API — demo sign-in needs it running. {demoErr}
+              </p>
+            ) : demo?.ready === false ? (
               <p className="rounded-lg border border-amber-500/35 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">
                 Set <code className="rounded bg-background px-1 py-0.5">NMB_JWT_SECRET</code> on the server to
                 enable demo sign-in.
               </p>
-            ) : (
+            ) : null}
+            {demoErr || demo?.ready !== false ? (
               <div className="space-y-1.5">
-                {demo.accounts.map((a) => {
+                {demoAccounts.map((a) => {
                   const Icon = PERSONA_ICONS[a.id] ?? ShieldCheck;
                   const active = demoBusy === a.id;
                   return (
@@ -108,7 +132,7 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
                   );
                 })}
               </div>
-            )}
+            ) : null}
             <div className="mt-4 flex items-center gap-3 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
               <span className="h-px flex-1 bg-border" /> or use a token <span className="h-px flex-1 bg-border" />
             </div>
@@ -124,7 +148,7 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
                 type={show ? "text" : "password"}
                 value={token}
                 onChange={(e) => setTok(e.target.value)}
-                autoFocus={!demo?.enabled}
+                autoFocus={!!demo && !demo.enabled}
                 autoComplete="off"
                 placeholder="Bearer token"
                 className="pr-10"

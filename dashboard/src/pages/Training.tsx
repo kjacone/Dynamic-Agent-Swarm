@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { Activity, CheckCircle2, Cpu, Download, FileText, GraduationCap, Play, RotateCcw, Server, Trash2, TrendingDown, X } from "lucide-react";
+import { Activity, CheckCircle2, Cloud, Cpu, Download, ExternalLink, FileText, GraduationCap, Play, RotateCcw, Server, Trash2, TrendingDown, X } from "lucide-react";
 import { api, type PlaygroundPreview, type PlaygroundResult, type TrainingJob } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,10 +28,12 @@ export function Training() {
           <TabsTrigger value="playground">Playground</TabsTrigger>
           <TabsTrigger value="jobs">Jobs</TabsTrigger>
           <TabsTrigger value="datasets">Datasets</TabsTrigger>
+          <TabsTrigger value="colab">Google Colab</TabsTrigger>
         </TabsList>
         <TabsContent value="playground" className="mt-4"><Playground /></TabsContent>
         <TabsContent value="jobs" className="mt-4"><Jobs /></TabsContent>
         <TabsContent value="datasets" className="mt-4"><Datasets /></TabsContent>
+        <TabsContent value="colab" className="mt-4"><ColabPanel /></TabsContent>
       </Tabs>
     </div>
   );
@@ -182,6 +184,182 @@ function Playground() {
                 </p>
               </div>
             )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+const COLAB_STEPS = [
+  { title: "Pick a dataset", body: "Any dataset from the Datasets tab, with the base model and hyperparameters." },
+  { title: "Download the notebook", body: "A self-contained .ipynb with the rows and settings embedded." },
+  { title: "Upload to Colab", body: "File → Upload notebook, then Runtime → Change runtime type → T4 GPU." },
+  { title: "Run all", body: "Installs, trains, compares base vs tuned, downloads the adapter zip." },
+];
+
+function ColabPanel() {
+  const toast = useToast();
+  const [datasets, setDatasets] = useState<Array<{ name: string; rows: number }>>([]);
+  const [mode, setMode] = useState<"train" | "infer">("train");
+  const [dataset, setDataset] = useState("");
+  const [baseModel, setBaseModel] = useState("Qwen/Qwen2.5-0.5B-Instruct");
+  const [prompt, setPrompt] = useState("");
+  const [epochs, setEpochs] = useState(3);
+  const [lr, setLr] = useState(0.0002);
+  const [bs, setBs] = useState(1);
+  const [ga, setGa] = useState(8);
+  const [seq, setSeq] = useState(1024);
+
+  useEffect(() => {
+    api.trainingColab()
+      .then((info) => {
+        const d = info.defaults;
+        setMode(d.mode);
+        setBaseModel(d.base_model);
+        setEpochs(d.epochs);
+        setLr(d.learning_rate);
+        setBs(d.batch_size);
+        setGa(d.grad_accum);
+        setSeq(d.max_seq_length);
+      })
+      .catch((e: any) => toast.push(e.message, "error"));
+    api.listTrainingDatasets()
+      .then((list) => {
+        setDatasets(list);
+        if (list.length) setDataset((cur) => cur || list[0].name);
+      })
+      .catch((e: any) => toast.push(e.message, "error"));
+  }, []);
+
+  const rows = datasets.find((d) => d.name === dataset)?.rows;
+
+  async function download() {
+    if (!dataset) return;
+    try {
+      const blob = await api.downloadColabNotebook({
+        mode, dataset, base_model: baseModel.trim(), epochs, learning_rate: lr,
+        batch_size: bs, grad_accum: ga, max_seq_length: seq, prompt,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `colab-${dataset}-${mode}.ipynb`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.push("Notebook downloaded — upload it in Colab and hit Run all", "success");
+    } catch (e: any) {
+      toast.push(e.message, "error");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="bg-gradient-to-br from-primary/[0.06] to-transparent">
+        <CardContent className="p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+            <Cloud className="h-4 w-4 text-primary" />
+            Train on Colab's free T4 — no GPU needed here
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {COLAB_STEPS.map((step, i) => (
+              <div key={step.title} className="rounded-lg border bg-background/60 p-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium">
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/10 text-[10px] text-primary">{i + 1}</span>
+                  {step.title}
+                </div>
+                <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{step.body}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+            The notebook embeds the dataset and runs in the client's own Google account, so the rows leave this
+            deployment — export synthetic or already-approved data only. Colab sessions are time-limited and subject
+            to GPU availability; the console trainer stays the production path.
+          </p>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-[1.05fr_1fr]">
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-sm">Notebook settings</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <FilterTabs
+              value={mode}
+              onChange={setMode}
+              options={[{ id: "train", label: "Fine-tune (LoRA)" }, { id: "infer", label: "Inference only" }]}
+            />
+            <div className="space-y-1.5">
+              <Label>Dataset</Label>
+              <select value={dataset} onChange={(e) => setDataset(e.target.value)} className="h-9 w-full rounded-lg border bg-background px-2 text-sm">
+                {datasets.length === 0 && <option value="">No datasets yet — create one in Datasets</option>}
+                {datasets.map((d) => <option key={d.name} value={d.name}>{d.name} ({d.rows} rows)</option>)}
+              </select>
+              {rows != null && <p className="text-[11px] text-muted-foreground">{rows} rows will be embedded in the notebook.</p>}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Base model</Label>
+              <Input className="font-mono text-xs" value={baseModel} onChange={(e) => setBaseModel(e.target.value)} />
+              <p className="text-[11px] text-muted-foreground">0.5B–1.5B instruct models fit the free T4 comfortably; larger ones run out of memory.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Test prompt (optional)</Label>
+              <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. Show me phones under 250,000 TZS" />
+              <p className="text-[11px] text-muted-foreground">
+                {mode === "train" ? "Used to compare the base model with the tuned adapter." : "The question the notebook asks the base model."}
+              </p>
+            </div>
+            {mode === "train" && (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="space-y-1.5">
+                  <Label>Epochs</Label>
+                  <Input type="number" min={1} max={20} value={epochs} onChange={(e) => setEpochs(Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Learning rate</Label>
+                  <Input type="number" step="0.00005" min={0.000001} max={0.01} value={lr} onChange={(e) => setLr(Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Batch size</Label>
+                  <Input type="number" min={1} max={16} value={bs} onChange={(e) => setBs(Number(e.target.value))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Grad accum</Label>
+                  <Input type="number" min={1} max={64} value={ga} onChange={(e) => setGa(Number(e.target.value))} />
+                </div>
+                <div className="col-span-2 space-y-1.5">
+                  <Label>Max seq length</Label>
+                  <Input type="number" min={128} max={4096} step={128} value={seq} onChange={(e) => setSeq(Number(e.target.value))} />
+                </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <p className="text-[11px] text-muted-foreground">Generates a .ipynb — nothing is trained or charged here.</p>
+              <AsyncButton onRun={download} disabled={!dataset || !baseModel.trim()}>
+                <Download className="mr-1 h-3.5 w-3.5" /> Download notebook
+              </AsyncButton>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-sm">How to run it</CardTitle></CardHeader>
+          <CardContent className="space-y-3 text-xs">
+            <ol className="list-decimal space-y-1.5 pl-4">
+              <li>Download the notebook with the settings on the left.</li>
+              <li>In Colab, choose <span className="font-medium">File → Upload notebook</span>.</li>
+              <li>Set <span className="font-medium">Runtime → Change runtime type → T4 GPU</span>, then <span className="font-medium">Runtime → Run all</span>.</li>
+              <li>The first cell installs packages (~2 minutes). Training logs, the base-vs-tuned comparison and the adapter download follow.</li>
+            </ol>
+            <div className="rounded-lg border bg-muted/30 p-2.5 text-[11px] leading-relaxed text-muted-foreground">
+              Expected: a 0.5B LoRA over a few hundred rows trains in roughly 5–15 minutes on a T4. Sessions are
+              time-limited; if Colab interrupts a run, "Run all" again after uploading.
+            </div>
+            <a href="https://colab.research.google.com/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+              Open colab.research.google.com <ExternalLink className="h-3 w-3" />
+            </a>
           </CardContent>
         </Card>
       </div>

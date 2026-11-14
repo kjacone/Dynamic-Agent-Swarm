@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NMB Marketplace Agent · Dashboard</title>
+
+    <script>
+  (function () {
+    try {
+      var mode = localStorage.getItem("nmb-theme") || "auto";
+      var dark =
+        mode === "dark" ||
+        (mode === "auto" &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches);
+      if (dark) document.documentElement.classList.add("dark");
+      document.documentElement.dataset.themeMode = mode;
+    } catch (e) {
+      /* ignore */
+    }
+  })();
+</script>
+
+    <script type="module" crossorigin src="/assets/index-D7tS87lf.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BjA06mbU.css">
+  </head>
+  <body class="h-full">
+    <div id="root" class="h-full"></div>
+  </body>
+</html>

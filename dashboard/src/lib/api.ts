@@ -172,6 +172,19 @@ export interface PlaygroundInfo {
   corpus: string;
   defaults: { epochs: number; learning_rate: number; temperature: number; prefix: string };
 }
+export interface ColabInfo {
+  modes: Array<"train" | "infer">;
+  defaults: {
+    mode: "train" | "infer";
+    base_model: string;
+    epochs: number;
+    learning_rate: number;
+    batch_size: number;
+    grad_accum: number;
+    max_seq_length: number;
+    prompt: string;
+  };
+}
 export interface Connection {
   host?: string; public_url?: string; public_key?: string; secret_key?: string;
   url?: string; api_key?: string;
@@ -701,6 +714,23 @@ export const api = {
   getTrainingPlayground: () => request<PlaygroundInfo>("/training/playground"),
   runTrainingPlayground: (body: { corpus: string; epochs: number; learning_rate: number; temperature: number; prefix: string }) =>
     request<PlaygroundResult>("/training/playground/train", { method: "POST", body: JSON.stringify(body) }),
+  trainingColab: () => request<ColabInfo>("/training/colab"),
+  downloadColabNotebook: async (body: {
+    mode: string; dataset: string; base_model: string; epochs: number; learning_rate: number;
+    batch_size: number; grad_accum: number; max_seq_length: number; prompt: string;
+  }) => {
+    const res = await fetch(`${API_BASE}/training/colab`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json())?.detail ?? detail; } catch { /* not JSON */ }
+      throw new ApiError(res.status, `${res.status} ${detail}`);
+    }
+    return res.blob();
+  },
 
   // evals
   listEvalDatasets: (t = "default") => request<EvalDataset[]>(`/evals/datasets?tenant_id=${t}`),

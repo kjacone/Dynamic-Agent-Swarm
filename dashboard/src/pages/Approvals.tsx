@@ -12,6 +12,7 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { EmptyState, LoadingBlock } from "@/components/common/AsyncState";
 import { AsyncButton } from "@/components/common/AsyncButton";
 import { JsonView } from "@/components/common/JsonView";
+import { CaseData } from "@/components/common/CaseData";
 import { Chip, StatusBadge, dueLabel } from "@/components/common/StatusBadge";
 import { FilterTabs } from "@/components/common/FilterTabs";
 import { StatCard } from "@/components/common/StatCard";
@@ -154,8 +155,9 @@ function ApprovalCard({ a, me, onAct }: { a: ApprovalItem; me: Me | null; onAct:
         )}
 
         {Object.keys(a.context || {}).length > 0 && (
-          <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Case data the agent produced</summary>
-            <JsonView data={a.context} className="mt-2" /></details>
+          <div className="rounded-xl border bg-muted/10 p-3">
+            <CaseData data={a.context} />
+          </div>
         )}
 
         {a.status === "pending" && (
@@ -291,6 +293,11 @@ function DecideDialog({ a, decision, onClose }: { a: ApprovalItem; decision: "ap
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
+          {a.context && Object.keys(a.context).length > 0 && (
+            <div className="max-h-60 overflow-auto rounded-lg border bg-muted/10 p-2">
+              <CaseData data={a.context} compact />
+            </div>
+          )}
           <Label>{needReason ? "Reason (required)" : "Comment (optional)"}</Label>
           <Textarea rows={3} autoFocus value={comment} onChange={(e) => setComment(e.target.value)}
             placeholder={needReason ? "Why is this being rejected?" : "Evidence reviewed, conditions, etc."} />

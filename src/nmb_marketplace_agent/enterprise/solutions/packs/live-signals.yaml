@@ -1,0 +1,169 @@
+id: live-signals
+name: Live Signals Playbooks
+industry: cross-industry
+priority: later
+version: 1.0.0
+summary: >-
+  Payment, field-visit and document-deadline workflows that branch on live FX rates, weather,
+  public holidays and country data from free public APIs — no keys, offline-safe fallbacks.
+compliance_frameworks: []
+delivery: workflow
+audience: [operations, customer-care]
+
+parameters:
+  fx_review_threshold: {default: 5000000, description: Converted TZS amount at or above which a compliance officer must approve}
+  rain_review_mm: {default: 15, description: Rain forecast (mm over 72h) at or above which the visit needs a human confirmation}
+
+agents:
+  - key: payments-writer
+    name: Payments Note Writer
+    tools: []
+    system_prompt: |
+      You write short internal notes for a bank operations team. Use only the facts in the data provided.
+      Two or three sentences, plain language, no advice and no invented amounts. Do not repeat full account numbers.
+  - key: field-ops-writer
+    name: Field Ops Briefer
+    tools: []
+    system_prompt: |
+      You brief field engineers before a site visit. Give three short bullets: conditions to expect, the
+      planned business-day schedule, and anything that could delay the visit. Use only the provided facts.
+  - key: service-writer
+    name: Service Desk Writer
+    tools: []
+    system_prompt: |
+      You explain service timelines to a customer in plain language. Use only the provided dates and holiday
+      facts. Never promise an outcome, never invent a date, and keep it under four sentences.
+
+workflows:
+  - key: cross_border_payment
+    name: Cross-border payment review
+    description: Convert the amount with live FX, check the beneficiary country, and gate large payments on a compliance officer.
+    tags: [payments, fx, approval]
+    inputs:
+      amount: {required: true, type: number, description: Amount in the source currency}
+      currency: {required: true, type: string, description: Source currency ISO code, e.g. USD}
+      beneficiary_country: {required: true, type: string, description: Beneficiary country ISO code or name}
+    steps:
+      - id: fx
+        type: tool
+        tool: fx_convert
+        output: fx
+        input: {amount: "{{ amount }}", from_currency: "{{ currency }}", to_currency: TZS}
+      - id: geo
+        type: tool
+        tool: country_profile
+        output: geo
+        input: {country: "{{ beneficiary_country }}"}
+      - id: size_gate
+        type: condition
+        if: "parse_json(fx).amount_to >= ${fx_review_threshold}"
+        then: review
+        else: auto_approve
+      - id: review
+        type: approval
+        title: "Cross-border payment {{ amount }} {{ currency }}"
+        summary: "Converted {{ parse_json(fx).amount_to }} TZS. Beneficiary country: {{ beneficiary_country }}."
+        roles: [compliance_officer]
+        required_approvals: 1
+        due_hours: 4
+        on_reject: declined
+        next: note
+      - id: note
+        type: agent
+        agent: "@payments-writer"
+        prompt: |
+          Write the approval note for this payment. FX data: {{ fx }}
+          Beneficiary country data: {{ geo }}
+        next: approved
+      - id: approved
+        type: end
+        outcome: approved_after_review
+      - id: auto_approve
+        type: end
+        outcome: auto_approved
+      - id: declined
+        type: end
+        outcome: declined
+
+  - key: field_visit_planner
+    name: Field visit planner
+    description: Check the 72-hour rain forecast and business-day SLA before a field visit; require confirmation when it will rain.
+    tags: [field-ops, weather, approval]
+    inputs:
+      city: {required: true, type: string, description: City for the visit, e.g. Dar es Salaam}
+      start_date: {required: true, type: string, description: Planned start date, YYYY-MM-DD}
+    steps:
+      - id: weather
+        type: tool
+        tool: local_weather
+        output: weather
+        input: {city: "{{ city }}", country_code: TZ}
+      - id: sla
+        type: tool
+        tool: next_business_day
+        output: sla
+        input: {country: TZ, date: "{{ start_date }}", days: 3}
+      - id: rain_gate
+        type: condition
+        if: "parse_json(weather).rain_next_72h_mm >= ${rain_review_mm}"
+        then: confirm
+        else: brief
+      - id: confirm
+        type: approval
+        title: "Heavy rain expected in {{ city }} — confirm the visit?"
+        summary: "72-hour rain: {{ parse_json(weather).rain_next_72h_mm }} mm. Planned start {{ start_date }}."
+        roles: [field_ops]
+        required_approvals: 1
+        due_hours: 8
+        on_reject: postponed
+        next: brief
+      - id: brief
+        type: agent
+        agent: "@field-ops-writer"
+        prompt: |
+          Brief the engineer visiting {{ city }}. Weather: {{ weather }}
+          Business-day schedule: {{ sla }}
+        next: scheduled
+      - id: scheduled
+        type: end
+        outcome: scheduled
+      - id: postponed
+        type: end
+        outcome: postponed
+
+  - key: document_deadline
+    name: Holiday-aware document deadline
+    description: Compute a five-business-day deadline from the public holiday calendar and explain any shift to the customer.
+    tags: [service, holidays, sla]
+    inputs:
+      country: {required: true, type: string, description: Country ISO code or name}
+      received: {required: true, type: string, description: Date the documents arrived, YYYY-MM-DD}
+    steps:
+      - id: due
+        type: tool
+        tool: next_business_day
+        output: due
+        input: {country: "{{ country }}", date: "{{ received }}", days: 5}
+      - id: calendar
+        type: tool
+        tool: public_holidays
+        output: hol
+        input: {country: "{{ country }}"}
+      - id: shift_gate
+        type: condition
+        if: "len(parse_json(due).skipped) > 2"
+        then: explain
+        else: standard
+      - id: explain
+        type: agent
+        agent: "@service-writer"
+        prompt: |
+          Explain the document deadline to the customer. Deadline: {{ due }}
+          Public holidays: {{ hol }}
+        next: extended
+      - id: extended
+        type: end
+        outcome: extended_for_holiday
+      - id: standard
+        type: end
+        outcome: standard

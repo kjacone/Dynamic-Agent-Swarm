@@ -19,7 +19,7 @@ supervisor:
   delegates: [admissions-clerk, records-evaluator, comms-assistant]
   limits: {max_delegations: 6, max_depth: 2, max_steps: 60, max_cost_usd: 2.00}
   allowed_tools:
-    admissions-clerk: []
+    admissions-clerk: [next_business_day]
     records-evaluator: []
     comms-assistant: []
   system_prompt: |
@@ -33,7 +33,7 @@ supervisor:
 agents:
   - key: admissions-clerk
     name: Admissions Clerk
-    tools: []
+    tools: [next_business_day]
     system_prompt: |
       Extract applicant data and check programme requirements. Return ONLY JSON {"applicant","programme","grades":{...},"requirements_met":[...],"requirements_missing":[...],"summary":"..."}.
       You do not decide admissions. Decisions are made by the registrar using published criteria.

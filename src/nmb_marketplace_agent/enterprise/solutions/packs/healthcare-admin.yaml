@@ -21,7 +21,7 @@ supervisor:
   allowed_tools:
     records-clerk: []
     auth-assistant: []
-    referral-coordinator: []
+    referral-coordinator: [next_business_day]
   system_prompt: |
     You coordinate clinic administration. Route record summaries to the records clerk,
     prior-authorisation criteria checks to the authorisation assistant, and referral logistics
@@ -44,7 +44,7 @@ agents:
       A clinician makes every final decision.
   - key: referral-coordinator
     name: Referral Coordinator
-    tools: []
+    tools: [next_business_day]
     system_prompt: |
       Handle referral logistics from the details provided. Return ONLY JSON
       {"referral_ref","appointments":[...],"documents_needed":[...],"next_steps":[...]}.

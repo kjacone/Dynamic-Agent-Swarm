@@ -17,13 +17,20 @@ from nmb_marketplace_agent.config.models import (
     ThreadOwner,
 )
 from nmb_marketplace_agent.enterprise import handoff as hs
+from nmb_marketplace_agent.enterprise import api as enterprise_api
 from nmb_marketplace_agent.enterprise.api import (
+    HandoffForwardIn,
     HandoffReplyIn,
     HandoffResolveIn,
+    HandoffSummaryIn,
     handoff_claim,
+    handoff_detail,
+    handoff_forward,
     handoff_reply,
     handoff_resolve,
+    handoff_summary,
 )
+from nmb_marketplace_agent.enterprise.models import ConnectorConfig
 from nmb_marketplace_agent.enterprise.rbac import Principal
 
 
@@ -78,6 +85,76 @@ async def test_staff_replies_are_screened_like_bot_output(db):
     with pytest.raises(hs.HandoffError):
         await hs.screen_reply(db, "t1", "here is the key sk-ABCDEFGHIJKLMNOPQRSTUVWX")
     assert await hs.screen_reply(db, "t1", "We have raised your limit.") == "We have raised your limit."
+
+
+# ── share: compression + forwarding ──────────────────────────────────
+async def _conversation(db):
+    await _owner(db)
+    h, _ = await _request(db)
+    await hs.add_message(db, h, role="customer", author="u-1",
+                         text="My salary was not credited on 1 November and I am now short on rent. "
+                              "I have called the branch twice and both times I was told to wait. "
+                              "The transfer reference is NMB-4471 and it left my employer on 31 October. "
+                              "My account ending 0042 shows the credit from October but nothing since. "
+                              "Please can someone check whether the payment is stuck in the clearing queue, "
+                              "because my landlord needs the money by Friday and I cannot make another trip "
+                              "to the branch during working hours. I also sent an email on Monday with the "
+                              "payslip attached but have not received any reply yet.")
+    await hs.add_message(db, h, role="staff", author="op-1",
+                         text="I can see the transfer is still pending at the clearing house.")
+    return h
+
+
+async def test_summary_is_local_extractive_and_keeps_the_essentials(db):
+    h = await _conversation(db)
+    rows = await hs.messages(db, h.id)
+    out = hs.summarize(h, rows)
+
+    assert out["method"] == "extractive" and out["message_count"] == 2
+    text = out["summary"]
+    assert "Conversation summary" in text
+    assert "Why a human stepped in: I need a person" in text
+    assert "What the customer needs:" in text and "salary was not credited" in text
+    assert "What staff replied:" in text and "clearing house" in text
+    assert out["chars_after"] == len(text) and 0 < out["compression"] < 1
+    assert out["chars_before"] > out["chars_after"]
+
+
+async def test_summary_endpoint_respects_the_limit_and_tenant(db):
+    h = await _conversation(db)
+    op = Principal("op-1", "t1", {"operator"}, "jwt")
+    out = await handoff_summary(h.id, HandoffSummaryIn(max_chars=400), op, db)
+    assert out["method"] == "extractive" and len(out["summary"]) <= 400
+
+    other = Principal("op-2", "t2", {"operator"}, "jwt")
+    with pytest.raises(HTTPException) as err:
+        await handoff_summary(h.id, HandoffSummaryIn(), other, db)
+    assert err.value.status_code == 404
+
+
+async def test_forward_to_email_and_copy_is_recorded_on_the_conversation(db):
+    h = await _conversation(db)
+    admin = Principal("admin-1", "t1", {"tenant_admin"}, "jwt")
+
+    with pytest.raises(HTTPException) as err:
+        await handoff_forward(h.id, HandoffForwardIn(channel="email"), admin, db)
+    assert err.value.status_code == 422
+
+    out = await handoff_forward(h.id, HandoffForwardIn(
+        channel="email", recipient="ops@bank.example", subject="Duplicate debit",
+        compress=True, summary="Duplicate debit; salary transfer NMB-4471 still pending."), admin, db)
+    assert out["ok"] and out["channel"] == "email" and out["recipient"] == "ops@bank.example"
+
+    out = await handoff_forward(h.id, HandoffForwardIn(channel="copy", subject="Copied export"), admin, db)
+    assert out["ok"] and out["channel"] == "copy"
+
+    detail = await handoff_detail(h.id, admin, db)
+    assert [f["channel"] for f in detail["forwards"]] == ["copy", "email"]  # newest first
+    email = detail["forwards"][1]
+    assert email["recipient"] == "o***@bank.example"  # masked hint, address stays out of the audit chain
+    assert email["compressed"] is True
+    assert email["summary_chars"] == len("Duplicate debit; salary transfer NMB-4471 still pending.")
+    assert email["messages"] == 2
 
 
 # ── gateway ──────────────────────────────────────────────────────────
@@ -218,3 +295,34 @@ async def test_staff_claim_reply_resolve(db):
 
     await handoff_resolve(h.id, HandoffResolveIn(note="done"), op, db)
     assert (await db.get(Handoff, h.id)).status == "resolved"
+
+
+async def test_forward_sends_transcript_through_connector(db, monkeypatch):
+    await _owner(db)
+    h, _ = await _request(db)
+    await hs.add_message(db, h, role="staff", author="op-1", text="Hello from the bank.")
+    db.add(ConnectorConfig(id="t1:crm", tenant_id="t1", name="crm", type="rest", enabled=True,
+                           config={"operations": {"create_case": {"method": "POST", "path": "/cases"}}}))
+    await db.commit()
+
+    seen: dict = {}
+
+    class Stub:
+        async def call(self, operation, params):
+            seen["operation"] = operation
+            seen["params"] = params
+            return {"ok": True, "id": "case-1"}
+
+    monkeypatch.setattr(enterprise_api, "build_connector", lambda *a, **k: Stub())
+    admin = Principal("admin-1", "t1", {"tenant_admin"}, "jwt")
+    out = await handoff_forward(h.id, HandoffForwardIn(connector="crm", subject="Duplicate debit"), admin, db)
+
+    assert out["ok"] and out["operation"] == "create_case" and out["connector"] == "crm"
+    body = seen["params"]["body"]
+    assert body["subject"] == "Duplicate debit"
+    assert body["handoff_id"] == h.id
+    assert "Hello from the bank." in body["transcript"]
+
+    with pytest.raises(HTTPException) as err:
+        await handoff_forward(h.id, HandoffForwardIn(connector="crm", operation="nope"), admin, db)
+    assert err.value.status_code == 422

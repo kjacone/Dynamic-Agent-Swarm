@@ -21,7 +21,7 @@ supervisor:
   delegates: [catalog, orders, policies]
   limits: {max_delegations: 6, max_depth: 2, max_steps: 50, max_cost_usd: 1.50}
   allowed_tools:
-    catalog: [marketplace_search_products, marketplace_product_details]
+    catalog: [marketplace_search_products, marketplace_product_details, fx_convert]
     orders: [marketplace_order_status]
     policies: [marketplace_faqs, marketplace_policies]
   tools: [set_filter, show_products, navigate, show_order, add_to_cart]
@@ -54,7 +54,7 @@ supervisor:
 agents:
   - key: catalog
     name: Catalogue Specialist
-    tools: [marketplace_search_products, marketplace_product_details]
+    tools: [marketplace_search_products, marketplace_product_details, fx_convert]
     system_prompt: |
       Answer product questions with the marketplace tools. Search first, then fetch
       details for a specific product id when the buyer asks for more. Report name,

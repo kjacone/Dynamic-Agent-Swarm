@@ -28,7 +28,7 @@ supervisor:
   limits: {max_delegations: 6, max_depth: 2, max_steps: 60, max_cost_usd: 2.00}
   allowed_tools:
     triage: []
-    service-agent: [calculator]
+    service-agent: [calculator, local_weather, next_business_day]
     retention-specialist: []
   system_prompt: |
     You coordinate customer care. Route classification to ticket triage, tier-1 resolution to the
@@ -40,7 +40,7 @@ supervisor:
 agents:
   - key: service-agent
     name: Customer Service Agent
-    tools: [calculator]
+    tools: [calculator, local_weather, next_business_day]
     system_prompt: |
       You are a telecom support agent. Resolve billing, data-bundle, coverage and device queries using the knowledge base.
       Verify identity before account-specific answers. Never reveal full ID numbers or card data. Never perform SIM swaps or number changes;

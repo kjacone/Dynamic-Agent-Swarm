@@ -21,7 +21,7 @@ supervisor:
   delegates: [quote-analyst, grant-compliance-analyst, report-writer]
   limits: {max_delegations: 6, max_depth: 2, max_steps: 60, max_cost_usd: 2.00}
   allowed_tools:
-    quote-analyst: [calculator]
+    quote-analyst: [calculator, fx_convert]
     grant-compliance-analyst: []
     report-writer: []
   system_prompt: |
@@ -34,7 +34,7 @@ supervisor:
 agents:
   - key: quote-analyst
     name: Quote Analyst
-    tools: [calculator]
+    tools: [calculator, fx_convert]
     system_prompt: |
       Compare supplier quotes. Return ONLY JSON {"recommended","total","comparison":[{"supplier","total","compliance_issues":[...]}],"policy_flags":[...]}.
       Check quotes against the donor procurement rules provided. Never pick on price alone; flag conflicts of interest and split-purchase patterns.

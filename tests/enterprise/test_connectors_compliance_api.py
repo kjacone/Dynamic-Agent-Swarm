@@ -202,6 +202,42 @@ async def test_api_policy_test_and_connector_secret_rule(client):
     assert good.status_code == 200
 
 
+async def test_connector_upsert_persists_enables_and_rejects_placeholders(client, db):
+    from sqlmodel import select
+
+    from nmb_marketplace_agent.enterprise.models import ConnectorConfig
+
+    cfg = {"base_url": "https://jsonplaceholder.typicode.com",
+           "operations": {"list_posts": {"method": "GET", "path": "/posts"}}}
+    r = await client.put("/enterprise/connectors/posts_api",
+                         json={"type": "rest", "config": cfg, "enabled": True},
+                         headers=tok("a", "tenant_admin"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"name": "posts_api", "type": "rest", "enabled": True,
+                    "needs_setup": False, "created": True}
+
+    row = (await db.execute(select(ConnectorConfig).where(
+        ConnectorConfig.tenant_id == "gov", ConnectorConfig.name == "posts_api"))).scalars().first()
+    assert row.enabled and row.config["operations"]["list_posts"]["path"] == "/posts"
+
+    # second save updates instead of creating, and can switch it off
+    r = await client.put("/enterprise/connectors/posts_api",
+                         json={"type": "rest", "config": cfg, "enabled": False},
+                         headers=tok("a", "tenant_admin"))
+    assert r.json()["created"] is False and r.json()["enabled"] is False
+
+    placeholder = await client.put("/enterprise/connectors/ph",
+                                   json={"type": "rest", "config": {"base_url": "https://api.example.com"},
+                                         "enabled": True},
+                                   headers=tok("a", "tenant_admin"))
+    assert placeholder.status_code == 422
+
+    bad_name = await client.put("/enterprise/connectors/Bad%20Name",
+                                json={"type": "rest", "config": {}}, headers=tok("a", "tenant_admin"))
+    assert bad_name.status_code == 422
+
+
 async def test_api_requires_auth(client):
     assert (await client.get("/enterprise/license")).status_code == 401
     assert (await client.get("/enterprise/license", headers=tok("v", "viewer"))).status_code == 403

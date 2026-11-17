@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Cpu, Play, Workflow } from "lucide-react";
+import { Bot, CheckCircle2, Cpu, PauseCircle, Play, Timer, Users, Workflow } from "lucide-react";
 import { api, can, type Agent, type Me, type ModelCfg, type RunView, type WfInput, type WfSpec, type WfSummary } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,10 +14,11 @@ import { AsyncButton } from "@/components/common/AsyncButton";
 import { JsonView } from "@/components/common/JsonView";
 import { Chip, StatusBadge } from "@/components/common/StatusBadge";
 import { ModelSelect } from "@/components/common/ModelSelect";
+import { StatCard } from "@/components/common/StatCard";
 import { useToast } from "@/components/ui/toast";
 import { agentIdsIn, agentPack, agentRole, flattenSteps } from "@/lib/workflows";
 import { WorkflowGraph, type WorkflowStepStatus } from "@/components/workflows/WorkflowGraph";
-import { fmtDate } from "@/lib/utils";
+import { cn, fmtDate } from "@/lib/utils";
 
 export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
   const [defs, setDefs] = useState<WfSummary[]>([]);
@@ -53,6 +54,18 @@ export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
 
   const mine = useMemo(() => runs.filter((r) => r.workflow === active), [runs, active]);
   const flat = useMemo(() => (spec ? flattenSteps(spec.steps) : []), [spec]);
+  const stats = useMemo(() => {
+    const done = runs.filter((r) => !["running", "waiting_approval"].includes(r.status));
+    const ok = done.filter((r) => r.status !== "failed").length;
+    const attached = new Set<string>();
+    Object.values(specs).forEach((s) => agentIdsIn(s.steps || []).forEach((id) => attached.add(id)));
+    return {
+      active: runs.filter((r) => ["running", "waiting_approval"].includes(r.status)).length,
+      rate: done.length ? Math.round((ok / done.length) * 100) : null,
+      attached: attached.size,
+      total: runs.length,
+    };
+  }, [runs, specs]);
   const roster = useMemo(
     () => (spec ? agents.filter((a) => agentIdsIn(spec.steps || []).includes(a.id)) : []),
     [spec, agents],
@@ -80,31 +93,62 @@ export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
     <div>
       <PageHeader icon={Workflow} title="Workflows"
         description="Governed, durable processes that combine AI agents, system connectors and human approvals." />
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard icon={Workflow} label="Definitions" value={defs.length || "—"} tone="indigo"
+          hint="Installed, versioned workflows" />
+        <StatCard icon={Timer} label="Active runs" value={stats.active} tone="sky"
+          hint={`${stats.total} run${stats.total === 1 ? "" : "s"} recorded`} />
+        <StatCard icon={CheckCircle2} label="Completion rate" value={stats.rate == null ? "—" : `${stats.rate}%`}
+          tone="emerald" hint="Finished runs without failure" />
+        <StatCard icon={Users} label="Agents in play" value={stats.attached || "—"} tone="violet"
+          hint="Specialists wired into steps" />
+      </div>
+
       {defs.length === 0 ? (
         <EmptyState title="No workflows yet" body="Install an industry solution (Solutions tab) to get ready-made, configurable workflows." />
       ) : (
-        <div className="grid gap-4 md:grid-cols-[260px,minmax(0,1fr)]">
-          <Card><CardHeader><CardTitle className="text-sm">Definitions</CardTitle></CardHeader>
+        <div className="grid gap-4 md:grid-cols-[270px,minmax(0,1fr)]">
+          <Card className="h-fit">
+            <CardHeader className="pb-1">
+              <CardTitle className="flex items-center justify-between text-sm">
+                Definitions
+                <span className="text-xs font-normal text-muted-foreground">{defs.length}</span>
+              </CardTitle>
+            </CardHeader>
             <CardContent className="space-y-1 p-2">
               {defs.map((d) => (
                 <button key={d.key} onClick={() => setActive(d.key)}
-                  className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition-colors ${active === d.key ? "border-primary/40 bg-primary/5 font-medium shadow-sm" : "border-transparent hover:bg-muted/60"}`}>
-                  <div className="truncate">{d.name || d.key}</div>
-                  <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>v{d.version} · {d.steps} steps</span>
-                    {agentCount(d) != null && (
-                      <span className="inline-flex items-center gap-0.5"><Bot className="h-3 w-3" />{agentCount(d)}</span>
-                    )}
+                  className={cn("w-full rounded-xl border px-2.5 py-2 text-left text-sm transition-all",
+                    active === d.key
+                      ? "border-primary/40 bg-primary/5 shadow-sm"
+                      : "border-transparent hover:border-border hover:bg-muted/50")}>
+                  <div className="flex items-center gap-2.5">
+                    <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
+                      active === d.key ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>
+                      <Workflow className="h-3.5 w-3.5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium">{d.name || d.key}</div>
+                      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span>v{d.version} · {d.steps} steps</span>
+                        {agentCount(d) != null && (
+                          <span className="inline-flex items-center gap-0.5"><Bot className="h-3 w-3" />{agentCount(d)}</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </button>))}
-            </CardContent></Card>
+            </CardContent>
+          </Card>
 
           <div className="min-w-0 space-y-4">
             {spec && (
-              <Card>
+              <Card className="overflow-hidden">
+                <div className="h-1 bg-gradient-to-r from-teal-500/70 via-sky-500/50 to-indigo-500/40" />
                 <CardHeader className="flex-row items-start justify-between space-y-0">
-                  <div><CardTitle className="text-base">{spec.name || spec.key} <span className="text-xs font-normal text-muted-foreground">v{spec.version}</span></CardTitle>
-                    {spec.description && <p className="mt-1 text-sm text-muted-foreground">{spec.description}</p>}
+                  <div><CardTitle className="text-base">{spec.name || spec.key} <span className="ml-1 rounded-full border px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">v{spec.version}</span></CardTitle>
+                    {spec.description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{spec.description}</p>}
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <Chip>{flat.length} steps</Chip>
                       {flat.filter((s) => s.type === "approval").length > 0 && (
@@ -119,7 +163,9 @@ export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
                   {can(me, "workflows:run") && <Button size="sm" onClick={() => setStarting(true)}><Play className="h-4 w-4" /> Start run</Button>}
                 </CardHeader>
                 <CardContent className="p-3">
-                  <WorkflowGraph spec={spec} agents={agents} height={380} />
+                  <div className="overflow-hidden rounded-xl border bg-muted/10">
+                    <WorkflowGraph spec={spec} agents={agents} height={380} />
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -142,7 +188,7 @@ export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
                     roster.map((a) => {
                       const steps = flat.filter((s) => s.type === "agent" && s.agent === a.id);
                       return (
-                        <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2">
+                        <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2 transition-colors hover:border-primary/30 hover:bg-muted/20">
                           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-primary/5 text-xs font-semibold text-primary">
                             <Bot className="h-4 w-4" />
                           </div>
@@ -169,18 +215,20 @@ export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
               </Card>
             )}
 
-            <Card><CardHeader className="flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-sm">Runs</CardTitle>
-              <span className="text-xs text-muted-foreground">{mine.length} for this workflow</span>
-            </CardHeader>
+            <Card className="overflow-hidden">
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <CardTitle className="flex items-center gap-2 text-sm"><Timer className="h-4 w-4 text-muted-foreground" /> Runs</CardTitle>
+                <span className="text-xs text-muted-foreground">{mine.length} for this workflow</span>
+              </CardHeader>
               <CardContent className="p-0">
                 {mine.length === 0 ? <div className="p-4 text-sm text-muted-foreground">No runs yet.</div> : (
-                  <Table><THead><TR><TH>Started</TH><TH>By</TH><TH>Status</TH><TH>Outcome</TH><TH>Updated</TH></TR></THead>
+                  <Table><THead><TR><TH>Started</TH><TH>By</TH><TH>Status</TH><TH>Duration</TH><TH>Updated</TH></TR></THead>
                     <TBody>{mine.map((r) => (
                       <TR key={r.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setViewing(r)}>
                         <TD>{fmtDate(r.created_at)}</TD><TD>{r.initiator}</TD><TD><StatusBadge value={r.status} /></TD>
-                        <TD>{r.outcome ?? "—"}</TD><TD>{fmtDate(r.updated_at)}</TD></TR>))}</TBody></Table>)}
-              </CardContent></Card>
+                        <TD className="tabular-nums">{runDuration(r)}</TD><TD>{fmtDate(r.updated_at)}</TD></TR>))}</TBody></Table>)}
+              </CardContent>
+            </Card>
           </div>
         </div>
       )}
@@ -190,8 +238,16 @@ export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
   );
 }
 
-function coerce(raw: string, input: WfInput): unknown {
-  if (raw === "") return undefined;
+function runDuration(r: RunView): string {
+  const ms = new Date(r.updated_at).getTime() - new Date(r.created_at).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return "<1s";
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
+function coerce(raw: string, input: WfInput): unknown {  if (raw === "") return undefined;
   if (input.type === "number") return Number(raw);
   if (input.type === "boolean") return raw === "true";
   if (input.type === "object" || input.type === "array") return JSON.parse(raw);
@@ -269,7 +325,9 @@ function RunDialog({ run: initial, agents, canCancel, onClose }: { run: RunView;
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">Run <span className="font-mono text-xs">{run.id.slice(0, 8)}</span> <StatusBadge value={run.status} /></DialogTitle>
+          <DialogTitle className="flex items-center gap-2">Run <span className="font-mono text-xs">{run.id.slice(0, 8)}</span> <StatusBadge value={run.status} />
+            <span className="ml-auto text-[11px] font-normal text-muted-foreground">{runDuration(run)}</span>
+          </DialogTitle>
           <DialogDescription>The highlighted route shows how this run moved through the workflow.</DialogDescription>
         </DialogHeader>
         <div className="max-h-[65vh] space-y-4 overflow-auto text-sm">

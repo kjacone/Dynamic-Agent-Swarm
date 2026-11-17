@@ -52,7 +52,13 @@ DOCS_ROOT = Path("data/docs")
 
 _NS = uuid.UUID("6f1c2f0e-7d1a-4d57-9b0e-3c4f5a6b7c8d")
 _VAR = re.compile(r"\$\{(\w+)\}")
-BUILTIN_TOOLS = {"calculator", "tavily_search"}
+BUILTIN_TOOLS = {
+    "calculator", "tavily_search",
+    "fx_convert", "public_holidays", "next_business_day",
+    "country_profile", "ip_location", "local_weather",
+    "ui_cards", "ui_table", "ui_stats", "ui_chart", "ui_timeline",
+    "ui_status", "ui_form", "ui_alert", "ui_render",
+}
 TOOL_TYPES = {"builtin", "python", "http", "frontend"}
 DELIVERY_VALUES = {"workflow", "agent_kit", "both"}
 
@@ -299,12 +305,30 @@ def _declared_tools(pack: dict) -> dict[str, dict]:
     return out
 
 
+def _workflow_tools(pack: dict) -> set[str]:
+    found: set[str] = set()
+
+    def walk(o: Any) -> None:
+        if isinstance(o, dict):
+            if isinstance(o.get("tool"), str):
+                found.add(o["tool"])
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(pack.get("workflows") or [])
+    return found
+
+
 def _used_tools(pack: dict) -> set[str]:
     used = {t for a in pack.get("agents", []) for t in a.get("tools", []) or []}
     sup = pack.get("supervisor") or {}
     for tools in (sup.get("allowed_tools") or {}).values():
         used.update(tools or [])
     used.update(sup.get("tools") or [])
+    used.update(_workflow_tools(pack))
     return used
 
 
@@ -476,7 +500,7 @@ async def install_solution(
     # ── workflows ─────────────────────────────────────────────────────
     engine = WorkflowEngine(db, Runtime(agent_runner=_unused), tenant_id)
     for wf in pack.get("workflows", []):
-        wf = _bind_agents(wf, created["agents"])
+        wf = _bind_agents(wf, created["agents"], created["tools"])
         d = await engine.save_definition(wf, actor)
         created["workflows"].append({"key": d.key, "version": d.version})
 
@@ -705,13 +729,21 @@ def _install_training(tenant_id: str, solution_id: str, pack: dict) -> list[dict
     return out
 
 
-def _bind_agents(wf: dict, agents: dict[str, str]) -> dict:
+def _bind_agents(wf: dict, agents: dict[str, str], tools: dict[str, str] | None = None) -> dict:
+    """Swap ``@agent-key`` refs and known tool names for installed row ids."""
+    tools = tools or {}
+
     def walk(o):
         if isinstance(o, dict):
-            return {
-                k: (agents[v[1:]] if k == "agent" and isinstance(v, str) and v.startswith("@") else walk(v))
-                for k, v in o.items()
-            }
+            out = {}
+            for k, v in o.items():
+                if k == "agent" and isinstance(v, str) and v.startswith("@"):
+                    out[k] = agents[v[1:]]
+                elif k == "tool" and isinstance(v, str) and v in tools:
+                    out[k] = tools[v]
+                else:
+                    out[k] = walk(v)
+            return out
         if isinstance(o, list):
             return [walk(x) for x in o]
         return o

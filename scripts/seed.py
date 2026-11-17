@@ -11,12 +11,26 @@ from nmb_marketplace_agent.subagents.defaults import RESEARCHER_PROMPT
 
 DEFAULT_AGENT_MODEL = "ollama:llama3.1:8b"
 
+# One tool per UI spec component; any model can drive them with plain JSON.
+GENERATIVE_UI_TOOLS = {
+    "ui_cards": "Render a card strip for listings, results or any comparable set.",
+    "ui_table": "Render a data table for transactions, line items or comparisons.",
+    "ui_stats": "Render KPI tiles for balances, scores and summaries.",
+    "ui_chart": "Render a small bar or line chart.",
+    "ui_timeline": "Render a vertical timeline of events or steps.",
+    "ui_status": "Render a checklist of pass / warn / fail states.",
+    "ui_form": "Ask the customer for input with an inline form.",
+    "ui_alert": "Render a short notice, optionally with action chips.",
+    "ui_render": "Render a ready-made generative-UI spec passed as JSON.",
+}
+
 
 async def main():
     await init_db()
     async with async_session() as db:
         async def upsert_tool(name: str, type_: str, description: str, config: dict):
-            res = await db.execute(select(ToolConfig).where(ToolConfig.name == name))
+            res = await db.execute(select(ToolConfig).where(
+                ToolConfig.name == name, ToolConfig.tenant_id == "default"))
             existing = res.scalars().first()
             if existing:
                 return existing
@@ -31,6 +45,8 @@ async def main():
 
         search = await upsert_tool("tavily_search", "builtin", "Web search", {})
         calc = await upsert_tool("calculator", "builtin", "Math evaluator", {})
+        for name, description in GENERATIVE_UI_TOOLS.items():
+            await upsert_tool(name, "builtin", description, {})
 
         res = await db.execute(select(SubAgentConfig).where(SubAgentConfig.name == "researcher_sync"))
         sync_res = res.scalars().first()

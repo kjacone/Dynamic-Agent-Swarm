@@ -32,7 +32,7 @@ function pick(obj: Record<string, unknown>, keys: string[]): string {
 
 const IMAGE_KEYS = ["image", "image_url", "imageUrl", "thumbnail", "thumbnail_url", "thumbnailUrl", "photo", "avatar", "img"];
 
-function imageOf(obj: Record<string, unknown>): string {
+export function imageOf(obj: Record<string, unknown>): string {
   for (const k of IMAGE_KEYS) {
     const v = obj[k];
     if (typeof v === "string" && /^(https?:\/\/|data:image\/)/.test(v)) return v;
@@ -40,7 +40,7 @@ function imageOf(obj: Record<string, unknown>): string {
   return "";
 }
 
-function priceOf(obj: Record<string, unknown>): string {
+export function priceOf(obj: Record<string, unknown>): string {
   const raw = obj.price ?? obj.amount ?? obj.cost;
   if (typeof raw === "number") {
     const cur = textOf(obj.currency);

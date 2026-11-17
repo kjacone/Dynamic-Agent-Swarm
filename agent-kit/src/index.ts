@@ -31,6 +31,8 @@ export { HumanMessage } from "./components/messages/HumanMessage";
 export { AssistantMessage } from "./components/messages/AssistantMessage";
 export type { UiComponents } from "./components/messages/AssistantMessage";
 export { ToolCallCard, ToolOutput } from "./components/messages/ToolCalls";
+export { GenUi, uiSpecs } from "./components/messages/GenUi";
+export type { UiSpec } from "./components/messages/GenUi";
 export { InterruptView } from "./components/interrupts/InterruptView";
 export type { InterruptRenderProps } from "./components/interrupts/InterruptView";
 export { HitlReview } from "./components/interrupts/HitlReview";

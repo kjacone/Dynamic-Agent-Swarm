@@ -39,8 +39,9 @@ class RestConnector(Connector):
         last: Exception | None = None
         for attempt in range(int(self.config.get("retries", 2)) + 1):
             try:
+                # Ambient HTTP(S)_PROXY env must not re-route egress; the allow-list decides.
                 async with httpx.AsyncClient(timeout=self.config.get("timeout_s", 20), verify=verify, cert=cert,
-                                             follow_redirects=False) as c:
+                                             follow_redirects=False, trust_env=False) as c:
                     r = await c.request(op.get("method", "GET"), url, headers=headers, auth=auth,
                                         params=params.get("query") or op.get("query"),
                                         json=params.get("body", op.get("body")))
@@ -49,7 +50,7 @@ class RestConnector(Connector):
                 if r.status_code >= 400:
                     return {"ok": False, "status": r.status_code, "error": r.text[:500]}
                 return r.json() if "json" in r.headers.get("content-type", "") else {"ok": True, "text": r.text[:20000]}
-            except (httpx.HTTPError, ConnectorError) as e:
+            except (httpx.HTTPError, httpx.InvalidURL, ConnectorError) as e:
                 last = e
                 await asyncio.sleep(0.5 * 2 ** attempt)
         raise ConnectorError(f"{self.name}.{operation} failed: {last}")

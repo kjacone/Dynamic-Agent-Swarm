@@ -82,19 +82,37 @@ const TOUR_STEPS = [
 ];
 
 const WORKFLOW_RUN = {
-  key: "customer_onboarding",
-  name: "Customer onboarding",
-  version: 3,
-  runId: "ONB-2411-018",
+  key: "sim_swap_request",
+  name: "SIM swap request",
+  version: 2,
+  runId: "SIM-7741",
   steps: [
-    { label: "Intake & consent", actor: "Supervisor", kind: "agent", state: "done", timing: "1.2s" },
-    { label: "Document completeness", actor: "Document Analyst", kind: "agent", state: "done", timing: "4.8s" },
-    { label: "Watchlist screening", actor: "Risk Analyst + connector", kind: "connector", state: "done", timing: "2.1s" },
-    { label: "Risk scoring", actor: "Risk Analyst", kind: "agent", state: "done", timing: "1.6s" },
-    { label: "Enhanced due diligence", actor: "Human approval", kind: "approval", state: "waiting", timing: "waiting 3h" },
-    { label: "Decision & case note", actor: "Case Writer", kind: "agent", state: "queued", timing: "—" },
+    { label: "Intake & consent", actor: "Care Supervisor", kind: "agent", state: "done", timing: "1.1s" },
+    { label: "Line & data check", actor: "line.check", kind: "tool", state: "done", timing: "0.4s" },
+    { label: "4 GB bundle add", actor: "bundle.add", kind: "tool", state: "done", timing: "0.9s" },
+    { label: "Identity & registration check", actor: "KYC Analyst", kind: "agent", state: "done", timing: "2.6s" },
+    { label: "SIM swap approval", actor: "Human approval", kind: "approval", state: "waiting", timing: "waiting 3h" },
+    { label: "Swap executed & customer note", actor: "sim.swap + Care Agent", kind: "connector", state: "queued", timing: "—" },
   ],
 } as const;
+
+const MODE_COMPARE = [
+  {
+    dimension: "Who picks the next step",
+    chat: "The model, from the last message. Two phrasings of the same ask can take two different tool paths.",
+    flow: "The published graph. Version 2 runs the same steps in the same order on every request.",
+  },
+  {
+    dimension: "What you can guarantee",
+    chat: "An answer. Tool choice, sequence and stopping point are decided per turn.",
+    flow: "Named steps, an approval gate, an SLA and one audit entry per step — designed before the first run.",
+  },
+  {
+    dimension: "Where it fits",
+    chat: "Mixed asks, follow-ups, “while you’re at it”, and anything the script did not anticipate.",
+    flow: "Money moves, KYC, SIM swaps and onboarding — journeys a regulator will ask you to reproduce.",
+  },
+] as const;
 
 const WORKFLOW_MOVES = [
   {
@@ -585,60 +603,93 @@ export function Landing() {
           <div className="grid gap-12 lg:grid-cols-[1.02fr_0.98fr] lg:items-start">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--site-accent)]">
-                Workflows · governed processes
+                Workflows · same request, two modes
               </p>
               <h2 className="font-display mt-3 text-[32px] leading-[1.1] tracking-[-0.015em] sm:text-[40px]">
                 Agents answer. Workflows finish.
               </h2>
               <p className="mt-4 max-w-lg text-[14.5px] leading-relaxed text-muted-foreground">
-                A chat turn is open-ended by design. A workflow is the opposite: a versioned graph of agent steps, connector
-                calls and human approvals. The agent still does the reading, writing and judgment at each step — the graph
-                decides what runs next, what waits, and what gets recorded.
+                Same customer request, handled two ways. In a chat the model chooses the next step from what was just
+                said. In a workflow a versioned graph fixes the steps — agent, tool, approval — so a regulated journey
+                runs identically every time. Switch the example to compare.
               </p>
 
-              <div className="mt-6 grid gap-3 sm:grid-cols-2" role="tablist" aria-label="Compare an agent chat and a workflow">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={workflowMode === "chat"}
-                  aria-controls="workflow-example-panel"
-                  onClick={() => setWorkflowMode("chat")}
-                  className={`rounded-xl border px-4 py-3.5 text-left transition-colors ${
-                    workflowMode === "chat"
-                      ? "border-[var(--site-accent)]/45 bg-[var(--site-accent)]/6"
-                      : "border-border/80 bg-[var(--site-surface)] hover:border-[var(--site-accent)]/30"
-                  }`}
-                >
-                  <p className="flex items-center gap-1.5 text-[12px] font-semibold">
-                    <MessageSquareText className="h-3.5 w-3.5 text-muted-foreground" /> Agent chat
-                    <span className="ml-auto font-mono text-[9px] font-normal text-muted-foreground">see example</span>
-                  </p>
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                    One question, one answer. The model picks tools per turn, so it handles the unexpected — but the path is
-                    decided at runtime, turn by turn.
-                  </p>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={workflowMode === "workflow"}
-                  aria-controls="workflow-example-panel"
-                  onClick={() => setWorkflowMode("workflow")}
-                  className={`rounded-xl border px-4 py-3.5 text-left transition-colors ${
-                    workflowMode === "workflow"
-                      ? "border-[var(--site-accent)]/35 bg-[var(--site-accent)]/6"
-                      : "border-border/80 bg-[var(--site-surface)] hover:border-[var(--site-accent)]/30"
-                  }`}
-                >
-                  <p className="flex items-center gap-1.5 text-[12px] font-semibold">
-                    <GitBranch className="h-3.5 w-3.5 text-[var(--site-accent)]" /> Workflow
-                    <span className="ml-auto font-mono text-[9px] font-normal text-muted-foreground">see example</span>
-                  </p>
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                    A fixed, versioned sequence with typed hand-offs. Approvals sit at named steps, and the run resumes
-                    exactly where it paused — days later, if needed.
-                  </p>
-                </button>
+              <div className="mt-7" role="tablist" aria-label="Compare an agent chat and a workflow">
+                <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                  Same request · two modes · pick one to see it
+                </p>
+                <div className="mt-2.5 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    role="tab"
+                    id="tab-chat"
+                    aria-selected={workflowMode === "chat"}
+                    aria-controls="workflow-example-panel"
+                    onClick={() => setWorkflowMode("chat")}
+                    className={`rounded-xl border p-4 text-left transition-colors ${
+                      workflowMode === "chat"
+                        ? "border-sky-500/40 bg-sky-500/[0.06]"
+                        : "border-border/80 bg-[var(--site-surface)] hover:border-sky-500/30"
+                    }`}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+                          workflowMode === "chat"
+                            ? "bg-sky-500/15 text-sky-700"
+                            : "border border-border/70 bg-card text-muted-foreground"
+                        }`}
+                      >
+                        <MessageSquareText className="h-4 w-4" />
+                      </span>
+                      <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-sky-700">
+                        {workflowMode === "chat" ? "showing below ↓" : "see example"}
+                      </span>
+                    </span>
+                    <span className="mt-3 block text-[14px] font-semibold">Agent chat</span>
+                    <span className="mt-0.5 block font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+                      open-ended · path at runtime
+                    </span>
+                    <span className="mt-2 block text-[11.5px] leading-relaxed text-muted-foreground">
+                      One thread. The model reads the last turn and chooses the next tool itself.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    id="tab-flow"
+                    aria-selected={workflowMode === "workflow"}
+                    aria-controls="workflow-example-panel"
+                    onClick={() => setWorkflowMode("workflow")}
+                    className={`rounded-xl border p-4 text-left transition-colors ${
+                      workflowMode === "workflow"
+                        ? "border-[var(--site-accent)]/45 bg-[var(--site-accent)]/[0.06]"
+                        : "border-border/80 bg-[var(--site-surface)] hover:border-[var(--site-accent)]/30"
+                    }`}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+                          workflowMode === "workflow"
+                            ? "bg-[var(--site-accent)]/15 text-[var(--site-accent)]"
+                            : "border border-border/70 bg-card text-muted-foreground"
+                        }`}
+                      >
+                        <GitBranch className="h-4 w-4" />
+                      </span>
+                      <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--site-accent)]">
+                        {workflowMode === "workflow" ? "showing below ↓" : "see example"}
+                      </span>
+                    </span>
+                    <span className="mt-3 block text-[14px] font-semibold">Workflow</span>
+                    <span className="mt-0.5 block font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+                      designed · path fixed by the graph
+                    </span>
+                    <span className="mt-2 block text-[11.5px] leading-relaxed text-muted-foreground">
+                      Steps, gates and SLAs are fixed in a version before anyone runs it.
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <ol className="mt-7 space-y-4">
@@ -656,7 +707,22 @@ export function Landing() {
               </ol>
             </div>
 
-            <div className="space-y-3" role="tabpanel" id="workflow-example-panel">
+            <div
+              className="space-y-3"
+              role="tabpanel"
+              id="workflow-example-panel"
+              aria-labelledby={workflowMode === "chat" ? "tab-chat" : "tab-flow"}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+                  {workflowMode === "chat"
+                    ? "Example · the same request, answered turn by turn"
+                    : "Example · the same request, run as versioned steps"}
+                </p>
+                <Pill tone={workflowMode === "chat" ? "blue" : "green"}>
+                  {workflowMode === "chat" ? "decided at runtime" : "fixed by the design"}
+                </Pill>
+              </div>
               {workflowMode === "workflow" ? (
                 <>
               <div className="overflow-hidden rounded-2xl border border-border/80 bg-card">
@@ -706,8 +772,8 @@ export function Landing() {
                         </p>
                         {step.state === "waiting" ? (
                           <p className="mt-1.5 rounded-md border border-[var(--site-gold)]/35 bg-[var(--site-gold)]/8 px-2 py-1.5 text-[10px] leading-relaxed text-[#7a5b1c]">
-                            Paused on approval APR-2041. The run resumes at this step once an operations reviewer decides — no
-                            restart and no re-run.
+                            Run SIM-7741 is paused here. It resumes at this step once a care team lead decides — no restart
+                            and no re-run.
                           </p>
                         ) : null}
                       </div>
@@ -719,7 +785,7 @@ export function Landing() {
                   <span>·</span>
                   <span>1 approval gate</span>
                   <span>·</span>
-                  <span>risk 82</span>
+                  <span>same request as the chat</span>
                   <span className="ml-auto">audit #4822</span>
                 </div>
               </div>
@@ -779,6 +845,13 @@ export function Landing() {
                         The model chose these tools as the turn unfolded. Nothing here was guaranteed in advance — which is
                         why money and SIM moves still route to a human.
                       </p>
+                      <button
+                        type="button"
+                        onClick={() => setWorkflowMode("workflow")}
+                        className="inline-flex items-center gap-1 pl-1 font-mono text-[9.5px] text-[var(--site-accent)] hover:underline"
+                      >
+                        See SIM-7741 as a workflow <ArrowRight className="h-3 w-3" />
+                      </button>
                     </div>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/70 bg-[var(--site-bg)]/60 px-4 py-2.5 font-mono text-[9.5px] text-muted-foreground">
                       <span>4 tool calls</span>
@@ -814,6 +887,43 @@ export function Landing() {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+
+          <div className="mt-10 overflow-hidden rounded-2xl border border-border/80 bg-card">
+            <div className="border-b border-border/70 bg-[var(--site-bg)]/50 px-4 py-2.5 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground sm:hidden">
+              What actually differs
+            </div>
+            <div className="hidden gap-3 border-b border-border/70 bg-[var(--site-bg)]/50 px-4 py-2.5 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground sm:grid sm:grid-cols-[1.05fr_1fr_1fr]">
+              <span>What actually differs</span>
+              <span className="flex items-center gap-1.5">
+                <MessageSquareText className="h-3 w-3" /> Agent chat
+              </span>
+              <span className="flex items-center gap-1.5 text-[var(--site-accent)]">
+                <GitBranch className="h-3 w-3" /> Workflow
+              </span>
+            </div>
+            {MODE_COMPARE.map((row) => (
+              <div
+                key={row.dimension}
+                className="grid gap-2 border-b border-border/60 px-4 py-3.5 last:border-0 sm:grid-cols-[1.05fr_1fr_1fr] sm:gap-3"
+              >
+                <p className="text-[11.5px] font-semibold">{row.dimension}</p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="mr-1 font-mono text-[8.5px] uppercase tracking-[0.12em] text-sky-700 sm:hidden">Chat</span>
+                  {row.chat}
+                </p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="mr-1 font-mono text-[8.5px] uppercase tracking-[0.12em] text-[var(--site-accent)] sm:hidden">
+                    Workflow
+                  </span>
+                  {row.flow}
+                </p>
+              </div>
+            ))}
+            <div className="border-t border-border/70 bg-[var(--site-surface)]/50 px-4 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
+              <span className="font-semibold text-foreground">Rule of thumb:</span> if the outcome is a conversation, use
+              chat. If it is a decision someone will audit, use a workflow — and let a chat start it.
             </div>
           </div>
 

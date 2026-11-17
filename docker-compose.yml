@@ -110,6 +110,11 @@ services:
       - "8000:8000"
     environment:
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      # Demo sign-in on the login page mints tenant JWTs with this secret.
+      NMB_JWT_SECRET: ${NMB_JWT_SECRET:-}
+      NMB_SESSION_SECRET: ${NMB_SESSION_SECRET:-}
+      DEMO_ACCOUNTS: ${DEMO_ACCOUNTS:-}
+      DEMO_TENANT: ${DEMO_TENANT:-default}
       NMB_ENCRYPTION_KEY: ${NMB_ENCRYPTION_KEY:-}
       NMB_ENCRYPTION_KEYS_OLD: ${NMB_ENCRYPTION_KEYS_OLD:-}
       NMB_ENCRYPTION_REQUIRED: ${NMB_ENCRYPTION_REQUIRED:-false}
@@ -143,7 +148,8 @@ services:
 
   dashboard:
     build:
-      context: ./dashboard
+      context: .
+      dockerfile: dashboard/Dockerfile
       args:
         VITE_API_BASE: ${DASHBOARD_API_URL:-http://localhost:8000}
     ports:

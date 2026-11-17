@@ -15,7 +15,8 @@ TOOLS = {
     "marketplace_policies",
     "marketplace_order_status",
 }
-FRONTEND_TOOLS = {"set_filter"}
+BUILTIN_TOOLS = {"fx_convert"}
+FRONTEND_TOOLS = {"set_filter", "show_products", "navigate", "show_order", "add_to_cart"}
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +42,8 @@ def test_pack_declares_graphql_tools():
         assert declared[name]["type"] == "python"
         dotted = declared[name]["config"]["dotted_path"]
         assert dotted.startswith("nmb_marketplace_agent.custom_tools.marketplace_graphql.")
-    assert declared["set_filter"]["type"] == "frontend"
+    for name in FRONTEND_TOOLS:
+        assert declared[name]["type"] == "frontend"
     assert declared["set_filter"]["config"]["parameters"]["type"] == "object"
 
 
@@ -55,13 +57,14 @@ async def test_install_materializes_tools_and_subagents(db):
     assert set(subs) == {"catalog", "orders", "policies"}
 
     tools = {t.name: t for t in (await db.execute(select(ToolConfig))).scalars()}
-    assert set(tools) == TOOLS | FRONTEND_TOOLS
+    assert set(tools) == TOOLS | BUILTIN_TOOLS | FRONTEND_TOOLS
     assert all(tools[n].type == "python" and tools[n].config.get("dotted_path") for n in TOOLS)
-    assert tools["set_filter"].type == "frontend"
-    assert sup.tool_ids == [tools["set_filter"].id]
+    assert tools["fx_convert"].type == "builtin"
+    assert all(tools[n].type == "frontend" for n in FRONTEND_TOOLS)
+    assert sup.tool_ids == [tools[n].id for n in ["set_filter", "show_products", "navigate", "show_order", "add_to_cart"]]
 
     assert set(subs["catalog"].tool_ids) == {
-        tools["marketplace_search_products"].id, tools["marketplace_product_details"].id,
+        tools["marketplace_search_products"].id, tools["marketplace_product_details"].id, tools["fx_convert"].id,
     }
     assert subs["orders"].tool_ids == [tools["marketplace_order_status"].id]
 

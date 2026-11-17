@@ -1,13 +1,13 @@
 """Model training. Datasets are built here; jobs run in the LLaMA-Factory trainer container."""
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from nmb_marketplace_agent.api.deps import get_db
 from nmb_marketplace_agent.config.models import Feedback
-from nmb_marketplace_agent.training import store
+from nmb_marketplace_agent.training import colab, store
 from nmb_marketplace_agent.training import playground
 
 router = APIRouter()
@@ -109,3 +109,31 @@ async def playground_train(body: PlaygroundIn):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+class ColabIn(BaseModel):
+    mode: str = colab.DEFAULTS["mode"]
+    dataset: str
+    base_model: str = colab.DEFAULTS["base_model"]
+    epochs: float = colab.DEFAULTS["epochs"]
+    learning_rate: float = colab.DEFAULTS["learning_rate"]
+    batch_size: int = colab.DEFAULTS["batch_size"]
+    grad_accum: int = colab.DEFAULTS["grad_accum"]
+    max_seq_length: int = colab.DEFAULTS["max_seq_length"]
+    prompt: str = ""
+
+
+@router.get("/colab")
+async def colab_info():
+    return {"modes": list(colab.MODES), "defaults": colab.DEFAULTS}
+
+
+@router.post("/colab")
+async def colab_notebook(body: ColabIn):
+    """Build a .ipynb the client runs on Colab's free GPU tier. Nothing trains here."""
+    notebook, filename = _guard(colab.build, body.model_dump())
+    return Response(
+        notebook,
+        media_type="application/x-ipynb+json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

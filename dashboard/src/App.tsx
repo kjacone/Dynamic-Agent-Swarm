@@ -5,7 +5,7 @@ import type { TabId } from "@/components/layout/nav";
 import { Login } from "@/pages/Login";
 import { Overview } from "@/pages/Overview";
 import { Agents } from "@/pages/Agents";
-import { LiveDemo } from "@/pages/LiveDemo";
+import { LiveDemo, type DemoRequest } from "@/pages/LiveDemo";
 import { Subagents } from "@/pages/Subagents";
 import { Prompts } from "@/pages/Prompts";
 import { Tools } from "@/pages/Tools";
@@ -19,6 +19,7 @@ import { Settings } from "@/pages/Settings";
 import { Approvals } from "@/pages/Approvals";
 import { Handoffs } from "@/pages/Handoffs";
 import { WhatsApp } from "@/pages/WhatsApp";
+import { Voice } from "@/pages/Voice";
 import { Workflows } from "@/pages/Workflows";
 import { Solutions } from "@/pages/Solutions";
 import { Audit } from "@/pages/Audit";
@@ -33,6 +34,7 @@ const TENANT_KEY = "nmb_tenant";
 export default function App() {
   const [authed, setAuthed] = useState<boolean>(() => !!getToken());
   const [tab, setTab] = useState<TabId>("overview");
+  const [demoRequest, setDemoRequest] = useState<DemoRequest | null>(null);
   const [tenant, setTenant] = useState<string>(() => sessionStorage.getItem(TENANT_KEY) || "default");
 
   const [me, setMe] = useState<Me | null>(null);
@@ -76,8 +78,27 @@ export default function App() {
         <Topbar tenant={tenant} onTenant={setTenant} onLogout={() => { clearToken(); setAuthed(false); }} lockedTenant={!!me && me.auth !== "admin_token"} user={me ? `${me.sub} · ${me.roles.join(", ") || "no roles"}` : undefined} />
         <main className="flex-1 overflow-auto p-6">
           {tab === "overview" && <Overview tenant={tenant} onManageLicence={() => setTab("licence")} />}
-          {tab === "agents" && <Agents tenant={tenant} />}
-          {tab === "demo" && <LiveDemo key={tenant} tenant={tenant} onOpenSolutions={() => setTab("solutions")} />}
+          {tab === "agents" && (
+            <Agents
+              tenant={tenant}
+              onTest={(agent) => {
+                setDemoRequest({ agentId: agent.id, channel: "chat", nonce: Date.now() });
+                setTab("demo");
+              }}
+            />
+          )}
+          {tab === "demo" && (
+            <LiveDemo
+              key={`${tenant}:${demoRequest?.nonce ?? 0}`}
+              tenant={tenant}
+              request={demoRequest}
+              onOpenSolutions={() => setTab("solutions")}
+              onOpenApprovals={() => setTab("approvals")}
+              onOpenWorkflows={() => setTab("workflows")}
+              onOpenWhatsApp={() => setTab("whatsapp")}
+              onOpenLocale={() => setTab("locale")}
+            />
+          )}
           {tab === "subagents" && <Subagents tenant={tenant} />}
           {tab === "connectors" && <Connectors key={tenant} me={me} />}
           {tab === "prompts" && <Prompts />}
@@ -92,6 +113,15 @@ export default function App() {
           {tab === "approvals" && <Approvals key={tenant} me={me} onChanged={refreshPending} />}
           {tab === "handoffs" && <Handoffs key={tenant} me={me} />}
           {tab === "whatsapp" && <WhatsApp key={tenant} me={me} tenant={tenant} />}
+          {tab === "voice" && (
+            <Voice
+              key={tenant}
+              me={me}
+              tenant={tenant}
+              onOpenGuardrails={() => setTab("guardrails")}
+              onOpenSolutions={() => setTab("solutions")}
+            />
+          )}
           {tab === "workflows" && <Workflows key={tenant} me={me} tenant={tenant} />}
           {tab === "solutions" && <Solutions key={tenant} me={me} />}
           {tab === "audit" && <Audit key={tenant} me={me} />}

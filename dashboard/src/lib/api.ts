@@ -214,12 +214,26 @@ export interface HandoffItem {
   id: string; agent_id: string; thread_id: string; status: "requested" | "active" | "resolved";
   reason: string; requested_by: string; user_id: string | null; customer_id: string | null;
   assigned_to: string | null; created_at: string; updated_at: string; resolved_at: string | null;
-  message_count?: number;
+  message_count?: number; forward_count?: number;
 }
 export interface HandoffMessage {
   id: string; handoff_id: string; role: "customer" | "staff"; author: string; text: string; created_at: string;
 }
-export interface HandoffDetail extends HandoffItem { messages: HandoffMessage[] }
+export interface HandoffForward {
+  ts: string; actor: string; outcome: "success" | "error" | "denied";
+  channel: "connector" | "email" | "copy"; connector: string; operation: string;
+  recipient: string; subject: string; messages: number | null;
+  compressed: boolean; summary_chars: number | null;
+}
+export interface HandoffDetail extends HandoffItem { messages: HandoffMessage[]; forwards?: HandoffForward[] }
+export interface HandoffSummary {
+  summary: string; method: string; message_count: number;
+  chars_before: number; chars_after: number; compression: number;
+}
+export interface HandoffForwardResult {
+  ok: boolean; channel: "connector" | "email" | "copy"; connector: string; operation: string;
+  subject: string; recipient: string; result: unknown;
+}
 export interface RetentionSettings {
   threads_days: number | null; citations_days: number | null; feedback_days: number | null;
   handoff_days: number | null; langfuse_days: number | null;
@@ -517,6 +531,7 @@ export const api = {
 
   listConnectors: () => request<ConnectorSummary[]>("/enterprise/connectors"),
   getConnector: (name: string) => request<ConnectorDetail>(`/enterprise/connectors/${encodeURIComponent(name)}`),
+  connectorEgress: () => request<{ egress_allowed_hosts: string[] }>("/enterprise/connectors/egress"),
   saveConnector: (name: string, body: { type: string; config: Record<string, unknown>; enabled?: boolean }) =>
     request(`/enterprise/connectors/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify(body) }),
   setConnectorEnabled: (name: string, enabled: boolean) =>
@@ -832,6 +847,17 @@ export const api = {
     request<HandoffItem>(`/enterprise/handoffs/${id}/resolve`, {
       method: "POST", body: JSON.stringify({ note }),
     }),
+  summariseHandoff: (id: string, max_chars = 1200) =>
+    request<HandoffSummary>(`/enterprise/handoffs/${id}/summary`, {
+      method: "POST", body: JSON.stringify({ max_chars }),
+    }),
+  forwardHandoff: (id: string, body: {
+    channel?: "connector" | "email" | "copy"; connector?: string; operation?: string;
+    subject?: string; note?: string; recipient?: string; summary?: string; compress?: boolean;
+  }) =>
+    request<HandoffForwardResult>(`/enterprise/handoffs/${id}/forward`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
   getRetention: () => request<RetentionPolicy>("/enterprise/privacy/retention"),
   putRetention: (settings: Partial<RetentionSettings>) =>
     request<RetentionPolicy>("/enterprise/privacy/retention", {
@@ -856,6 +882,12 @@ export const api = {
     return request<Record<string, unknown>>(`/enterprise/privacy/subject?${q.toString()}`);
   },
   listWorkflows: () => request<WfSummary[]>("/enterprise/workflows"),
+  saveWorkflow: (spec: {
+    key: string; name?: string; description?: string; inputs?: Record<string, WfInput>;
+    steps: WfStep[]; start?: string | null;
+  }) => request<{ key: string; version: number }>("/enterprise/workflows", {
+    method: "POST", body: JSON.stringify(spec),
+  }),
   getWorkflow: (key: string, version?: number) =>
     request<WfSpec>(`/enterprise/workflows/${encodeURIComponent(key)}${version ? `?version=${version}` : ""}`),
   runWorkflow: (key: string, inputs: Record<string, unknown>, wait = false) =>

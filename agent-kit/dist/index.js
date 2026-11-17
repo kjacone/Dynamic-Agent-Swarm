@@ -329,8 +329,8 @@ var GatewayTransport = class {
         };
       }
     } else {
-      const text = lastUserText(payload.input);
-      if (!text) throw new Error("The gateway transport needs a user message.");
+      const text2 = lastUserText(payload.input);
+      if (!text2) throw new Error("The gateway transport needs a user message.");
       const context = payload.context ?? cfgurable?.context ?? void 0;
       const readables = cfgurable?.readables;
       res = await gatewayFetch(this.cfg, "/v1/chat", {
@@ -338,7 +338,7 @@ var GatewayTransport = class {
         headers: { Accept: "text/event-stream" },
         signal: payload.signal,
         body: JSON.stringify({
-          message: text,
+          message: text2,
           thread_id: this.serverThread,
           ...this.cfg.userId ? { user_id: this.cfg.userId } : {},
           ...context !== void 0 ? { context } : {},
@@ -953,8 +953,8 @@ function useAgent() {
     [runConfig]
   );
   const send = useCallback4(async (input) => {
-    const { text = "", blocks = [], context } = typeof input === "string" ? { text: input } : input;
-    const trimmed = text.trim();
+    const { text: text2 = "", blocks = [], context } = typeof input === "string" ? { text: input } : input;
+    const trimmed = text2.trim();
     if (!trimmed && !blocks.length) return;
     const { stream: s } = latest.current;
     setSources([]);
@@ -990,10 +990,10 @@ function useAgent() {
     (parentCheckpoint) => latest.current.stream.submit(void 0, opts({ checkpoint: parentCheckpoint })),
     [opts]
   );
-  const editMessage = useCallback4(async (message, text) => {
+  const editMessage = useCallback4(async (message, text2) => {
     const { stream: s } = latest.current;
     const meta = s.getMessagesMetadata(message);
-    const newMessage = { type: "human", content: text };
+    const newMessage = { type: "human", content: text2 };
     await s.submit(
       { messages: [newMessage] },
       opts({
@@ -1226,9 +1226,9 @@ function useThreads({ limit = 100 } = {}) {
       metadata: threadMetadata(connection.assistantId)
     }).then((rows) => rows.map((t) => {
       const msgs = t.values?.messages ?? [];
-      const first = msgs.find((m) => m.type === "human");
-      let title = first ? messageText(first.content).trim().slice(0, 80) : "";
-      if (!title && first && Array.isArray(first.content) && first.content.length) title = "Attachment";
+      const first2 = msgs.find((m) => m.type === "human");
+      let title = first2 ? messageText(first2.content).trim().slice(0, 80) : "";
+      if (!title && first2 && Array.isArray(first2.content) && first2.content.length) title = "Attachment";
       return { id: t.thread_id, title: title || "Untitled chat", updatedAt: t.updated_at };
     }));
     load.then((rows) => {
@@ -1365,7 +1365,7 @@ function useFileUpload({ enabled = true, onError } = {}) {
 }
 
 // src/components/Chat.tsx
-import { useEffect as useEffect8, useState as useState16 } from "react";
+import { useEffect as useEffect8, useState as useState17 } from "react";
 
 // src/use-stick-to-bottom.ts
 import { useCallback as useCallback7, useEffect as useEffect6, useRef as useRef7, useState as useState7 } from "react";
@@ -1506,7 +1506,7 @@ function ContentBlocksPreview({ blocks, onRemove }) {
 // src/components/Composer.tsx
 import { jsx as jsx6, jsxs as jsxs6 } from "react/jsx-runtime";
 function Composer({ placeholder, busy, disabled, upload, toolToggle, onSend, onStop, onError }) {
-  const [text, setText] = useState8("");
+  const [text2, setText] = useState8("");
   const ref = useRef8(null);
   const files = useFileUpload({ enabled: upload && !disabled, onError });
   useEffect7(() => {
@@ -1514,11 +1514,11 @@ function Composer({ placeholder, busy, disabled, upload, toolToggle, onSend, onS
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [text]);
-  const canSend = !!text.trim() || files.blocks.length > 0;
+  }, [text2]);
+  const canSend = !!text2.trim() || files.blocks.length > 0;
   const send = () => {
     if (!canSend || busy || disabled) return;
-    onSend({ text, blocks: files.blocks });
+    onSend({ text: text2, blocks: files.blocks });
     setText("");
     files.reset();
   };
@@ -1529,7 +1529,7 @@ function Composer({ placeholder, busy, disabled, upload, toolToggle, onSend, onS
       {
         ref,
         rows: 1,
-        value: text,
+        value: text2,
         placeholder,
         disabled,
         "aria-label": "Message",
@@ -1716,11 +1716,11 @@ function KeyValueTable({ data, maxRows }) {
     ] })
   ] });
 }
-function ExpandableText({ text, maxLines = 4, maxChars = 500 }) {
+function ExpandableText({ text: text2, maxLines = 4, maxChars = 500 }) {
   const [open, setOpen] = useState9(false);
-  const lines = text.split("\n");
-  const long = lines.length > maxLines || text.length > maxChars;
-  const shown = !long || open ? text : text.length > maxChars ? `${text.slice(0, maxChars)}\u2026` : `${lines.slice(0, maxLines).join("\n")}
+  const lines = text2.split("\n");
+  const long = lines.length > maxLines || text2.length > maxChars;
+  const shown = !long || open ? text2 : text2.length > maxChars ? `${text2.slice(0, maxChars)}\u2026` : `${lines.slice(0, maxLines).join("\n")}
 \u2026`;
   return /* @__PURE__ */ jsxs9(Fragment3, { children: [
     /* @__PURE__ */ jsx10("pre", { className: "lgk-pre", children: shown }),
@@ -1736,12 +1736,12 @@ function ExpandableText({ text, maxLines = 4, maxChars = 500 }) {
 import { Fragment as Fragment4, jsx as jsx11, jsxs as jsxs10 } from "react/jsx-runtime";
 function GenericInterrupt({ value }) {
   const agent = useAgentContext();
-  const [text, setText] = useState10("");
+  const [text2, setText] = useState10("");
   const breakpoint = value === void 0;
   const answer = () => {
-    let v = text;
+    let v = text2;
     try {
-      v = JSON.parse(text);
+      v = JSON.parse(text2);
     } catch {
     }
     void agent.resume(v);
@@ -1753,14 +1753,14 @@ function GenericInterrupt({ value }) {
       /* @__PURE__ */ jsx11(
         "input",
         {
-          value: text,
+          value: text2,
           onChange: (e) => setText(e.target.value),
           "aria-label": "Your answer",
           placeholder: "Your answer (text or JSON)",
-          onKeyDown: (e) => e.key === "Enter" && text && answer()
+          onKeyDown: (e) => e.key === "Enter" && text2 && answer()
         }
       ),
-      /* @__PURE__ */ jsx11("button", { type: "button", className: "lgk-primary", onClick: answer, disabled: !text, children: "Continue" })
+      /* @__PURE__ */ jsx11("button", { type: "button", className: "lgk-primary", onClick: answer, disabled: !text2, children: "Continue" })
     ] })
   ] });
 }
@@ -1939,15 +1939,15 @@ function BranchSwitcher({ branch, branchOptions, onSelect, disabled }) {
     /* @__PURE__ */ jsx15(IconButton, { label: "Next version", disabled: disabled || i >= branchOptions.length - 1, onClick: () => onSelect(branchOptions[i + 1]), children: /* @__PURE__ */ jsx15(ChevronRightIcon, {}) })
   ] });
 }
-function CopyButton({ text, disabled }) {
+function CopyButton({ text: text2, disabled }) {
   const [copied, setCopied] = useState13(false);
   return /* @__PURE__ */ jsx15(
     IconButton,
     {
       label: copied ? "Copied" : "Copy",
-      disabled: disabled || !text,
+      disabled: disabled || !text2,
       onClick: () => {
-        void navigator.clipboard.writeText(text).then(() => {
+        void navigator.clipboard.writeText(text2).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 2e3);
         });
@@ -1956,6 +1956,9 @@ function CopyButton({ text, disabled }) {
     }
   );
 }
+
+// src/components/messages/GenUi.tsx
+import { useContext as useContext4, useState as useState15 } from "react";
 
 // src/components/messages/ResultCards.tsx
 import { useState as useState14 } from "react";
@@ -2060,8 +2063,586 @@ function ResultCards({ value, title }) {
   ] });
 }
 
+// src/components/messages/GenUi.tsx
+import { jsx as jsx17, jsxs as jsxs15 } from "react/jsx-runtime";
+var TYPES = {
+  cards: "cards",
+  card: "cards",
+  list: "cards",
+  gallery: "cards",
+  grid: "cards",
+  products: "cards",
+  results: "cards",
+  table: "table",
+  datatable: "table",
+  rows: "table",
+  stats: "stats",
+  kpi: "stats",
+  kpis: "stats",
+  metrics: "stats",
+  metric: "stats",
+  summary: "stats",
+  chart: "chart",
+  bar: "chart",
+  bars: "chart",
+  line: "chart",
+  graph: "chart",
+  trend: "chart",
+  timeline: "timeline",
+  steps: "timeline",
+  events: "timeline",
+  activity: "timeline",
+  status: "status",
+  badges: "status",
+  checks: "status",
+  health: "status",
+  form: "form",
+  fields: "form",
+  input: "form",
+  detail: "detail",
+  keyvalue: "detail",
+  "key-value": "detail",
+  kv: "detail",
+  properties: "detail",
+  record: "detail",
+  alert: "alert",
+  notice: "alert",
+  callout: "alert",
+  banner: "alert",
+  actions: "actions",
+  links: "actions",
+  chips: "actions",
+  suggestions: "actions",
+  quick_replies: "actions",
+  text: "text",
+  markdown: "text",
+  note: "text"
+};
+var WRAPPERS = ["ui", "blocks", "components", "sections", "view"];
+function isObj(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+function tryJson(text2) {
+  const raw = text2.trim().replace(/^```(?:json|JSON)?\s*/, "").replace(/```$/, "").trim();
+  if (!raw || !/^[[{"]/.test(raw)) return text2;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return text2;
+  }
+}
+function asSpec(v) {
+  if (typeof v === "string") return asSpec(tryJson(v));
+  if (!isObj(v)) return null;
+  const raw = String(v.type ?? v.kind ?? v.component ?? v.render ?? "").toLowerCase().replace(/\s+/g, "_");
+  const type = TYPES[raw];
+  return type ? { ...v, type } : null;
+}
+function uiSpecs(value, depth = 0) {
+  if (value == null || depth > 4) return null;
+  if (typeof value === "string") {
+    const parsed = tryJson(value);
+    return parsed === value ? null : uiSpecs(parsed, depth + 1);
+  }
+  const own = asSpec(value);
+  if (own) return [own];
+  if (Array.isArray(value)) {
+    if (!value.length) return null;
+    const specs = value.map((v) => asSpec(v)).filter((s) => !!s);
+    return specs.length === value.length ? specs : null;
+  }
+  if (!isObj(value)) return null;
+  for (const key of WRAPPERS) {
+    const inner = value[key];
+    if (inner == null) continue;
+    const specs = Array.isArray(inner) ? inner.map((v) => asSpec(v)).filter((s) => !!s) : (() => {
+      const s = asSpec(inner);
+      return s ? [s] : null;
+    })();
+    if (specs && (Array.isArray(inner) ? specs.length === inner.length && inner.length > 0 : true)) return specs;
+  }
+  for (const key of ["data", "result", "output", "payload"]) {
+    if (isObj(value[key]) || Array.isArray(value[key])) {
+      const nested = uiSpecs(value[key], depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+var META = ["type", "kind", "component", "render", "ui", "title", "subtitle", "heading", "label", "body"];
+function str(v) {
+  if (v == null) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number") return Number.isFinite(v) ? v.toLocaleString() : String(v);
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  return "";
+}
+function text(v) {
+  return typeof v === "string" ? v.trim() : str(v);
+}
+function first(o, keys) {
+  for (const k of keys) {
+    const t = text(o[k]);
+    if (t) return t;
+  }
+  return "";
+}
+function arr(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") {
+    const p = tryJson(v);
+    return Array.isArray(p) ? p : [];
+  }
+  if (isObj(v)) {
+    for (const k of ["items", "data", "rows", "cards", "results", "entries", "list", "values", "options"]) {
+      if (Array.isArray(v[k])) return v[k];
+    }
+  }
+  return [];
+}
+function rec(v) {
+  if (isObj(v)) return v;
+  if (typeof v === "string") {
+    const p = tryJson(v);
+    if (isObj(p)) return p;
+  }
+  return {};
+}
+function collect(spec, keys) {
+  for (const k of keys) {
+    const items = arr(spec[k]);
+    if (items.length) return items;
+  }
+  return [];
+}
+function cell(v) {
+  if (v == null) return "\u2014";
+  if (typeof v === "number") return v.toLocaleString();
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) return v.map(cell).join(", ");
+  if (isObj(v)) return first(v, ["label", "name", "title", "value", "text"]) || JSON.stringify(v);
+  return String(v);
+}
+var TONES = {
+  ok: "ok",
+  success: "ok",
+  done: "ok",
+  pass: "ok",
+  passed: "ok",
+  approved: "ok",
+  positive: "ok",
+  good: "ok",
+  warn: "warn",
+  warning: "warn",
+  pending: "warn",
+  review: "warn",
+  attention: "warn",
+  medium: "warn",
+  error: "bad",
+  danger: "bad",
+  fail: "bad",
+  failed: "bad",
+  blocked: "bad",
+  rejected: "bad",
+  high: "bad",
+  critical: "bad",
+  info: "info",
+  neutral: "info",
+  low: "info"
+};
+function tone(v) {
+  return TONES[String(v ?? "").toLowerCase()] ?? "";
+}
+function Head({ title, sub }) {
+  const t = text(title);
+  const s = text(sub);
+  return t || s ? /* @__PURE__ */ jsxs15("div", { className: "lgk-ui-head", children: [
+    /* @__PURE__ */ jsx17("span", { children: t || "Result" }),
+    s ? /* @__PURE__ */ jsx17("span", { className: "lgk-muted", children: s }) : null
+  ] }) : null;
+}
+function Cards({ spec }) {
+  const [open, setOpen] = useState15(null);
+  const items = collect(spec, ["items", "cards", "results", "products", "data", "rows"]);
+  const shown = items.slice(0, 30);
+  const detail = open != null ? shown[open] : null;
+  const detailObj = isObj(detail) ? detail : null;
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle }),
+    /* @__PURE__ */ jsx17("div", { className: "lgk-results-cards", "aria-label": text(spec.title) || "Cards", children: shown.map((item, i) => {
+      const o = rec(item);
+      const name = first(o, ["title", "name", "label", "subject", "id"]) || `Item ${i + 1}`;
+      const sub = [
+        first(o, ["subtitle"]),
+        first(o, ["brand"]),
+        first(o, ["category", "type"]),
+        first(o, ["description", "status"])
+      ].filter((v, k, all) => v && all.indexOf(v) === k).join(" \xB7 ");
+      const img = imageOf(o);
+      const price = priceOf(o);
+      const badge = first(o, ["badge", "tag"]);
+      const clickable = Object.keys(o).length > 0;
+      return /* @__PURE__ */ jsxs15(
+        "button",
+        {
+          type: "button",
+          className: "lgk-r-card",
+          disabled: !clickable,
+          "data-open": open === i || void 0,
+          onClick: () => clickable && setOpen(open === i ? null : i),
+          title: name,
+          children: [
+            img ? /* @__PURE__ */ jsx17("img", { className: "lgk-r-img", src: img, alt: "", loading: "lazy" }) : null,
+            badge ? /* @__PURE__ */ jsx17("span", { className: "lgk-r-badge", children: badge }) : null,
+            /* @__PURE__ */ jsx17("span", { className: "lgk-r-b", children: name }),
+            sub ? /* @__PURE__ */ jsx17("span", { className: "lgk-r-s", children: sub }) : null,
+            price ? /* @__PURE__ */ jsx17("span", { className: "lgk-r-p", children: price }) : null
+          ]
+        },
+        i
+      );
+    }) }),
+    detailObj ? /* @__PURE__ */ jsxs15("div", { className: "lgk-results-detail", children: [
+      /* @__PURE__ */ jsxs15("div", { className: "lgk-results-detail-head", children: [
+        /* @__PURE__ */ jsx17("strong", { children: first(detailObj, ["title", "name", "label"]) || "Details" }),
+        /* @__PURE__ */ jsx17("button", { type: "button", className: "lgk-more", onClick: () => setOpen(null), children: "Close" })
+      ] }),
+      /* @__PURE__ */ jsx17(KeyValueTable, { data: detailObj })
+    ] }) : null,
+    items.length > shown.length ? /* @__PURE__ */ jsxs15("p", { className: "lgk-muted", children: [
+      "Showing ",
+      shown.length,
+      " of ",
+      items.length,
+      "."
+    ] }) : null
+  ] });
+}
+function columnsOf(spec, rows) {
+  const declared = arr(spec.columns ?? spec.headers).map((c) => {
+    if (typeof c === "string") return { key: c, label: c };
+    const o = rec(c);
+    return { key: text(o.key ?? o.id ?? o.name ?? o.label), label: text(o.label ?? o.title ?? o.name ?? o.key), align: text(o.align) };
+  }).filter((c) => c.key);
+  if (declared.length) return declared;
+  const sample = rows.find(isObj);
+  if (sample) {
+    return Object.keys(sample).slice(0, 8).map((k) => ({ key: k, label: k.replace(/_/g, " ") }));
+  }
+  const width = Math.max(...rows.map((r) => Array.isArray(r) ? r.length : 1), 0);
+  return Array.from({ length: width }, (_, i) => ({ key: String(i), label: `#${i + 1}` }));
+}
+function Table({ spec }) {
+  const rows = collect(spec, ["rows", "items", "data", "records"]);
+  const cols = columnsOf(spec, rows);
+  if (!rows.length || !cols.length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle ?? `${rows.length} row${rows.length === 1 ? "" : "s"}` }),
+    /* @__PURE__ */ jsx17("div", { className: "lgk-table-wrap", children: /* @__PURE__ */ jsxs15("table", { className: "lgk-table", children: [
+      /* @__PURE__ */ jsx17("thead", { children: /* @__PURE__ */ jsx17("tr", { children: cols.map((c) => /* @__PURE__ */ jsx17("th", { style: c.align ? { textAlign: c.align } : void 0, children: c.label }, c.key)) }) }),
+      /* @__PURE__ */ jsx17("tbody", { children: rows.slice(0, 40).map((row, i) => /* @__PURE__ */ jsx17("tr", { children: cols.map((c) => /* @__PURE__ */ jsx17("td", { children: cell(Array.isArray(row) ? row[Number(c.key)] : rec(row)[c.key]) }, c.key)) }, i)) })
+    ] }) }),
+    rows.length > 40 ? /* @__PURE__ */ jsxs15("p", { className: "lgk-muted", children: [
+      "Showing 40 of ",
+      rows.length,
+      " rows."
+    ] }) : null
+  ] });
+}
+function Stats({ spec }) {
+  let items = collect(spec, ["items", "metrics", "kpis", "stats", "data"]);
+  if (!items.length && isObj(spec.metrics)) items = Object.entries(spec.metrics).map(([label, value]) => ({ label, value }));
+  if (!items.length) items = collect(spec, ["values"]);
+  const tiles = items.map((m) => {
+    const o = rec(m);
+    return {
+      label: first(o, ["label", "name", "title", "metric"]) || (typeof m === "string" ? m : ""),
+      value: str(o.value ?? o.amount ?? o.count ?? (typeof m === "string" ? "" : m)),
+      delta: text(o.delta ?? o.change),
+      tone: tone(o.tone ?? o.status)
+    };
+  }).filter((t) => t.label || t.value);
+  if (!tiles.length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle }),
+    /* @__PURE__ */ jsx17("div", { className: "lgk-stats", children: tiles.map((t, i) => /* @__PURE__ */ jsxs15("div", { className: "lgk-stat", "data-tone": t.tone || void 0, children: [
+      /* @__PURE__ */ jsx17("span", { children: t.label }),
+      /* @__PURE__ */ jsx17("b", { children: t.value }),
+      t.delta ? /* @__PURE__ */ jsx17("em", { children: t.delta }) : null
+    ] }, i)) })
+  ] });
+}
+function num(v) {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(v.replace(/[^0-9.-]/g, ""));
+    return Number.isFinite(n) && v.trim() !== "" ? n : null;
+  }
+  return null;
+}
+function chartData(spec) {
+  const labels = arr(spec.labels ?? spec.categories ?? spec.x).map(cell);
+  const seriesRaw = arr(spec.series ?? spec.datasets);
+  const series = seriesRaw.map((s) => {
+    const o = rec(s);
+    return { name: first(o, ["name", "label"]) || "Series", data: arr(o.data ?? o.values).map(num).map((n) => n ?? 0) };
+  }).filter((s) => s.data.length);
+  if (!series.length) {
+    const points = arr(spec.data ?? spec.values ?? spec.points);
+    const objs = points.filter(isObj);
+    if (objs.length) {
+      return {
+        labels: labels.length ? labels : objs.map((o) => first(o, ["label", "name", "x", "day", "date"]) || "\u2014"),
+        series: [{ name: text(spec.title) || "Value", data: objs.map((o) => num(o.value ?? o.y ?? o.amount ?? o.count) ?? 0) }]
+      };
+    }
+    const values = points.map(num).filter((n) => n != null);
+    if (values.length) return { labels, series: [{ name: text(spec.title) || "Value", data: values }] };
+    return null;
+  }
+  return { labels, series };
+}
+function Chart({ spec }) {
+  const data = chartData(spec);
+  if (!data || !data.series.length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  const kind = String(spec.kind ?? spec.chart ?? "").toLowerCase().includes("line") ? "line" : "bar";
+  const labels = data.labels;
+  const max = Math.max(1, ...data.series.flatMap((s) => s.data));
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle }),
+    kind === "line" ? /* @__PURE__ */ jsxs15("div", { className: "lgk-line", children: [
+      /* @__PURE__ */ jsx17("svg", { viewBox: "0 0 100 36", preserveAspectRatio: "none", role: "img", "aria-label": text(spec.title) || "Chart", children: data.series.map((s, si) => /* @__PURE__ */ jsx17(
+        "polyline",
+        {
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: 1.6,
+          strokeLinejoin: "round",
+          strokeLinecap: "round",
+          opacity: 1 - si * 0.28,
+          points: s.data.map((v, i) => `${i / Math.max(1, s.data.length - 1) * 100},${36 - v / max * 32}`).join(" ")
+        },
+        si
+      )) }),
+      labels.length > 0 && /* @__PURE__ */ jsx17("div", { className: "lgk-axis", children: labels.map((l, i) => /* @__PURE__ */ jsx17("span", { children: l }, i)) })
+    ] }) : /* @__PURE__ */ jsx17("div", { className: "lgk-bars", style: { gridTemplateColumns: `repeat(${Math.min(Math.max(labels.length || data.series[0].data.length, 1), 14)}, minmax(0, 1fr))` }, children: (labels.length ? labels : data.series[0].data.map((_, i) => `#${i + 1}`)).slice(0, 14).map((label, i) => /* @__PURE__ */ jsxs15("div", { className: "lgk-bar-col", title: `${label}: ${data.series.map((s) => str(s.data[i])).join(" / ")}`, children: [
+      /* @__PURE__ */ jsx17("div", { className: "lgk-bar-track", children: data.series.slice(0, 3).map((s, si) => /* @__PURE__ */ jsx17("div", { className: "lgk-bar", style: { height: `${Math.max(2, (s.data[i] ?? 0) / max * 100)}%`, opacity: 1 - si * 0.3 } }, si)) }),
+      /* @__PURE__ */ jsx17("span", { children: label })
+    ] }, i)) }),
+    data.series.length > 1 && /* @__PURE__ */ jsx17("div", { className: "lgk-legend", children: data.series.map((s, i) => /* @__PURE__ */ jsx17("span", { style: { opacity: 1 - i * 0.3 }, children: s.name }, i)) })
+  ] });
+}
+function Timeline({ spec }) {
+  const items = collect(spec, ["items", "events", "steps", "data"]);
+  if (!items.length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle }),
+    /* @__PURE__ */ jsx17("ol", { className: "lgk-tl", children: items.slice(0, 30).map((it, i) => {
+      const o = rec(it);
+      const title = first(o, ["title", "label", "name", "step"]) || cell(it);
+      const detail = first(o, ["detail", "description", "body", "comment"]);
+      const when = first(o, ["time", "timestamp", "ts", "date", "at"]);
+      return /* @__PURE__ */ jsxs15("li", { "data-tone": tone(o.tone ?? o.status) || void 0, children: [
+        /* @__PURE__ */ jsx17("span", { className: "lgk-tl-dot", "aria-hidden": true }),
+        /* @__PURE__ */ jsxs15("div", { children: [
+          /* @__PURE__ */ jsxs15("div", { className: "lgk-tl-title", children: [
+            title,
+            when ? /* @__PURE__ */ jsxs15("span", { className: "lgk-muted", children: [
+              " \xB7 ",
+              when
+            ] }) : null
+          ] }),
+          detail ? /* @__PURE__ */ jsx17("div", { className: "lgk-tl-detail", children: detail }) : null
+        ] })
+      ] }, i);
+    }) })
+  ] });
+}
+function Status({ spec }) {
+  let items = collect(spec, ["items", "checks", "rows", "data"]);
+  if (!items.length && isObj(spec.checks)) items = Object.entries(spec.checks).map(([label, value]) => ({ label, value }));
+  if (!items.length && isObj(spec.data)) items = Object.entries(spec.data).map(([label, value]) => ({ label, value }));
+  if (!items.length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle }),
+    /* @__PURE__ */ jsx17("div", { className: "lgk-status", children: items.slice(0, 30).map((it, i) => {
+      const o = rec(it);
+      const label = first(o, ["label", "name", "title", "check"]) || (isObj(it) ? "" : cell(it));
+      const value = first(o, ["value", "state", "status", "detail"]) || (isObj(it) ? "" : "");
+      const t = tone(o.tone ?? o.status ?? o.state ?? o.value);
+      return /* @__PURE__ */ jsxs15("div", { className: "lgk-status-row", children: [
+        /* @__PURE__ */ jsx17("span", { className: "lgk-dot", "data-tone": t || void 0 }),
+        /* @__PURE__ */ jsx17("span", { children: label }),
+        /* @__PURE__ */ jsx17("b", { "data-tone": t || void 0, children: value || label })
+      ] }, i);
+    }) })
+  ] });
+}
+function fieldsOf(spec) {
+  const raw = arr(spec.fields ?? spec.items ?? spec.inputs);
+  return raw.map((f, i) => {
+    const o = rec(f);
+    const options = arr(o.options ?? o.choices ?? o.enum).map((op) => isObj(op) ? { label: text(op.label ?? op.name ?? op.value), value: text(op.value ?? op.label ?? op.name) } : { label: cell(op), value: cell(op) });
+    return {
+      name: text(o.name ?? o.key ?? o.id) || `field_${i + 1}`,
+      label: text(o.label ?? o.title ?? o.name) || `Field ${i + 1}`,
+      type: (text(o.type) || (options.length ? "select" : "text")).toLowerCase(),
+      value: str(o.value ?? o.default ?? ""),
+      options,
+      required: o.required === true || o.required === "true",
+      help: text(o.help ?? o.description ?? o.hint),
+      placeholder: text(o.placeholder)
+    };
+  });
+}
+function Form({ spec }) {
+  const fields = fieldsOf(spec);
+  const agent = useContext4(AgentContext);
+  const [vals, setVals] = useState15(() => Object.fromEntries(fields.map((f) => [f.name, f.value])));
+  if (!fields.length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  const title = text(spec.title) || "Form";
+  const submitLabel = text(rec(spec.submit).label ?? spec.submit_label ?? spec.submitLabel) || (text(spec.submit) && !isObj(spec.submit) ? text(spec.submit) : "Submit");
+  const missing = fields.some((f) => f.required && !(vals[f.name] ?? "").trim());
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title, sub: spec.subtitle }),
+    /* @__PURE__ */ jsxs15("form", { className: "lgk-form", onSubmit: (e) => {
+      e.preventDefault();
+      if (missing || !agent || agent.isLoading) return;
+      const body = Object.fromEntries(fields.map((f) => [f.label, vals[f.name] ?? ""]));
+      void agent.send(`${title}: ${JSON.stringify(body)}`);
+    }, children: [
+      fields.map((f) => /* @__PURE__ */ jsxs15("label", { children: [
+        /* @__PURE__ */ jsxs15("span", { children: [
+          f.label,
+          f.required ? /* @__PURE__ */ jsx17("b", { className: "lgk-req", children: " *" }) : null
+        ] }),
+        f.type === "select" || f.options.length ? /* @__PURE__ */ jsxs15("select", { value: vals[f.name] ?? "", onChange: (e) => setVals({ ...vals, [f.name]: e.target.value }), children: [
+          /* @__PURE__ */ jsx17("option", { value: "", children: "Choose\u2026" }),
+          f.options.map((o) => /* @__PURE__ */ jsx17("option", { value: o.value, children: o.label }, o.value))
+        ] }) : f.type === "checkbox" || f.type === "boolean" ? /* @__PURE__ */ jsx17("input", { type: "checkbox", checked: vals[f.name] === "true", onChange: (e) => setVals({ ...vals, [f.name]: String(e.target.checked) }) }) : f.type === "textarea" ? /* @__PURE__ */ jsx17("textarea", { rows: 3, value: vals[f.name] ?? "", placeholder: f.placeholder, onChange: (e) => setVals({ ...vals, [f.name]: e.target.value }) }) : /* @__PURE__ */ jsx17(
+          "input",
+          {
+            type: f.type === "number" ? "number" : f.type === "date" ? "date" : "text",
+            value: vals[f.name] ?? "",
+            placeholder: f.placeholder,
+            onChange: (e) => setVals({ ...vals, [f.name]: e.target.value })
+          }
+        ),
+        f.help ? /* @__PURE__ */ jsx17("em", { children: f.help }) : null
+      ] }, f.name)),
+      /* @__PURE__ */ jsxs15("div", { className: "lgk-form-foot", children: [
+        /* @__PURE__ */ jsx17("button", { type: "submit", className: "lgk-primary", disabled: missing || !agent || agent.isLoading, children: submitLabel }),
+        missing ? /* @__PURE__ */ jsx17("span", { className: "lgk-muted", children: "Fill the required fields to continue." }) : null
+      ] })
+    ] })
+  ] });
+}
+function Detail({ spec }) {
+  let data = null;
+  const inner = spec.data ?? spec.fields ?? spec.items ?? spec.properties ?? spec.value;
+  if (isObj(inner)) data = inner;
+  else if (Array.isArray(inner) && inner.every(isObj)) data = inner;
+  else if (Array.isArray(inner)) data = Object.fromEntries(inner.map((it, i) => {
+    const o = rec(it);
+    return [first(o, ["label", "name", "key"]) || `#${i + 1}`, o.value ?? o.amount ?? o.text ?? it];
+  }));
+  const rest = Object.fromEntries(Object.entries(spec).filter(([k]) => !META.includes(k) && !["data", "fields", "items", "properties", "value"].includes(k) && k !== "subtitle"));
+  if (!data) data = rec(rest);
+  if (!data || isObj(data) && !Object.keys(data).length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle }),
+    /* @__PURE__ */ jsx17("div", { className: "lgk-detail", children: /* @__PURE__ */ jsx17(KeyValueTable, { data }) })
+  ] });
+}
+function Alert({ spec }) {
+  const t = tone(spec.tone ?? spec.status ?? spec.level ?? spec.severity) || "info";
+  const agent = useContext4(AgentContext);
+  const actions = arr(spec.actions ?? spec.links);
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-alert", "data-tone": t, children: [
+    /* @__PURE__ */ jsx17("strong", { children: text(spec.title) || (t === "bad" ? "Problem" : t === "warn" ? "Attention" : "Note") }),
+    /* @__PURE__ */ jsx17("p", { children: first(spec, ["message", "body", "text", "description", "content"]) }),
+    actions.length > 0 && /* @__PURE__ */ jsx17("div", { className: "lgk-actions", children: actions.map((a, i) => /* @__PURE__ */ jsx17(ActionChip, { item: a, send: (text2) => void agent?.send(text2), disabled: !agent || agent.isLoading }, i)) })
+  ] });
+}
+function ActionChip({ item, send, disabled }) {
+  const o = rec(item);
+  const label = first(o, ["label", "title", "name", "text"]) || cell(item);
+  const prompt = first(o, ["prompt", "message", "value", "text", "query"]);
+  const href = first(o, ["href", "url", "link"]);
+  return /* @__PURE__ */ jsxs15(
+    "button",
+    {
+      type: "button",
+      className: "lgk-chip",
+      disabled: disabled || !prompt && !href,
+      onClick: () => href ? window.open(href, "_blank", "noopener") : prompt && send(prompt),
+      children: [
+        label,
+        href ? " \u2197" : ""
+      ]
+    }
+  );
+}
+function Actions({ spec }) {
+  const agent = useContext4(AgentContext);
+  const items = collect(spec, ["items", "actions", "links", "options", "suggestions", "chips"]);
+  if (!items.length) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    /* @__PURE__ */ jsx17(Head, { title: spec.title, sub: spec.subtitle }),
+    /* @__PURE__ */ jsx17("div", { className: "lgk-actions", children: items.slice(0, 12).map((a, i) => /* @__PURE__ */ jsx17(ActionChip, { item: a, send: (text2) => void agent?.send(text2), disabled: !agent || agent.isLoading }, i)) })
+  ] });
+}
+function TextBlock({ spec }) {
+  const body = first(spec, ["body", "text", "content", "markdown", "message", "value"]);
+  const title = text(spec.title);
+  if (!body && !title) return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  return /* @__PURE__ */ jsxs15("div", { className: "lgk-ui", children: [
+    title ? /* @__PURE__ */ jsx17(Head, { title }) : null,
+    body ? /* @__PURE__ */ jsx17("p", { className: "lgk-ui-text", children: body }) : null
+  ] });
+}
+function Fallback({ value }) {
+  const items = listItems(value);
+  if (items?.length) return /* @__PURE__ */ jsx17(ResultCards, { value });
+  if (isObj(value)) return /* @__PURE__ */ jsx17(KeyValueTable, { data: value });
+  return /* @__PURE__ */ jsx17(ExpandableText, { text: typeof value === "string" ? value : JSON.stringify(value, null, 2) });
+}
+function Block({ spec }) {
+  switch (spec.type) {
+    case "cards":
+      return /* @__PURE__ */ jsx17(Cards, { spec });
+    case "table":
+      return /* @__PURE__ */ jsx17(Table, { spec });
+    case "stats":
+      return /* @__PURE__ */ jsx17(Stats, { spec });
+    case "chart":
+      return /* @__PURE__ */ jsx17(Chart, { spec });
+    case "timeline":
+      return /* @__PURE__ */ jsx17(Timeline, { spec });
+    case "status":
+      return /* @__PURE__ */ jsx17(Status, { spec });
+    case "form":
+      return /* @__PURE__ */ jsx17(Form, { spec });
+    case "detail":
+      return /* @__PURE__ */ jsx17(Detail, { spec });
+    case "alert":
+      return /* @__PURE__ */ jsx17(Alert, { spec });
+    case "actions":
+      return /* @__PURE__ */ jsx17(Actions, { spec });
+    case "text":
+      return /* @__PURE__ */ jsx17(TextBlock, { spec });
+    default:
+      return /* @__PURE__ */ jsx17(Fallback, { value: spec });
+  }
+}
+function GenUi({ specs }) {
+  if (!specs.length) return null;
+  return /* @__PURE__ */ jsx17("div", { className: "lgk-ui-stack", children: specs.map((s, i) => /* @__PURE__ */ jsx17(Block, { spec: s }, i)) });
+}
+
 // src/components/messages/ToolCalls.tsx
-import { Fragment as Fragment5, jsx as jsx17, jsxs as jsxs15 } from "react/jsx-runtime";
+import { Fragment as Fragment5, jsx as jsx18, jsxs as jsxs16 } from "react/jsx-runtime";
 var LABEL2 = { running: "Running", done: "Done", error: "Failed", pending: "Not run" };
 function parse(content) {
   try {
@@ -2072,55 +2653,57 @@ function parse(content) {
 }
 function ToolOutput({ message }) {
   const parsed = parse(messageText(message.content));
-  if (listItems(parsed)?.length) return /* @__PURE__ */ jsx17(ResultCards, { value: parsed });
+  const specs = uiSpecs(parsed);
+  if (specs?.length) return /* @__PURE__ */ jsx18(GenUi, { specs });
+  if (listItems(parsed)?.length) return /* @__PURE__ */ jsx18(ResultCards, { value: parsed });
   if (parsed && typeof parsed === "object") {
-    return /* @__PURE__ */ jsx17(KeyValueTable, { data: parsed, maxRows: Array.isArray(parsed) ? 5 : void 0 });
+    return /* @__PURE__ */ jsx18(KeyValueTable, { data: parsed, maxRows: Array.isArray(parsed) ? 5 : void 0 });
   }
-  return /* @__PURE__ */ jsx17(ExpandableText, { text: String(parsed) });
+  return /* @__PURE__ */ jsx18(ExpandableText, { text: String(parsed) });
 }
 function ToolCallCard({ call, result, status }) {
   const { tools } = useKit();
   const custom = tools[call.name]?.render;
   if (custom) {
-    return /* @__PURE__ */ jsx17("div", { className: "lgk-tool-custom", children: custom({ name: call.name, args: call.args, status, result: result ? parse(messageText(result.content)) : void 0 }) });
+    return /* @__PURE__ */ jsx18("div", { className: "lgk-tool-custom", children: custom({ name: call.name, args: call.args, status, result: result ? parse(messageText(result.content)) : void 0 }) });
   }
   const hasArgs = Object.keys(call.args ?? {}).length > 0;
   const resultItems = result ? listItems(parse(messageText(result.content))) : null;
-  return /* @__PURE__ */ jsxs15("details", { className: "lgk-tool", "data-status": status, open: status === "running" || status === "error" || !!resultItems?.length || void 0, children: [
-    /* @__PURE__ */ jsxs15("summary", { children: [
-      /* @__PURE__ */ jsx17("span", { className: "lgk-dot", "aria-hidden": true }),
-      /* @__PURE__ */ jsx17("code", { children: call.name }),
-      /* @__PURE__ */ jsx17("span", { className: "lgk-tool-status", children: LABEL2[status] })
+  return /* @__PURE__ */ jsxs16("details", { className: "lgk-tool", "data-status": status, open: status === "running" || status === "error" || !!resultItems?.length || void 0, children: [
+    /* @__PURE__ */ jsxs16("summary", { children: [
+      /* @__PURE__ */ jsx18("span", { className: "lgk-dot", "aria-hidden": true }),
+      /* @__PURE__ */ jsx18("code", { children: call.name }),
+      /* @__PURE__ */ jsx18("span", { className: "lgk-tool-status", children: LABEL2[status] })
     ] }),
-    /* @__PURE__ */ jsxs15("div", { className: "lgk-tool-body", children: [
-      /* @__PURE__ */ jsx17("h4", { children: "Input" }),
-      hasArgs ? /* @__PURE__ */ jsx17(KeyValueTable, { data: call.args }) : /* @__PURE__ */ jsx17("code", { className: "lgk-inline-code", children: "{}" }),
-      result && /* @__PURE__ */ jsxs15(Fragment5, { children: [
-        /* @__PURE__ */ jsx17("h4", { children: "Output" }),
-        /* @__PURE__ */ jsx17(ToolOutput, { message: result })
+    /* @__PURE__ */ jsxs16("div", { className: "lgk-tool-body", children: [
+      /* @__PURE__ */ jsx18("h4", { children: "Input" }),
+      hasArgs ? /* @__PURE__ */ jsx18(KeyValueTable, { data: call.args }) : /* @__PURE__ */ jsx18("code", { className: "lgk-inline-code", children: "{}" }),
+      result && /* @__PURE__ */ jsxs16(Fragment5, { children: [
+        /* @__PURE__ */ jsx18("h4", { children: "Output" }),
+        /* @__PURE__ */ jsx18(ToolOutput, { message: result })
       ] })
     ] })
   ] });
 }
 function OrphanToolResult({ message }) {
-  return /* @__PURE__ */ jsxs15("details", { className: "lgk-tool", "data-status": "done", children: [
-    /* @__PURE__ */ jsxs15("summary", { children: [
-      /* @__PURE__ */ jsx17("span", { className: "lgk-dot", "aria-hidden": true }),
-      /* @__PURE__ */ jsx17("code", { children: message.name ?? "tool result" }),
-      /* @__PURE__ */ jsx17("span", { className: "lgk-tool-status", children: "Result" })
+  return /* @__PURE__ */ jsxs16("details", { className: "lgk-tool", "data-status": "done", children: [
+    /* @__PURE__ */ jsxs16("summary", { children: [
+      /* @__PURE__ */ jsx18("span", { className: "lgk-dot", "aria-hidden": true }),
+      /* @__PURE__ */ jsx18("code", { children: message.name ?? "tool result" }),
+      /* @__PURE__ */ jsx18("span", { className: "lgk-tool-status", children: "Result" })
     ] }),
-    /* @__PURE__ */ jsx17("div", { className: "lgk-tool-body", children: /* @__PURE__ */ jsx17(ToolOutput, { message }) })
+    /* @__PURE__ */ jsx18("div", { className: "lgk-tool-body", children: /* @__PURE__ */ jsx18(ToolOutput, { message }) })
   ] });
 }
 
 // src/components/messages/AssistantMessage.tsx
-import { Fragment as Fragment6, jsx as jsx18, jsxs as jsxs16 } from "react/jsx-runtime";
+import { Fragment as Fragment6, jsx as jsx19, jsxs as jsxs17 } from "react/jsx-runtime";
 function GenerativeUi({ message, components }) {
   const agent = useAgentContext();
   const artifact = useArtifact();
   const items = agent.ui.filter((u) => u.metadata?.message_id === message.id);
   if (!items.length) return null;
-  return /* @__PURE__ */ jsx18(Fragment6, { children: items.map((u) => /* @__PURE__ */ jsx18(
+  return /* @__PURE__ */ jsx19(Fragment6, { children: items.map((u) => /* @__PURE__ */ jsx19(
     LoadExternalComponent,
     {
       stream: agent.stream,
@@ -2144,23 +2727,23 @@ function AssistantMessage({
   feedback
 }) {
   const agent = useAgentContext();
-  const text = messageText(message.content);
+  const text2 = messageText(message.content);
   const reasoning = messageReasoning(message.content);
   const calls = messageToolCalls(message);
   const hasUi = agent.ui.some((u) => u.metadata?.message_id === message.id);
-  if (!text && !reasoning && !calls.length && !hasUi) return null;
+  if (!text2 && !reasoning && !calls.length && !hasUi) return null;
   const { branch, branchOptions, parentCheckpoint } = branching ? agent.getBranch(message) : {};
   const busy = agent.isLoading;
-  return /* @__PURE__ */ jsxs16("div", { className: "lgk-msg lgk-ai", children: [
-    reasoning && /* @__PURE__ */ jsxs16("details", { className: "lgk-reasoning", children: [
-      /* @__PURE__ */ jsx18("summary", { children: "Reasoning" }),
-      /* @__PURE__ */ jsx18("p", { children: reasoning })
+  return /* @__PURE__ */ jsxs17("div", { className: "lgk-msg lgk-ai", children: [
+    reasoning && /* @__PURE__ */ jsxs17("details", { className: "lgk-reasoning", children: [
+      /* @__PURE__ */ jsx19("summary", { children: "Reasoning" }),
+      /* @__PURE__ */ jsx19("p", { children: reasoning })
     ] }),
-    text && /* @__PURE__ */ jsx18(Markdown, { ...markdown, children: text }),
-    sources && sources.length > 0 && /* @__PURE__ */ jsxs16("div", { className: "lgk-sources", "aria-label": "Sources", children: [
-      /* @__PURE__ */ jsx18("span", { className: "lgk-sources-label", children: "Sources" }),
-      sources.map((s, i) => /* @__PURE__ */ jsxs16("span", { className: "lgk-source", children: [
-        /* @__PURE__ */ jsx18("b", { children: s.id ?? i + 1 }),
+    text2 && /* @__PURE__ */ jsx19(Markdown, { ...markdown, children: text2 }),
+    sources && sources.length > 0 && /* @__PURE__ */ jsxs17("div", { className: "lgk-sources", "aria-label": "Sources", children: [
+      /* @__PURE__ */ jsx19("span", { className: "lgk-sources-label", children: "Sources" }),
+      sources.map((s, i) => /* @__PURE__ */ jsxs17("span", { className: "lgk-source", children: [
+        /* @__PURE__ */ jsx19("b", { children: s.id ?? i + 1 }),
         " ",
         s.title,
         s.page ? ` \xB7 p. ${s.page}` : ""
@@ -2169,14 +2752,14 @@ function AssistantMessage({
     !hideToolCalls && calls.map((c, i) => {
       const res = c.id ? results.get(c.id) : void 0;
       const status = res ? res.status === "error" ? "error" : "done" : loading || c.id && agent.pendingToolCallIds.includes(c.id) ? "running" : "pending";
-      return /* @__PURE__ */ jsx18(ToolCallCard, { call: c, result: res, status }, c.id ?? i);
+      return /* @__PURE__ */ jsx19(ToolCallCard, { call: c, result: res, status }, c.id ?? i);
     }),
-    /* @__PURE__ */ jsx18(GenerativeUi, { message, components: uiComponents }),
-    text && !loading && /* @__PURE__ */ jsxs16("div", { className: "lgk-actions", children: [
-      /* @__PURE__ */ jsx18(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
-      copy && /* @__PURE__ */ jsx18(CopyButton, { text, disabled: busy }),
-      branching && parentCheckpoint && /* @__PURE__ */ jsx18(IconButton, { label: "Regenerate", disabled: busy, onClick: () => void agent.regenerate(parentCheckpoint), children: /* @__PURE__ */ jsx18(RefreshIcon, {}) }),
-      feedback && /* @__PURE__ */ jsx18("span", { className: "lgk-feedback", "aria-label": "Rate this answer", children: feedback.sent ? /* @__PURE__ */ jsx18("span", { className: "lgk-feedback-thanks", children: "Thanks for the feedback" }) : ["up", "down"].map((rating) => /* @__PURE__ */ jsx18(
+    /* @__PURE__ */ jsx19(GenerativeUi, { message, components: uiComponents }),
+    text2 && !loading && /* @__PURE__ */ jsxs17("div", { className: "lgk-actions", children: [
+      /* @__PURE__ */ jsx19(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
+      copy && /* @__PURE__ */ jsx19(CopyButton, { text: text2, disabled: busy }),
+      branching && parentCheckpoint && /* @__PURE__ */ jsx19(IconButton, { label: "Regenerate", disabled: busy, onClick: () => void agent.regenerate(parentCheckpoint), children: /* @__PURE__ */ jsx19(RefreshIcon, {}) }),
+      feedback && /* @__PURE__ */ jsx19("span", { className: "lgk-feedback", "aria-label": "Rate this answer", children: feedback.sent ? /* @__PURE__ */ jsx19("span", { className: "lgk-feedback-thanks", children: "Thanks for the feedback" }) : ["up", "down"].map((rating) => /* @__PURE__ */ jsx19(
         "button",
         {
           type: "button",
@@ -2193,13 +2776,13 @@ function AssistantMessage({
 }
 
 // src/components/messages/HumanMessage.tsx
-import { useState as useState15 } from "react";
-import { Fragment as Fragment7, jsx as jsx19, jsxs as jsxs17 } from "react/jsx-runtime";
+import { useState as useState16 } from "react";
+import { Fragment as Fragment7, jsx as jsx20, jsxs as jsxs18 } from "react/jsx-runtime";
 function HumanMessage({ message, branching = true, copy = true }) {
   const agent = useAgentContext();
-  const [editing, setEditing] = useState15(false);
-  const [draft, setDraft] = useState15("");
-  const text = messageText(message.content);
+  const [editing, setEditing] = useState16(false);
+  const [draft, setDraft] = useState16("");
+  const text2 = messageText(message.content);
   const blocks = Array.isArray(message.content) ? message.content.filter(isMultimodalBlock) : [];
   const { branch, branchOptions } = branching ? agent.getBranch(message) : {};
   const busy = agent.isLoading;
@@ -2209,8 +2792,8 @@ function HumanMessage({ message, branching = true, copy = true }) {
     setEditing(false);
     void agent.editMessage(message, next);
   };
-  return /* @__PURE__ */ jsxs17("div", { className: "lgk-msg lgk-human", "data-editing": editing || void 0, children: [
-    editing ? /* @__PURE__ */ jsx19(
+  return /* @__PURE__ */ jsxs18("div", { className: "lgk-msg lgk-human", "data-editing": editing || void 0, children: [
+    editing ? /* @__PURE__ */ jsx20(
       "textarea",
       {
         autoFocus: true,
@@ -2225,31 +2808,31 @@ function HumanMessage({ message, branching = true, copy = true }) {
           if (e.key === "Escape") setEditing(false);
         }
       }
-    ) : /* @__PURE__ */ jsxs17(Fragment7, { children: [
-      blocks.length > 0 && /* @__PURE__ */ jsx19("div", { className: "lgk-attachments", "data-align": "end", children: blocks.map((b, i) => /* @__PURE__ */ jsx19(MultimodalPreview, { block: b }, i)) }),
-      text && /* @__PURE__ */ jsx19("p", { children: text })
+    ) : /* @__PURE__ */ jsxs18(Fragment7, { children: [
+      blocks.length > 0 && /* @__PURE__ */ jsx20("div", { className: "lgk-attachments", "data-align": "end", children: blocks.map((b, i) => /* @__PURE__ */ jsx20(MultimodalPreview, { block: b }, i)) }),
+      text2 && /* @__PURE__ */ jsx20("p", { children: text2 })
     ] }),
-    /* @__PURE__ */ jsxs17("div", { className: "lgk-actions", children: [
-      /* @__PURE__ */ jsx19(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
-      editing ? /* @__PURE__ */ jsxs17(Fragment7, { children: [
-        /* @__PURE__ */ jsx19(IconButton, { label: "Cancel edit", onClick: () => setEditing(false), children: /* @__PURE__ */ jsx19(XIcon, {}) }),
-        /* @__PURE__ */ jsx19(IconButton, { label: "Send edit (Ctrl+Enter)", disabled: busy || !draft.trim(), onClick: submit, children: /* @__PURE__ */ jsx19(SendIcon, {}) })
-      ] }) : /* @__PURE__ */ jsxs17(Fragment7, { children: [
-        copy && /* @__PURE__ */ jsx19(CopyButton, { text, disabled: busy }),
-        branching && text && /* @__PURE__ */ jsx19(IconButton, { label: "Edit", disabled: busy, onClick: () => {
-          setDraft(text);
+    /* @__PURE__ */ jsxs18("div", { className: "lgk-actions", children: [
+      /* @__PURE__ */ jsx20(BranchSwitcher, { branch, branchOptions, onSelect: agent.setBranch, disabled: busy }),
+      editing ? /* @__PURE__ */ jsxs18(Fragment7, { children: [
+        /* @__PURE__ */ jsx20(IconButton, { label: "Cancel edit", onClick: () => setEditing(false), children: /* @__PURE__ */ jsx20(XIcon, {}) }),
+        /* @__PURE__ */ jsx20(IconButton, { label: "Send edit (Ctrl+Enter)", disabled: busy || !draft.trim(), onClick: submit, children: /* @__PURE__ */ jsx20(SendIcon, {}) })
+      ] }) : /* @__PURE__ */ jsxs18(Fragment7, { children: [
+        copy && /* @__PURE__ */ jsx20(CopyButton, { text: text2, disabled: busy }),
+        branching && text2 && /* @__PURE__ */ jsx20(IconButton, { label: "Edit", disabled: busy, onClick: () => {
+          setDraft(text2);
           setEditing(true);
-        }, children: /* @__PURE__ */ jsx19(PencilIcon, {}) })
+        }, children: /* @__PURE__ */ jsx20(PencilIcon, {}) })
       ] })
     ] })
   ] });
 }
 
 // src/components/Chat.tsx
-import { jsx as jsx20, jsxs as jsxs18 } from "react/jsx-runtime";
+import { jsx as jsx21, jsxs as jsxs19 } from "react/jsx-runtime";
 function Chat(props) {
   const agent = useAgent();
-  return /* @__PURE__ */ jsx20(AgentContext.Provider, { value: agent, children: /* @__PURE__ */ jsx20(ChatView, { ...props }) });
+  return /* @__PURE__ */ jsx21(AgentContext.Provider, { value: agent, children: /* @__PURE__ */ jsx21(ChatView, { ...props }) });
 }
 function hostOf(url) {
   try {
@@ -2275,8 +2858,8 @@ function ChatView({
   const kit = useKit();
   const f = { upload: true, branching: true, copy: true, toolToggle: true, artifacts: true, connectionBadge: true, history: true, ...features };
   const branching = f.branching && kit.branching;
-  const [hideToolCalls, setHideToolCalls] = useState16(false);
-  const [historyOpen, setHistoryOpen] = useState16(false);
+  const [hideToolCalls, setHideToolCalls] = useState17(false);
+  const [historyOpen, setHistoryOpen] = useState17(false);
   const [artifactOpen, closeArtifact] = useArtifactOpen();
   const [artifactContext, setArtifactContext] = useArtifactContext();
   const { scrollRef, contentRef, isAtBottom, scrollToBottom } = useStickToBottom();
@@ -2302,10 +2885,10 @@ function ChatView({
   const showArtifact = f.artifacts && artifactOpen;
   const renderMessage = (m, i) => {
     const key = m.id ?? `${m.type}-${i}`;
-    if (m.type === "human") return /* @__PURE__ */ jsx20(HumanMessage, { message: m, branching, copy: f.copy }, key);
+    if (m.type === "human") return /* @__PURE__ */ jsx21(HumanMessage, { message: m, branching, copy: f.copy }, key);
     if (m.type === "ai") {
       const isLast = m === lastAi && !agent.isLoading;
-      return /* @__PURE__ */ jsx20(
+      return /* @__PURE__ */ jsx21(
         AssistantMessage,
         {
           message: m,
@@ -2323,56 +2906,56 @@ function ChatView({
       );
     }
     if (m.type === "tool" && !hideToolCalls && !knownCalls.has(m.tool_call_id)) {
-      return /* @__PURE__ */ jsx20(OrphanToolResult, { message: m }, key);
+      return /* @__PURE__ */ jsx21(OrphanToolResult, { message: m }, key);
     }
     return null;
   };
-  return /* @__PURE__ */ jsxs18("section", { className: `lgk lgk-chat ${className ?? ""}`, "aria-label": title ?? "Chat", "data-artifact": showArtifact || void 0, children: [
-    /* @__PURE__ */ jsxs18("header", { className: "lgk-chat-head", children: [
-      /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-head-start", children: [
+  return /* @__PURE__ */ jsxs19("section", { className: `lgk lgk-chat ${className ?? ""}`, "aria-label": title ?? "Chat", "data-artifact": showArtifact || void 0, children: [
+    /* @__PURE__ */ jsxs19("header", { className: "lgk-chat-head", children: [
+      /* @__PURE__ */ jsxs19("div", { className: "lgk-chat-head-start", children: [
         headerStart,
-        title && /* @__PURE__ */ jsx20("h2", { children: title }),
-        f.connectionBadge && kit.isConfigured && /* @__PURE__ */ jsx20("span", { className: "lgk-host", "data-status": kit.status, title: `${kit.status === "error" ? "Can't reach" : "Connected to"} ${kit.connection.apiUrl}`, children: hostOf(kit.connection.apiUrl) })
+        title && /* @__PURE__ */ jsx21("h2", { children: title }),
+        f.connectionBadge && kit.isConfigured && /* @__PURE__ */ jsx21("span", { className: "lgk-host", "data-status": kit.status, title: `${kit.status === "error" ? "Can't reach" : "Connected to"} ${kit.connection.apiUrl}`, children: hostOf(kit.connection.apiUrl) })
       ] }),
-      /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-head-actions", children: [
-        kit.gateway && !agent.handoff && /* @__PURE__ */ jsx20("button", { type: "button", className: "lgk-hb-btn", onClick: () => void agent.requestHuman(), children: "Talk to a human" }),
-        f.history && started && /* @__PURE__ */ jsx20(IconButton, { label: "Chat history", onClick: () => setHistoryOpen(true), children: /* @__PURE__ */ jsx20(HistoryIcon, {}) }),
-        started && /* @__PURE__ */ jsx20(IconButton, { label: "New chat", onClick: agent.newThread, children: /* @__PURE__ */ jsx20(NewChatIcon, {}) }),
+      /* @__PURE__ */ jsxs19("div", { className: "lgk-chat-head-actions", children: [
+        kit.gateway && !agent.handoff && /* @__PURE__ */ jsx21("button", { type: "button", className: "lgk-hb-btn", onClick: () => void agent.requestHuman(), children: "Talk to a human" }),
+        f.history && started && /* @__PURE__ */ jsx21(IconButton, { label: "Chat history", onClick: () => setHistoryOpen(true), children: /* @__PURE__ */ jsx21(HistoryIcon, {}) }),
+        started && /* @__PURE__ */ jsx21(IconButton, { label: "New chat", onClick: agent.newThread, children: /* @__PURE__ */ jsx21(NewChatIcon, {}) }),
         headerActions
       ] })
     ] }),
-    /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-body", children: [
-      /* @__PURE__ */ jsxs18("div", { className: "lgk-chat-main", children: [
-        /* @__PURE__ */ jsx20("div", { className: "lgk-scroll", ref: scrollRef, children: /* @__PURE__ */ jsxs18("div", { className: "lgk-thread", ref: contentRef, role: "log", "aria-live": "polite", children: [
-          empty && /* @__PURE__ */ jsxs18("div", { className: "lgk-empty", children: [
-            !kit.isConfigured ? /* @__PURE__ */ jsx20("p", { children: "Add a server URL and assistant to the provider to start chatting." }) : emptyState ?? /* @__PURE__ */ jsx20("p", { children: "Ask anything to start a conversation." }),
-            kit.isConfigured && suggestions && suggestions.length > 0 && /* @__PURE__ */ jsx20("div", { className: "lgk-suggest", children: suggestions.map((s) => /* @__PURE__ */ jsx20("button", { type: "button", onClick: () => void agent.send(s), children: s }, s)) })
+    /* @__PURE__ */ jsxs19("div", { className: "lgk-chat-body", children: [
+      /* @__PURE__ */ jsxs19("div", { className: "lgk-chat-main", children: [
+        /* @__PURE__ */ jsx21("div", { className: "lgk-scroll", ref: scrollRef, children: /* @__PURE__ */ jsxs19("div", { className: "lgk-thread", ref: contentRef, role: "log", "aria-live": "polite", children: [
+          empty && /* @__PURE__ */ jsxs19("div", { className: "lgk-empty", children: [
+            !kit.isConfigured ? /* @__PURE__ */ jsx21("p", { children: "Add a server URL and assistant to the provider to start chatting." }) : emptyState ?? /* @__PURE__ */ jsx21("p", { children: "Ask anything to start a conversation." }),
+            kit.isConfigured && suggestions && suggestions.length > 0 && /* @__PURE__ */ jsx21("div", { className: "lgk-suggest", children: suggestions.map((s) => /* @__PURE__ */ jsx21("button", { type: "button", onClick: () => void agent.send(s), children: s }, s)) })
           ] }),
           visible.map(renderMessage),
-          waiting && /* @__PURE__ */ jsxs18("div", { className: "lgk-typing", role: "status", "aria-label": "Agent is working", children: [
-            /* @__PURE__ */ jsx20("i", {}),
-            /* @__PURE__ */ jsx20("i", {}),
-            /* @__PURE__ */ jsx20("i", {})
+          waiting && /* @__PURE__ */ jsxs19("div", { className: "lgk-typing", role: "status", "aria-label": "Agent is working", children: [
+            /* @__PURE__ */ jsx21("i", {}),
+            /* @__PURE__ */ jsx21("i", {}),
+            /* @__PURE__ */ jsx21("i", {})
           ] }),
-          agent.handoff && /* @__PURE__ */ jsxs18("div", { className: "lgk-handoff", "data-status": agent.handoff.status, role: "status", children: [
-            /* @__PURE__ */ jsxs18("div", { className: "lgk-handoff-head", children: [
-              /* @__PURE__ */ jsx20("strong", { children: agent.handoff.status === "active" ? "A colleague has joined" : "Waiting for a colleague" }),
-              /* @__PURE__ */ jsx20("span", { children: agent.handoff.status === "active" ? "You're chatting with our team. Replies appear here." : "Our team has been notified. You can keep typing here." })
+          agent.handoff && /* @__PURE__ */ jsxs19("div", { className: "lgk-handoff", "data-status": agent.handoff.status, role: "status", children: [
+            /* @__PURE__ */ jsxs19("div", { className: "lgk-handoff-head", children: [
+              /* @__PURE__ */ jsx21("strong", { children: agent.handoff.status === "active" ? "A colleague has joined" : "Waiting for a colleague" }),
+              /* @__PURE__ */ jsx21("span", { children: agent.handoff.status === "active" ? "You're chatting with our team. Replies appear here." : "Our team has been notified. You can keep typing here." })
             ] }),
-            agent.handoffMessages.filter((m) => m.role === "staff").map((m) => /* @__PURE__ */ jsxs18("div", { className: "lgk-handoff-msg", children: [
-              /* @__PURE__ */ jsx20("b", { children: m.author || "Team" }),
+            agent.handoffMessages.filter((m) => m.role === "staff").map((m) => /* @__PURE__ */ jsxs19("div", { className: "lgk-handoff-msg", children: [
+              /* @__PURE__ */ jsx21("b", { children: m.author || "Team" }),
               " ",
               m.text
             ] }, m.id))
           ] }),
-          /* @__PURE__ */ jsx20(InterruptView, { interrupts: agent.interrupts, render: renderInterrupt }),
-          agent.error && /* @__PURE__ */ jsx20("div", { className: "lgk-error", role: "alert", children: agent.error })
+          /* @__PURE__ */ jsx21(InterruptView, { interrupts: agent.interrupts, render: renderInterrupt }),
+          agent.error && /* @__PURE__ */ jsx21("div", { className: "lgk-error", role: "alert", children: agent.error })
         ] }) }),
-        !isAtBottom && /* @__PURE__ */ jsxs18("button", { type: "button", className: "lgk-scroll-btn", onClick: () => scrollToBottom(), children: [
-          /* @__PURE__ */ jsx20(ArrowDownIcon, {}),
+        !isAtBottom && /* @__PURE__ */ jsxs19("button", { type: "button", className: "lgk-scroll-btn", onClick: () => scrollToBottom(), children: [
+          /* @__PURE__ */ jsx21(ArrowDownIcon, {}),
           " Scroll to bottom"
         ] }),
-        /* @__PURE__ */ jsx20(
+        /* @__PURE__ */ jsx21(
           Composer,
           {
             placeholder,
@@ -2380,46 +2963,46 @@ function ChatView({
             disabled: !kit.isConfigured || agent.interrupts.length > 0,
             upload: f.upload,
             toolToggle: f.toolToggle ? { checked: hideToolCalls, onChange: setHideToolCalls } : void 0,
-            onSend: ({ text, blocks }) => void agent.send({ text, blocks, context: artifactContext }),
+            onSend: ({ text: text2, blocks }) => void agent.send({ text: text2, blocks, context: artifactContext }),
             onStop: () => void agent.stop(),
             onError: (description) => kit.notify({ kind: "error", title: "Can't attach that", description })
           }
         ),
-        historyOpen && /* @__PURE__ */ jsx20(HistoryPanel, { onClose: () => setHistoryOpen(false) })
+        historyOpen && /* @__PURE__ */ jsx21(HistoryPanel, { onClose: () => setHistoryOpen(false) })
       ] }),
-      showArtifact && /* @__PURE__ */ jsxs18("aside", { className: "lgk-artifact", "aria-label": "Artifact", children: [
-        /* @__PURE__ */ jsxs18("div", { className: "lgk-artifact-head", children: [
-          /* @__PURE__ */ jsx20(ArtifactTitle, { className: "lgk-artifact-title" }),
-          /* @__PURE__ */ jsx20(IconButton, { label: "Close panel", onClick: closeArtifact, children: /* @__PURE__ */ jsx20(XIcon, {}) })
+      showArtifact && /* @__PURE__ */ jsxs19("aside", { className: "lgk-artifact", "aria-label": "Artifact", children: [
+        /* @__PURE__ */ jsxs19("div", { className: "lgk-artifact-head", children: [
+          /* @__PURE__ */ jsx21(ArtifactTitle, { className: "lgk-artifact-title" }),
+          /* @__PURE__ */ jsx21(IconButton, { label: "Close panel", onClick: closeArtifact, children: /* @__PURE__ */ jsx21(XIcon, {}) })
         ] }),
-        /* @__PURE__ */ jsx20(ArtifactContent, { className: "lgk-artifact-body" })
+        /* @__PURE__ */ jsx21(ArtifactContent, { className: "lgk-artifact-body" })
       ] })
     ] })
   ] });
 }
 
 // src/components/ChatPopup.tsx
-import { useState as useState17 } from "react";
-import { jsx as jsx21, jsxs as jsxs19 } from "react/jsx-runtime";
+import { useState as useState18 } from "react";
+import { jsx as jsx22, jsxs as jsxs20 } from "react/jsx-runtime";
 function ChatPopup({ defaultOpen = false, launcherLabel = "Ask the agent", title = "Assistant", features, ...chat }) {
-  const [open, setOpen] = useState17(defaultOpen);
-  return /* @__PURE__ */ jsxs19("div", { className: "lgk lgk-popup-root", children: [
-    /* @__PURE__ */ jsx21("div", { className: "lgk-popup", role: "dialog", "aria-label": title, hidden: !open, children: /* @__PURE__ */ jsx21(
+  const [open, setOpen] = useState18(defaultOpen);
+  return /* @__PURE__ */ jsxs20("div", { className: "lgk lgk-popup-root", children: [
+    /* @__PURE__ */ jsx22("div", { className: "lgk-popup", role: "dialog", "aria-label": title, hidden: !open, children: /* @__PURE__ */ jsx22(
       Chat,
       {
         ...chat,
         title,
         features: { connectionBadge: false, toolToggle: false, artifacts: false, ...features },
-        headerActions: /* @__PURE__ */ jsx21(IconButton, { label: "Close", onClick: () => setOpen(false), children: /* @__PURE__ */ jsx21(XIcon, {}) })
+        headerActions: /* @__PURE__ */ jsx22(IconButton, { label: "Close", onClick: () => setOpen(false), children: /* @__PURE__ */ jsx22(XIcon, {}) })
       }
     ) }),
-    !open && /* @__PURE__ */ jsx21("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
+    !open && /* @__PURE__ */ jsx22("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
   ] });
 }
 
 // src/components/ChatSidebar.tsx
-import { useState as useState18 } from "react";
-import { Fragment as Fragment8, jsx as jsx22, jsxs as jsxs20 } from "react/jsx-runtime";
+import { useState as useState19 } from "react";
+import { Fragment as Fragment8, jsx as jsx23, jsxs as jsxs21 } from "react/jsx-runtime";
 function ChatSidebar({
   children,
   defaultOpen = true,
@@ -2430,97 +3013,97 @@ function ChatSidebar({
   features,
   ...chat
 }) {
-  const [open, setOpen] = useState18(defaultOpen);
-  const [view, setView] = useState18("chat");
+  const [open, setOpen] = useState19(defaultOpen);
+  const [view, setView] = useState19("chat");
   const style = { "--lgk-dock-w": `${width}px` };
-  return /* @__PURE__ */ jsxs20("div", { className: "lgk lgk-dock", "data-mode": mode, "data-open": open, style, children: [
-    /* @__PURE__ */ jsx22("div", { className: "lgk-dock-main", children }),
-    /* @__PURE__ */ jsxs20("aside", { className: "lgk-dock-side", hidden: !open, "aria-label": title, children: [
-      /* @__PURE__ */ jsx22(
+  return /* @__PURE__ */ jsxs21("div", { className: "lgk lgk-dock", "data-mode": mode, "data-open": open, style, children: [
+    /* @__PURE__ */ jsx23("div", { className: "lgk-dock-main", children }),
+    /* @__PURE__ */ jsxs21("aside", { className: "lgk-dock-side", hidden: !open, "aria-label": title, children: [
+      /* @__PURE__ */ jsx23(
         Chat,
         {
           ...chat,
           title,
           features: { connectionBadge: false, artifacts: false, ...features },
-          headerActions: /* @__PURE__ */ jsxs20(Fragment8, { children: [
-            /* @__PURE__ */ jsx22(IconButton, { label: "Chat history", onClick: () => setView("history"), children: /* @__PURE__ */ jsx22(HistoryIcon, {}) }),
-            /* @__PURE__ */ jsx22(IconButton, { label: "Close", onClick: () => {
+          headerActions: /* @__PURE__ */ jsxs21(Fragment8, { children: [
+            /* @__PURE__ */ jsx23(IconButton, { label: "Chat history", onClick: () => setView("history"), children: /* @__PURE__ */ jsx23(HistoryIcon, {}) }),
+            /* @__PURE__ */ jsx23(IconButton, { label: "Close", onClick: () => {
               setOpen(false);
               setView("chat");
-            }, children: /* @__PURE__ */ jsx22(XIcon, {}) })
+            }, children: /* @__PURE__ */ jsx23(XIcon, {}) })
           ] })
         }
       ),
-      view === "history" && /* @__PURE__ */ jsx22(HistoryPanel, { onClose: () => setView("chat") })
+      view === "history" && /* @__PURE__ */ jsx23(HistoryPanel, { onClose: () => setView("chat") })
     ] }),
-    !open && /* @__PURE__ */ jsx22("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
+    !open && /* @__PURE__ */ jsx23("button", { type: "button", className: "lgk-fab", onClick: () => setOpen(true), children: launcherLabel })
   ] });
 }
 
 // src/components/Playground.tsx
-import { useEffect as useEffect9, useState as useState20 } from "react";
+import { useEffect as useEffect9, useState as useState21 } from "react";
 
 // src/components/ConnectionForm.tsx
-import { useState as useState19 } from "react";
-import { jsx as jsx23, jsxs as jsxs21 } from "react/jsx-runtime";
+import { useState as useState20 } from "react";
+import { jsx as jsx24, jsxs as jsxs22 } from "react/jsx-runtime";
 function ConnectionForm({ defaultApiUrl = "http://localhost:2024", defaultAssistantId = "agent", onConnected }) {
   const { connection, setConnection } = useKit();
-  const [apiUrl, setApiUrl] = useState19(connection.apiUrl || defaultApiUrl);
-  const [assistantId, setAssistantId] = useState19(connection.assistantId || defaultAssistantId);
-  const [token, setToken] = useState19(connection.token ?? "");
-  const [scheme, setScheme] = useState19(connection.authScheme ?? "bearer");
+  const [apiUrl, setApiUrl] = useState20(connection.apiUrl || defaultApiUrl);
+  const [assistantId, setAssistantId] = useState20(connection.assistantId || defaultAssistantId);
+  const [token, setToken] = useState20(connection.token ?? "");
+  const [scheme, setScheme] = useState20(connection.authScheme ?? "bearer");
   const submit = (e) => {
     e.preventDefault();
     setConnection({ apiUrl: apiUrl.trim(), assistantId: assistantId.trim(), token: token.trim() || void 0, authScheme: scheme });
     onConnected?.();
   };
-  return /* @__PURE__ */ jsx23("div", { className: "lgk lgk-setup", children: /* @__PURE__ */ jsxs21("form", { onSubmit: submit, children: [
-    /* @__PURE__ */ jsx23("h1", { children: "Connect to your agent" }),
-    /* @__PURE__ */ jsxs21("p", { className: "lgk-muted-block", children: [
+  return /* @__PURE__ */ jsx24("div", { className: "lgk lgk-setup", children: /* @__PURE__ */ jsxs22("form", { onSubmit: submit, children: [
+    /* @__PURE__ */ jsx24("h1", { children: "Connect to your agent" }),
+    /* @__PURE__ */ jsxs22("p", { className: "lgk-muted-block", children: [
       "Point this at a LangGraph server. Local (",
-      /* @__PURE__ */ jsx23("code", { children: "langgraph dev" }),
+      /* @__PURE__ */ jsx24("code", { children: "langgraph dev" }),
       ") or deployed both work."
     ] }),
-    /* @__PURE__ */ jsxs21("label", { children: [
-      /* @__PURE__ */ jsx23("span", { children: "Server URL" }),
-      /* @__PURE__ */ jsx23("input", { value: apiUrl, onChange: (e) => setApiUrl(e.target.value), required: true, spellCheck: false, placeholder: "http://localhost:2024" })
+    /* @__PURE__ */ jsxs22("label", { children: [
+      /* @__PURE__ */ jsx24("span", { children: "Server URL" }),
+      /* @__PURE__ */ jsx24("input", { value: apiUrl, onChange: (e) => setApiUrl(e.target.value), required: true, spellCheck: false, placeholder: "http://localhost:2024" })
     ] }),
-    /* @__PURE__ */ jsxs21("label", { children: [
-      /* @__PURE__ */ jsx23("span", { children: "Assistant or graph ID" }),
-      /* @__PURE__ */ jsx23("input", { value: assistantId, onChange: (e) => setAssistantId(e.target.value), required: true, spellCheck: false, placeholder: "agent" }),
-      /* @__PURE__ */ jsxs21("small", { children: [
+    /* @__PURE__ */ jsxs22("label", { children: [
+      /* @__PURE__ */ jsx24("span", { children: "Assistant or graph ID" }),
+      /* @__PURE__ */ jsx24("input", { value: assistantId, onChange: (e) => setAssistantId(e.target.value), required: true, spellCheck: false, placeholder: "agent" }),
+      /* @__PURE__ */ jsxs22("small", { children: [
         "The graph name from ",
-        /* @__PURE__ */ jsx23("code", { children: "langgraph.json" }),
+        /* @__PURE__ */ jsx24("code", { children: "langgraph.json" }),
         ", or an assistant UUID."
       ] })
     ] }),
-    /* @__PURE__ */ jsxs21("label", { children: [
-      /* @__PURE__ */ jsxs21("span", { children: [
+    /* @__PURE__ */ jsxs22("label", { children: [
+      /* @__PURE__ */ jsxs22("span", { children: [
         "Access token ",
-        /* @__PURE__ */ jsx23("em", { children: "(optional)" })
+        /* @__PURE__ */ jsx24("em", { children: "(optional)" })
       ] }),
-      /* @__PURE__ */ jsx23("input", { type: "password", value: token, onChange: (e) => setToken(e.target.value), autoComplete: "off", placeholder: "Not needed for a local server" }),
-      /* @__PURE__ */ jsx23("small", { children: "Stored in this browser only, and only sent to this server." })
+      /* @__PURE__ */ jsx24("input", { type: "password", value: token, onChange: (e) => setToken(e.target.value), autoComplete: "off", placeholder: "Not needed for a local server" }),
+      /* @__PURE__ */ jsx24("small", { children: "Stored in this browser only, and only sent to this server." })
     ] }),
-    /* @__PURE__ */ jsxs21("label", { children: [
-      /* @__PURE__ */ jsx23("span", { children: "How to send the token" }),
-      /* @__PURE__ */ jsxs21("select", { value: scheme, onChange: (e) => setScheme(e.target.value), children: [
-        /* @__PURE__ */ jsx23("option", { value: "bearer", children: "Authorization: Bearer (custom auth)" }),
-        /* @__PURE__ */ jsx23("option", { value: "api-key", children: "X-Api-Key (LangSmith / LangGraph Platform)" }),
-        /* @__PURE__ */ jsx23("option", { value: "agent-builder", children: "LangSmith Agent Builder" })
+    /* @__PURE__ */ jsxs22("label", { children: [
+      /* @__PURE__ */ jsx24("span", { children: "How to send the token" }),
+      /* @__PURE__ */ jsxs22("select", { value: scheme, onChange: (e) => setScheme(e.target.value), children: [
+        /* @__PURE__ */ jsx24("option", { value: "bearer", children: "Authorization: Bearer (custom auth)" }),
+        /* @__PURE__ */ jsx24("option", { value: "api-key", children: "X-Api-Key (LangSmith / LangGraph Platform)" }),
+        /* @__PURE__ */ jsx24("option", { value: "agent-builder", children: "LangSmith Agent Builder" })
       ] })
     ] }),
-    /* @__PURE__ */ jsx23("button", { type: "submit", className: "lgk-primary", children: "Connect" })
+    /* @__PURE__ */ jsx24("button", { type: "submit", className: "lgk-primary", children: "Connect" })
   ] }) });
 }
 
 // src/components/Playground.tsx
-import { Fragment as Fragment9, jsx as jsx24, jsxs as jsxs22 } from "react/jsx-runtime";
+import { Fragment as Fragment9, jsx as jsx25, jsxs as jsxs23 } from "react/jsx-runtime";
 function CommitInput({ value, onCommit, ...rest }) {
-  const [draft, setDraft] = useState20(value);
+  const [draft, setDraft] = useState21(value);
   useEffect9(() => setDraft(value), [value]);
   const commit = () => draft !== value && onCommit(draft.trim());
-  return /* @__PURE__ */ jsx24(
+  return /* @__PURE__ */ jsx25(
     "input",
     {
       ...rest,
@@ -2534,21 +3117,21 @@ function CommitInput({ value, onCommit, ...rest }) {
 function Playground(props) {
   const { connection, setConnection, setThreadId, isConfigured, status } = useKit();
   const { assistants, error, refresh } = useAssistants();
-  const [navOpen, setNavOpen] = useState20(false);
-  if (!isConfigured) return /* @__PURE__ */ jsx24(ConnectionForm, {});
+  const [navOpen, setNavOpen] = useState21(false);
+  if (!isConfigured) return /* @__PURE__ */ jsx25(ConnectionForm, {});
   const current = assistants.find((a) => a.assistant_id === connection.assistantId || a.graph_id === connection.assistantId);
   const known = assistants.some((a) => a.assistant_id === connection.assistantId);
-  return /* @__PURE__ */ jsxs22("div", { className: "lgk lgk-pg", "data-nav": navOpen, children: [
-    /* @__PURE__ */ jsxs22("aside", { className: "lgk-pg-side", children: [
-      /* @__PURE__ */ jsx24("div", { className: "lgk-pg-brand", children: "LangGraph" }),
-      /* @__PURE__ */ jsxs22("label", { className: "lgk-field", children: [
-        /* @__PURE__ */ jsx24("span", { children: "Endpoint" }),
-        /* @__PURE__ */ jsx24(CommitInput, { value: connection.apiUrl, onCommit: (v) => setConnection({ apiUrl: v }), spellCheck: false })
+  return /* @__PURE__ */ jsxs23("div", { className: "lgk lgk-pg", "data-nav": navOpen, children: [
+    /* @__PURE__ */ jsxs23("aside", { className: "lgk-pg-side", children: [
+      /* @__PURE__ */ jsx25("div", { className: "lgk-pg-brand", children: "LangGraph" }),
+      /* @__PURE__ */ jsxs23("label", { className: "lgk-field", children: [
+        /* @__PURE__ */ jsx25("span", { children: "Endpoint" }),
+        /* @__PURE__ */ jsx25(CommitInput, { value: connection.apiUrl, onCommit: (v) => setConnection({ apiUrl: v }), spellCheck: false })
       ] }),
-      /* @__PURE__ */ jsxs22("div", { className: "lgk-field", children: [
-        /* @__PURE__ */ jsx24("span", { children: "Access token" }),
-        /* @__PURE__ */ jsxs22("div", { className: "lgk-field-row", children: [
-          /* @__PURE__ */ jsx24(
+      /* @__PURE__ */ jsxs23("div", { className: "lgk-field", children: [
+        /* @__PURE__ */ jsx25("span", { children: "Access token" }),
+        /* @__PURE__ */ jsxs23("div", { className: "lgk-field-row", children: [
+          /* @__PURE__ */ jsx25(
             CommitInput,
             {
               type: "password",
@@ -2559,45 +3142,45 @@ function Playground(props) {
               "aria-label": "Access token"
             }
           ),
-          /* @__PURE__ */ jsxs22(
+          /* @__PURE__ */ jsxs23(
             "select",
             {
               value: connection.authScheme ?? "bearer",
               "aria-label": "How to send the token",
               onChange: (e) => setConnection({ authScheme: e.target.value }),
               children: [
-                /* @__PURE__ */ jsx24("option", { value: "bearer", children: "Bearer" }),
-                /* @__PURE__ */ jsx24("option", { value: "api-key", children: "X-Api-Key" }),
-                /* @__PURE__ */ jsx24("option", { value: "agent-builder", children: "Agent Builder" })
+                /* @__PURE__ */ jsx25("option", { value: "bearer", children: "Bearer" }),
+                /* @__PURE__ */ jsx25("option", { value: "api-key", children: "X-Api-Key" }),
+                /* @__PURE__ */ jsx25("option", { value: "agent-builder", children: "Agent Builder" })
               ]
             }
           )
         ] })
       ] }),
-      /* @__PURE__ */ jsxs22("label", { className: "lgk-field", children: [
-        /* @__PURE__ */ jsx24("span", { children: "Agent" }),
-        /* @__PURE__ */ jsxs22("select", { value: connection.assistantId, onChange: (e) => setConnection({ assistantId: e.target.value }), children: [
-          !known && /* @__PURE__ */ jsx24("option", { value: connection.assistantId, children: connection.assistantId }),
-          assistants.map((a) => /* @__PURE__ */ jsx24("option", { value: a.assistant_id, children: a.name || a.graph_id }, a.assistant_id))
+      /* @__PURE__ */ jsxs23("label", { className: "lgk-field", children: [
+        /* @__PURE__ */ jsx25("span", { children: "Agent" }),
+        /* @__PURE__ */ jsxs23("select", { value: connection.assistantId, onChange: (e) => setConnection({ assistantId: e.target.value }), children: [
+          !known && /* @__PURE__ */ jsx25("option", { value: connection.assistantId, children: connection.assistantId }),
+          assistants.map((a) => /* @__PURE__ */ jsx25("option", { value: a.assistant_id, children: a.name || a.graph_id }, a.assistant_id))
         ] })
       ] }),
-      /* @__PURE__ */ jsx24("p", { className: "lgk-status", "data-state": status === "error" || error ? "error" : status, children: status === "error" || error ? /* @__PURE__ */ jsxs22(Fragment9, { children: [
+      /* @__PURE__ */ jsx25("p", { className: "lgk-status", "data-state": status === "error" || error ? "error" : status, children: status === "error" || error ? /* @__PURE__ */ jsxs23(Fragment9, { children: [
         "Can't reach ",
         connection.apiUrl,
         ". ",
-        /* @__PURE__ */ jsx24("button", { type: "button", onClick: refresh, children: "Retry" })
+        /* @__PURE__ */ jsx25("button", { type: "button", onClick: refresh, children: "Retry" })
       ] }) : status === "checking" ? "Connecting\u2026" : `Connected \xB7 ${assistants.length} agent${assistants.length === 1 ? "" : "s"}` }),
-      /* @__PURE__ */ jsx24("button", { type: "button", className: "lgk-primary", onClick: () => {
+      /* @__PURE__ */ jsx25("button", { type: "button", className: "lgk-primary", onClick: () => {
         setThreadId(null);
         setNavOpen(false);
       }, children: "New chat" }),
-      /* @__PURE__ */ jsx24(ThreadHistory, { onSelect: () => setNavOpen(false) })
+      /* @__PURE__ */ jsx25(ThreadHistory, { onSelect: () => setNavOpen(false) })
     ] }),
-    /* @__PURE__ */ jsx24("main", { className: "lgk-pg-main", children: /* @__PURE__ */ jsx24(
+    /* @__PURE__ */ jsx25("main", { className: "lgk-pg-main", children: /* @__PURE__ */ jsx25(
       Chat,
       {
         ...props,
-        headerStart: /* @__PURE__ */ jsx24(IconButton, { label: "Chats", className: "lgk-burger", onClick: () => setNavOpen((o) => !o), children: /* @__PURE__ */ jsx24(PanelLeftIcon, {}) }),
+        headerStart: /* @__PURE__ */ jsx25(IconButton, { label: "Chats", className: "lgk-burger", onClick: () => setNavOpen((o) => !o), children: /* @__PURE__ */ jsx25(PanelLeftIcon, {}) }),
         title: props.title ?? current?.name ?? current?.graph_id ?? "Chat"
       }
     ) })
@@ -2613,6 +3196,7 @@ export {
   DO_NOT_RENDER_ID_PREFIX,
   ExpandableText,
   GatewayTransport,
+  GenUi,
   GenericInterrupt,
   HistoryPanel,
   HitlReview,
@@ -2634,6 +3218,7 @@ export {
   messageToolCalls,
   requestHandoff,
   sendFeedback,
+  uiSpecs,
   useAgent,
   useAgentContext,
   useAgentReadable,

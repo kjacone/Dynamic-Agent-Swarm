@@ -325,7 +325,7 @@ export function WorkflowGraph({
         >
           <Background color="#94a3b8" gap={18} size={1} />
           <Controls showInteractive={false} />
-          {minimap && (
+          {minimap && graph.nodes.length > 4 && (
             <MiniMap
               pannable
               zoomable

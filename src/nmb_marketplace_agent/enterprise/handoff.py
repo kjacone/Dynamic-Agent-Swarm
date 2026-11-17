@@ -8,6 +8,7 @@ again on the next customer message.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -103,6 +104,85 @@ async def add_message(db: AsyncSession, h: Handoff, *, role: str, author: str,
                        action="handoff.message", resource_type="handoff", resource_id=h.id,
                        details={"message_id": m.id, "role": role, "chars": len(text)})
     return m
+
+
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _clean(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def _clip(text: str, limit: int) -> str:
+    t = _clean(text)
+    return t if len(t) <= limit else t[: limit - 1].rstrip() + "…"
+
+
+def _sentences(text: str, limit: int = 2) -> list[str]:
+    parts = [p.strip() for p in _SENTENCE.split(_clean(text)) if p.strip()]
+    out: list[str] = []
+    for p in parts:
+        p = _clip(p, 240)
+        if p and p not in out:
+            out.append(p)
+        if len(out) >= limit:
+            break
+    return out or ([_clip(text, 240)] if _clean(text) else [])
+
+
+def summarize(h: Handoff, rows: list[HandoffMessage], max_chars: int = 1200) -> dict:
+    """Compress a conversation locally (no model call, no data leaves the tenant).
+
+    The result keeps what a receiving team needs: who the customer is, why the
+    handoff happened, what they asked for, what staff already replied, and the
+    latest turn. Long messages are clipped to their first sentences.
+    """
+    msgs = [m for m in rows if _clean(m.text)]
+    who = h.customer_id or h.user_id or "customer"
+    header = f"Conversation summary — {who} · agent {h.agent_id} · {h.status}"
+    if msgs:
+        start = msgs[0].created_at.strftime("%d %b %Y %H:%M UTC")
+        end = msgs[-1].created_at.strftime("%d %b %Y %H:%M UTC")
+        header += f"\n{len(msgs)} message{'s' if len(msgs) != 1 else ''} · {start} → {end}"
+    lines = [header]
+    if h.reason:
+        lines += ["", f"Why a human stepped in: {_clip(h.reason, 220)}"]
+    if not msgs:
+        lines += ["", "No messages in this conversation yet."]
+    else:
+        customer = [m for m in msgs if m.role == "customer"]
+        staff = [m for m in msgs if m.role == "staff"]
+        picks = []
+        for m in ([customer[0]] if customer else []) + ([customer[-1]] if len(customer) > 1 else []):
+            if m not in picks:
+                picks.append(m)
+        lines += ["", "What the customer needs:"]
+        if picks:
+            for m in picks:
+                lines += [f"- {s}" for s in _sentences(m.text, 1)]
+        else:
+            lines.append("- (no customer message captured)")
+        lines += ["", "What staff replied:"]
+        if staff:
+            for m in staff[-2:]:
+                lines += [f"- {s}" for s in _sentences(m.text, 1)]
+        else:
+            lines.append("- No staff reply yet.")
+        if staff:
+            lines += ["", f"Latest turn ({msgs[-1].created_at.strftime('%d %b %H:%M UTC')}): {_clip(msgs[-1].text, 240)}"]
+    lines += ["", "Locally summarised extractive summary; the full transcript stays in the tenant."]
+    summary = "\n".join(lines).strip()
+    if len(summary) > max_chars:
+        summary = summary[: max_chars - 1].rstrip() + "…"
+    before = sum(len(m.text or "") for m in msgs) + len(_clean(h.reason))
+    return {
+        "summary": summary,
+        "method": "extractive",
+        "message_count": len(msgs),
+        "chars_before": before,
+        "chars_after": len(summary),
+        "compression": round(1 - (len(summary) / before), 3) if before else 0.0,
+    }
 
 
 async def screen_reply(db: AsyncSession, tenant_id: str, text: str) -> str:

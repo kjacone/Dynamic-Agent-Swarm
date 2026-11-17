@@ -594,7 +594,7 @@ interface ToolCallLike {
  */
 declare function messageToolCalls(m: Message): ToolCallLike[];
 
-/** A tool's output: card strips for lists, tables for objects, clipped text otherwise. */
+/** A tool's output: a UI spec when it carries one, else cards, tables or clipped text. */
 declare function ToolOutput({ message }: {
     message: ToolMessage;
 }): react.JSX.Element;
@@ -607,6 +607,26 @@ declare function ToolCallCard({ call, result, status }: {
     result?: ToolMessage;
     status: ToolStatus;
 }): react.JSX.Element;
+
+/**
+ * One rendering contract for tool output, whatever the model produced:
+ *
+ *   { "ui": { "type": "cards", "title": "Matching listings", "items": [...] } }
+ *
+ * `ui` may hold one spec or an array of specs. A known `type` at the top level is
+ * accepted as well. Anything else falls back to inference: a list renders as cards,
+ * an object as a table, text as clipped text. Unknown types fall back the same way,
+ * so a new or misspelled component never breaks the transcript.
+ */
+type UiSpec = Record<string, unknown> & {
+    type: string;
+};
+/** Specs contained in a tool result, or null when the result is not one. */
+declare function uiSpecs(value: unknown, depth?: number): UiSpec[] | null;
+/** Renders every UI spec found in a tool result, in order. */
+declare function GenUi({ specs }: {
+    specs: UiSpec[];
+}): react.JSX.Element | null;
 
 /**
  * Review UI for LangChain's HumanInTheLoopMiddleware: for every pending action the reviewer
@@ -659,4 +679,4 @@ declare function useArtifactContext(): Slot<Record<string, unknown>>;
  */
 declare function ensureToolCallsHaveResponses(messages: Message[]): Message[];
 
-export { type ActionRequest, type AgentState, type AgentToolDefinition, AssistantMessage, Chat, type ChatFeatures, ChatPopup, type ChatPopupProps, type ChatProps, ChatSidebar, type ChatSidebarProps, Composer, type Connection, ConnectionForm, type ConnectionStatus, DO_NOT_RENDER_ID_PREFIX, type Decision, type DecisionType, ExpandableText, type GatewayConfig, type GatewayEvent, type GatewayHandoff, type GatewaySource, type GatewayStaffMessage, GatewayTransport, GenericInterrupt, HistoryPanel, type HitlRequest, HitlReview, HumanMessage, type InterruptRenderProps, InterruptView, KeyValueTable, type KitContextValue, LangGraphKitProvider, type LangGraphKitProviderProps, Markdown, type MarkdownOptions, type MultimodalBlock, Playground, type ReviewConfig, type SendInput, ThreadHistory, type ThreadSummary, ToolCallCard, ToolOutput, type ToolRenderProps, type ToolStatus, type UiComponents, ensureToolCallsHaveResponses, gatewayToken, handoffSnapshot, isHitlRequest, messageReasoning, messageText, messageToolCalls, requestHandoff, sendFeedback, useAgent, useAgentContext, useAgentReadable, useAgentTool, useArtifact, useArtifactContext, useArtifactOpen, useAssistants, useFileUpload, useKit, useThreads };
+export { type ActionRequest, type AgentState, type AgentToolDefinition, AssistantMessage, Chat, type ChatFeatures, ChatPopup, type ChatPopupProps, type ChatProps, ChatSidebar, type ChatSidebarProps, Composer, type Connection, ConnectionForm, type ConnectionStatus, DO_NOT_RENDER_ID_PREFIX, type Decision, type DecisionType, ExpandableText, type GatewayConfig, type GatewayEvent, type GatewayHandoff, type GatewaySource, type GatewayStaffMessage, GatewayTransport, GenUi, GenericInterrupt, HistoryPanel, type HitlRequest, HitlReview, HumanMessage, type InterruptRenderProps, InterruptView, KeyValueTable, type KitContextValue, LangGraphKitProvider, type LangGraphKitProviderProps, Markdown, type MarkdownOptions, type MultimodalBlock, Playground, type ReviewConfig, type SendInput, ThreadHistory, type ThreadSummary, ToolCallCard, ToolOutput, type ToolRenderProps, type ToolStatus, type UiComponents, type UiSpec, ensureToolCallsHaveResponses, gatewayToken, handoffSnapshot, isHitlRequest, messageReasoning, messageText, messageToolCalls, requestHandoff, sendFeedback, uiSpecs, useAgent, useAgentContext, useAgentReadable, useAgentTool, useArtifact, useArtifactContext, useArtifactOpen, useAssistants, useFileUpload, useKit, useThreads };

@@ -20,11 +20,11 @@ import { EmptyState, LoadingBlock } from "@/components/common/AsyncState";
 import { AsyncButton } from "@/components/common/AsyncButton";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { StatCard } from "@/components/common/StatCard";
-import { JsonView } from "@/components/common/JsonView";
 import { ModelSelect } from "@/components/common/ModelSelect";
 import { useToast } from "@/components/ui/toast";
 import { agentRole, flattenSteps } from "@/lib/workflows";
 import { cn, truncate } from "@/lib/utils";
+import { AgentForm } from "@/components/agents/AgentForm";
 
 type WorkflowUsage = { key: string; name: string; steps: string[] };
 
@@ -32,7 +32,7 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
-export function Agents({ tenant }: { tenant: string }) {
+export function Agents({ tenant, onTest }: { tenant: string; onTest?: (agent: Agent) => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [rags, setRags] = useState<Rag[]>([]);
@@ -43,7 +43,6 @@ export function Agents({ tenant }: { tenant: string }) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [creating, setCreating] = useState(false);
-  const [testing, setTesting] = useState<Agent | null>(null);
   const [versionsFor, setVersionsFor] = useState<Agent | null>(null);
   const [deleting, setDeleting] = useState<Agent | null>(null);
   const toast = useToast();
@@ -209,7 +208,7 @@ export function Agents({ tenant }: { tenant: string }) {
                     trails={usage.get(a.id) ?? []}
                     onModel={(m) => changeModel(a, m)}
                     onEdit={() => setEditing(a)}
-                    onTest={() => setTesting(a)}
+                    onTest={() => onTest?.(a)}
                     onVersions={() => setVersionsFor(a)}
                     onDelete={() => setDeleting(a)}
                   />
@@ -237,7 +236,6 @@ export function Agents({ tenant }: { tenant: string }) {
           tools={tools} rags={rags} subs={subs} models={models}
         />
       )}
-      {testing && <TestChat agent={testing} tenant={tenant} onClose={() => setTesting(null)} />}
       {versionsFor && <VersionsDialog agent={versionsFor} tenant={tenant} onClose={() => setVersionsFor(null)} />}
       {deleting && (
         <ConfirmDialog
@@ -332,7 +330,7 @@ function AgentCard({
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onEdit}>
             <Pencil className="h-3.5 w-3.5" /> Edit
           </Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onTest}>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onTest} title="Open this agent on the demo bench">
             <Play className="h-3.5 w-3.5" /> Test
           </Button>
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onVersions}>
@@ -356,78 +354,7 @@ function Pill({ icon: Icon, label, n }: { icon: React.ComponentType<{ className?
   );
 }
 
-function AgentForm({
-  open, onClose, onSaved, tenant, tools, rags, subs, models, initial,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSaved: () => void;
-  tenant: string;
-  tools: Tool[]; rags: Rag[]; subs: SubAgent[]; models: ModelCfg[];
-  initial?: Agent;
-}) {
-  const [name, setName] = useState(initial?.name || "");
-  const [model, setModel] = useState(initial?.model || "ollama:llama3.1:8b");
-  const [prompt, setPrompt] = useState(initial?.system_prompt || "");
-  const [toolIds, setToolIds] = useState<string[]>(initial?.tool_ids || []);
-  const [ragIds, setRagIds] = useState<string[]>(initial?.rag_collection_ids || []);
-  const [subIds, setSubIds] = useState<string[]>(initial?.subagent_ids || []);
-  const toast = useToast();
 
-  async function save() {
-    try {
-      const body = {
-        name, model, system_prompt: prompt, tenant_id: tenant,
-        tool_ids: toolIds, rag_collection_ids: ragIds, subagent_ids: subIds,
-      };
-      if (initial) await api.patchAgent(initial.id, body);
-      else await api.createAgent(body);
-      toast.push("Saved", "success");
-      onSaved();
-    } catch (e: any) {
-      toast.push(e.message, "error");
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{initial ? "Edit agent" : "New agent"}</DialogTitle>
-          <DialogDescription>
-            Changes are saved as a draft. Publish a version from the agent card to route live traffic to it.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="refunds-supervisor" /></div>
-            <div className="space-y-1.5">
-              <Label>Model</Label>
-              <ModelSelect value={model} onChange={setModel} models={models} />
-            </div>
-          </div>
-          <div className="space-y-1.5"><Label>System prompt</Label>
-            <Textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Or a Langfuse ref: langfuse:my-prompt:production" />
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <MultiSelect label="Tools" items={tools.map((t) => ({ id: t.id, label: t.name }))}
-              selected={toolIds} onChange={setToolIds} />
-            <MultiSelect label="RAG" items={rags.map((r) => ({ id: r.id, label: `${r.name} (${r.status})` }))}
-              selected={ragIds} onChange={setRagIds} />
-            <MultiSelect label="Subagents" items={subs.map((s) => ({ id: s.id, label: `${s.name} · ${s.mode}` }))}
-              selected={subIds} onChange={setSubIds} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <AsyncButton onRun={save} disabled={!name}>Save</AsyncButton>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function MultiSelect({ label, items, selected, onChange }: {
   label: string;
@@ -451,52 +378,6 @@ function MultiSelect({ label, items, selected, onChange }: {
         ))}
       </div>
     </div>
-  );
-}
-
-function TestChat({ agent, tenant, onClose }: { agent: Agent; tenant: string; onClose: () => void }) {
-  const [message, setMessage] = useState("");
-  const [useDraft, setUseDraft] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<unknown>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function run() {
-    setBusy(true); setErr(null); setResult(null);
-    try {
-      const out = await api.testAgent({
-        agent_id: agent.id, message, tenant_id: tenant, use_draft: useDraft,
-      });
-      setResult(out);
-    } catch (e: any) { setErr(e.message); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Test · {agent.name}</DialogTitle>
-          <DialogDescription>Send a message with the draft config before publishing. Runs are traced and billed like live traffic.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5"><Label>Message</Label>
-            <Textarea rows={3} value={message} onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && message && !busy) run(); }}
-              placeholder="How do I dispute a card charge?" />
-          </div>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <Checkbox checked={useDraft} onCheckedChange={(v) => setUseDraft(!!v)} /> Use draft config
-          </label>
-          {err && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-700 dark:text-red-400">{err}</div>}
-          {result ? <JsonView data={result} /> : null}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Close</Button>
-          <AsyncButton onRun={run} disabled={!message || busy}>Run</AsyncButton>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

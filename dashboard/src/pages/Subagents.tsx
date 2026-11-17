@@ -19,6 +19,7 @@ import { StatCard } from "@/components/common/StatCard";
 import { ModelSelect } from "@/components/common/ModelSelect";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { SubagentForm } from "@/components/agents/SubAgentForm";
 
 export function Subagents({ tenant }: { tenant: string }) {
   const [subs, setSubs] = useState<SubAgent[] | null>(null);
@@ -131,89 +132,7 @@ export function Subagents({ tenant }: { tenant: string }) {
   );
 }
 
-function SubagentForm({
-  open, onClose, onSaved, tenant, tools, rags, models, initial,
-}: {
-  open: boolean; onClose: () => void; onSaved: () => void; tenant: string;
-  tools: Tool[]; rags: Rag[]; models: ModelCfg[]; initial?: SubAgent;
-}) {
-  const [name, setName] = useState(initial?.name || "");
-  const [description, setDescription] = useState(initial?.description || "");
-  const [prompt, setPrompt] = useState(initial?.system_prompt || "");
-  const [mode, setMode] = useState<"sync" | "async">(initial?.mode || "sync");
-  const [model, setModel] = useState(initial?.model || "");
-  const [graphId, setGraphId] = useState(initial?.graph_id || "");
-  const [url, setUrl] = useState(initial?.url || "");
-  const [toolIds, setToolIds] = useState<string[]>(initial?.tool_ids || []);
-  const [ragIds, setRagIds] = useState<string[]>(initial?.rag_collection_ids || []);
-  const toast = useToast();
 
-  async function save() {
-    try {
-      const body = {
-        name, description, system_prompt: prompt, mode, tenant_id: tenant,
-        model: model || null, graph_id: mode === "async" ? graphId || null : null,
-        url: url || null,
-        tool_ids: toolIds, rag_collection_ids: ragIds,
-      };
-      if (initial) await api.patchSubagent(initial.id, body);
-      else await api.createSubagent(body);
-      toast.push("Subagent saved", "success"); onSaved();
-    } catch (e: any) { toast.push(e.message, "error"); }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{initial ? `Edit ${initial.name}` : "New subagent"}</DialogTitle>
-          <DialogDescription>Give the supervisor a focused helper with its own prompt, model and tools.</DialogDescription>
-        </DialogHeader>
-        <div className="max-h-[60vh] space-y-3 overflow-auto pr-1">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Name</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. researcher" /></div>
-            <div className="space-y-1.5"><Label>Description</Label>
-              <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is it good at?" /></div>
-          </div>
-          <div className="space-y-1.5"><Label>System prompt</Label>
-            <Textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Instructions the subagent follows" />
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Mode</Label>
-              <FilterTabs value={mode} onChange={setMode}
-                options={[{ id: "sync", label: "Sync" }, { id: "async", label: "Async" }]} />
-              <p className="text-xs text-muted-foreground">
-                {mode === "sync" ? "Runs in-process — fastest, shares the current runtime." : "Runs as a graph on the LangGraph server."}
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Model</Label>
-              <ModelSelect value={model} onChange={setModel} models={models} allowEmpty emptyLabel="Inherit supervisor model" />
-            </div>
-          </div>
-          {mode === "async" && (
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1.5"><Label>Graph id</Label>
-                <Input value={graphId} onChange={(e) => setGraphId(e.target.value)} placeholder="researcher" /></div>
-              <div className="space-y-1.5"><Label>URL (optional)</Label>
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="LangGraph server URL" /></div>
-            </div>
-          )}
-          <div className="grid gap-3 md:grid-cols-2">
-            <MultiChecks label="Tools" items={tools.map((t) => ({ id: t.id, label: t.name }))} selected={toolIds} onChange={setToolIds} />
-            <MultiChecks label="Knowledge" items={rags.map((r) => ({ id: r.id, label: r.name }))} selected={ragIds} onChange={setRagIds} />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <AsyncButton onRun={save} disabled={!name || (mode === "async" && !graphId)}>Save subagent</AsyncButton>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function MultiChecks({ label, items, selected, onChange }: {
   label: string; items: { id: string; label: string }[]; selected: string[]; onChange: (v: string[]) => void;

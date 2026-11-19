@@ -201,7 +201,9 @@ export function LangGraphKitProvider({
   const gatewayKey = gateway?.publishableKey;
   const gatewayUser = gateway?.userId;
   const gatewayCustomer = gateway?.customerId;
+  const gatewayAgent = gateway?.agentId;
   const gatewayPersist = gateway?.persistKey;
+  const gatewayHostConfig = gateway?.hostConfig;
   const gatewayFetchImpl = gateway?.fetch;
   const gatewayTransport = useMemo(
     () => (gatewayBaseUrl && gatewayKey
@@ -210,11 +212,13 @@ export function LangGraphKitProvider({
           publishableKey: gatewayKey,
           userId: gatewayUser,
           customerId: gatewayCustomer,
+          agentId: gatewayAgent,
           persistKey: gatewayPersist,
+          hostConfig: gatewayHostConfig,
           fetch: gatewayFetchImpl,
         }, gatewayEvents.emit)
       : null),
-    [gatewayBaseUrl, gatewayKey, gatewayUser, gatewayCustomer, gatewayPersist, gatewayFetchImpl, gatewayEvents],
+    [gatewayBaseUrl, gatewayKey, gatewayUser, gatewayCustomer, gatewayAgent, gatewayPersist, gatewayHostConfig, gatewayFetchImpl, gatewayEvents],
   );
 
   const [status, setStatus] = useState<ConnectionStatus>("idle");

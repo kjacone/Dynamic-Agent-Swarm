@@ -17,7 +17,7 @@ from nmb_marketplace_agent.config.models import (
     SubAgentConfig,
     ToolConfig,
 )
-from nmb_marketplace_agent.integrations import connections
+from nmb_marketplace_agent.integrations import connections, provider_keys
 from nmb_marketplace_agent.integrations import langfuse as lf
 from nmb_marketplace_agent.training import store as training
 
@@ -121,3 +121,33 @@ async def test_connection(name: str):
     if name not in connections.SERVICES:
         raise HTTPException(404, "Unknown service")
     return {c["id"]: c for c in await check_all()}[name]
+
+
+# ── BYOK: provider keys saved from the dashboard ────────────────────
+@router.get("/provider-keys")
+async def get_provider_keys():
+    """Key metadata only — values are masked and never leave the server."""
+    return {"keys": provider_keys.catalog_view(), "encrypted": provider_keys.encryption_enabled()}
+
+
+@router.put("/provider-keys/{env}")
+async def put_provider_key(env: str, body: dict):
+    value = body.get("value")
+    if not isinstance(value, str):
+        raise HTTPException(400, "Send {\"value\": \"...\"}")
+    try:
+        saved = provider_keys.set_value(env, value)
+    except KeyError:
+        raise HTTPException(404, "Unknown key")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"key": saved}
+
+
+@router.delete("/provider-keys/{env}")
+async def delete_provider_key(env: str):
+    try:
+        saved = provider_keys.clear_value(env)
+    except KeyError:
+        raise HTTPException(404, "Unknown key")
+    return {"key": saved}

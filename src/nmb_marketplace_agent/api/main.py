@@ -35,6 +35,7 @@ from nmb_marketplace_agent.api.routes import (
     tools,
     training,
     versions,
+    voice,
     whatsapp,
 )
 from nmb_marketplace_agent.api.routes import (
@@ -98,6 +99,7 @@ for mod, prefix in [
     (prompts, "/prompts"),
     (system, "/system"),
     (training, "/training"),
+    (voice, "/voice"),
 ]:
     app.include_router(
         mod.router,
@@ -106,6 +108,10 @@ for mod, prefix in [
         dependencies=admin,
     )
 
+
+# Streamed voice playback: the one-time ticket is minted behind admin auth, so
+# this GET can stay open for the <audio> element that burns it.
+app.include_router(voice.play_router, prefix="/voice", tags=["voice"])
 
 # ── Enterprise layer (RBAC/SSO-protected; license-gated per module) ──
 app.include_router(enterprise_router, prefix="/enterprise", tags=["enterprise"])

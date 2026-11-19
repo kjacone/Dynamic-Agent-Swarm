@@ -138,6 +138,7 @@ async def test_subagent(sub_id: str, body: SubAgentTest, tenant_id: str = "defau
 
         # Sync: build the same agent the supervisor would delegate to, run it in-process
         from deepagents import create_deep_agent
+
         from nmb_marketplace_agent.llm.registry import resolve_model
         from nmb_marketplace_agent.subagents.registry import resolve_sub_tools
 

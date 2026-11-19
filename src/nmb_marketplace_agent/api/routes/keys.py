@@ -48,6 +48,43 @@ async def list_keys(tenant_id: str = "default", db: AsyncSession = Depends(get_d
     return [r.model_dump(exclude={"key_hash"}) for r in res.scalars().all()]
 
 
+class KeyUpdate(BaseModel):
+    name: str | None = None
+    allowed_origins: list[str] | None = None
+    rate_limit_per_min: int | None = None
+
+
+@router.patch("/{key_id}")
+async def update_key(key_id: str, body: KeyUpdate, tenant_id: str = "default",
+                     db: AsyncSession = Depends(get_db)):
+    """Edit a key's metadata. The raw value stays hashed and cannot be changed.
+
+    Agent, kind and tenant define the key's scope, so they are fixed: issue a
+    new key instead of widening an existing one.
+    """
+    row = await db.get(ApiKey, key_id)
+    if not row or row.tenant_id != tenant_id:
+        raise HTTPException(404, "Key not found")
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "Name is required")
+        row.name = name[:120]
+    if body.allowed_origins is not None:
+        origins = [o.strip() for o in body.allowed_origins if o.strip()]
+        if row.kind == "publishable" and not origins:
+            origins = ["*"]
+        row.allowed_origins = origins
+    if body.rate_limit_per_min is not None:
+        if body.rate_limit_per_min < 1:
+            raise HTTPException(400, "Rate limit must be at least 1")
+        row.rate_limit_per_min = body.rate_limit_per_min
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row.model_dump(exclude={"key_hash"})
+
+
 @router.delete("/{key_id}")
 async def revoke_key(key_id: str, tenant_id: str = "default", db: AsyncSession = Depends(get_db)):
     row = await db.get(ApiKey, key_id)

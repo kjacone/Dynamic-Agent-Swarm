@@ -39,10 +39,10 @@ from nmb_marketplace_agent.enterprise.models import (
     SolutionSnapshot,
     now_iso,
 )
+from nmb_marketplace_agent.enterprise.workflows import conformance
 from nmb_marketplace_agent.enterprise.workflows.engine import Runtime, WorkflowEngine
 from nmb_marketplace_agent.rag.indexer import build_index
 from nmb_marketplace_agent.training import store as training_store
-from nmb_marketplace_agent.enterprise.workflows import conformance
 
 log = logging.getLogger(__name__)
 

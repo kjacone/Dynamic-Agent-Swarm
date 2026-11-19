@@ -13,6 +13,7 @@ from sqlmodel import select
 
 from nmb_marketplace_agent.config.database import async_session
 from nmb_marketplace_agent.config.models import ModelConfig
+from nmb_marketplace_agent.integrations import provider_keys
 from nmb_marketplace_agent.llm.sample import SampleChatModel
 
 
@@ -98,19 +99,23 @@ def _base_url(cfg: ModelConfig, spec: Provider, provider: str) -> str | None:
 def _api_key(cfg: ModelConfig, spec: Provider, base_url: str | None) -> str:
     if cfg.api_key_env:
         env = cfg.api_key_env.strip()
-        val = os.environ.get(env)
+        val = provider_keys.get(env)
         if not val:
-            raise ValueError(f"Env var {env} is not set on the server (model {cfg.name!r})")
+            raise ValueError(
+                f"API key {env} is not set — add it on the Models page (API keys) "
+                f"or in the server environment (model {cfg.name!r})"
+            )
         return val
     for env in spec.api_key_envs:
-        val = os.environ.get(env)
+        val = provider_keys.get(env)
         if val:
             return val
     if base_url or spec.local:
         return "not-needed"
     raise ValueError(
         f"Model {cfg.name!r} ({cfg.provider}) needs "
-        f"{' or '.join(spec.api_key_envs) or 'an API key'} in the server environment"
+        f"{' or '.join(spec.api_key_envs) or 'an API key'} — add it on the Models page (API keys) "
+        f"or in the server environment"
     )
 
 
@@ -195,17 +200,19 @@ async def resolve_model(ref, tenant_id: str | None = None):
 
 
 def provider_catalog() -> list[dict]:
-    """Provider presets for the dashboard form (env var names only, never values)."""
+    """Provider presets for the dashboard form (env var names, never values)."""
     out = []
     for pid, spec in PROVIDERS.items():
         base = spec.base_url
         if not base and pid in ("litellm", "vllm"):
             base = _connection_url(pid) or None
+        key_env = spec.api_key_envs[0] if spec.api_key_envs else None
         out.append({
             "id": pid,
             "label": spec.label,
             "base_url": base,
-            "api_key_env": spec.api_key_envs[0] if spec.api_key_envs else None,
+            "api_key_env": key_env,
+            "key_source": provider_keys.source(key_env) if key_env else None,
             "local": spec.local,
             "hint": spec.hint,
         })

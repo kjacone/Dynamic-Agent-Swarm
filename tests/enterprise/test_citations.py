@@ -10,7 +10,12 @@ from sqlmodel import select
 from nmb_marketplace_agent.api import auth
 from nmb_marketplace_agent.api.deps import get_db
 from nmb_marketplace_agent.api.routes import public
-from nmb_marketplace_agent.config.models import AgentConfig, ApiKey, Citation, RAGCollection
+from nmb_marketplace_agent.config.models import (
+    AgentConfig,
+    ApiKey,
+    Citation,
+    RAGCollection,
+)
 from nmb_marketplace_agent.enterprise.guardrails import PolicyEngine, guard_tools
 from nmb_marketplace_agent.rag import registry as rag_registry
 from nmb_marketplace_agent.rag.citations import (

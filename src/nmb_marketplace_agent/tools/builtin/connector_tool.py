@@ -28,7 +28,11 @@ def make_connector_tool(name: str, tenant_id: str, connector: str, operation: st
             return "Connector tool error: params must be a JSON object"
 
         from nmb_marketplace_agent.config.database import async_session
-        from nmb_marketplace_agent.enterprise.connectors import ConnectorError, EgressPolicy, build_connector
+        from nmb_marketplace_agent.enterprise.connectors import (
+            ConnectorError,
+            EgressPolicy,
+            build_connector,
+        )
         from nmb_marketplace_agent.enterprise.models import ConnectorConfig
 
         async with async_session() as db:

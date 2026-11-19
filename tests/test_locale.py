@@ -1,6 +1,10 @@
 from types import SimpleNamespace
 
-from nmb_marketplace_agent.locale.compiler import compile_rules, compile_specialist, format_reply
+from nmb_marketplace_agent.locale.compiler import (
+    compile_rules,
+    compile_specialist,
+    format_reply,
+)
 from nmb_marketplace_agent.locale.middleware import LocaleMiddleware
 from nmb_marketplace_agent.locale.service import generated_subagent_id
 

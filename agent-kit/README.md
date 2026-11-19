@@ -7,6 +7,7 @@ A CopilotKit-style React layer for any **LangGraph API** server (`langgraph dev`
 | `<LangGraphKitProvider>` | Connection (URL, assistant, token), thread state, tool and readable registries |
 | `<Playground>` | Full workspace like agent-ui: endpoint, auth, agent picker, chat history, streaming chat |
 | `<ChatSidebar>` / `<ChatPopup>` / `<Chat>` | Drop-in chat surfaces for your own app |
+| `<PhoneCall>` | Phone-call surface: live voice turn-taking, or recorded turns with a JSONL dataset export |
 | `useAgentTool` | **Frontend actions**: the agent calls a function in the browser, and can render a custom card for any tool call |
 | `useAgentReadable` | Share app state with the agent (like `useCopilotReadable`) |
 | `useAgent` | Headless hook (messages, `send`, `stop`, interrupts, threads) if you build your own UI |
@@ -68,6 +69,36 @@ streams the pause, the browser runs the handler and calls `/v1/chat/resume`, and
 run continues in the same server-side thread. Thread history and branching are not
 supported yet. Only ever ship a `pk_` key to the browser; allow your site origin in
 the gateway's `CORS_ORIGINS` and in `connect-src` / `script-src`.
+
+### Phone line
+
+A call surface over the same gateway agent — for a voice channel, a phone-style demo, or collecting local-language audio for the training pack. It needs no provider context, just the gateway config.
+
+```tsx
+import { PhoneCall } from "langgraph-kit";
+
+<PhoneCall
+  gateway={{ baseUrl, publishableKey: "pk_live_…", userId, agentId }}
+  mode="live"                       // "live" | "studio"
+  locale={{ code: "sw-TZ", name: "Kiswahili", greeting: "Habari! Nikusaidie nini leo?", profileId }}
+  ttsEndpoint="/api/tts"            // POST { text, voice_id } → audio bytes
+  sttEndpoint="/api/stt"            // POST multipart `file` → { text }
+  voiceId={elevenLabsVoiceId}
+  onDataset={(rows) => console.info(rows)}
+/>
+```
+
+**Live conversation** — SpeechRecognition captures the caller, `/v1/chat` streams the reply, `ttsEndpoint` speaks it (browser `SpeechSynthesis` as fallback), and the line listens again, so it behaves like a call. Typing is always available as a fallback.
+
+**Turn-by-turn (`studio`)** — every caller utterance is recorded with `MediaRecorder`, transcribed by `sttEndpoint` (ElevenLabs Scribe), answered by the agent, and kept as a row. "Download dataset" emits JSONL:
+
+```json
+{"input":"Salio langu ni kiasi gani?","expected_output":"Salio lako ni…","locale_profile_id":"…","locale_code":"sw-TZ","captured_at":"…","source":"stt","has_audio":true,"mode":"studio"}
+```
+
+That shape matches the console's language-lab training pack (`input` / `expected_output`), so clips can be turned into corrections and fine-tuning pairs.
+
+Keep the ElevenLabs key on the server: the example's `app/api/tts` and `app/api/stt` routes proxy it and the browser only ever sees those endpoints. Without them the line still works — recorded clips are kept and the caller can type, while replies use the browser voice.
 
 ### Custom tool UI
 ```tsx

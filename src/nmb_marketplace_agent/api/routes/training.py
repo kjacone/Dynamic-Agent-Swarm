@@ -7,8 +7,7 @@ from sqlmodel import select
 
 from nmb_marketplace_agent.api.deps import get_db
 from nmb_marketplace_agent.config.models import Feedback
-from nmb_marketplace_agent.training import colab, store
-from nmb_marketplace_agent.training import playground
+from nmb_marketplace_agent.training import colab, media, playground, providers, sources, store
 
 router = APIRouter()
 
@@ -16,6 +15,13 @@ router = APIRouter()
 def _guard(fn, *a, **kw):
     try:
         return fn(*a, **kw)
+    except store.TrainingError as e:
+        raise HTTPException(400, str(e))
+
+
+async def _await_guard(fn, *a, **kw):
+    try:
+        return await fn(*a, **kw)
     except store.TrainingError as e:
         raise HTTPException(400, str(e))
 
@@ -137,3 +143,64 @@ async def colab_notebook(body: ColabIn):
         media_type="application/x-ipynb+json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ── dataset sources (search, preview, import) ───────────────────────
+class SourceImportIn(BaseModel):
+    source: str
+    dataset: str
+    name: str
+    instruction_field: str = ""
+    output_field: str = ""
+    limit: int = 500
+    config: str = ""
+    split: str = ""
+
+
+@router.get("/dataset-sources")
+async def dataset_sources():
+    return sources.catalog()
+
+
+@router.get("/dataset-sources/{source_id}/search")
+async def dataset_source_search(source_id: str, q: str = "", limit: int = 10):
+    return await _await_guard(sources.search, source_id, q, limit)
+
+
+@router.get("/dataset-sources/{source_id}/preview")
+async def dataset_source_preview(source_id: str, dataset: str, sample: int = 8):
+    return await _await_guard(sources.preview, source_id, dataset, sample)
+
+
+@router.post("/dataset-sources/import")
+async def dataset_source_import(body: SourceImportIn):
+    return await _await_guard(sources.import_dataset, body.model_dump())
+
+
+# ── providers and media generation ──────────────────────────────────
+@router.get("/providers")
+async def training_providers():
+    return providers.list_providers()
+
+
+@router.get("/providers/{provider_id}/check")
+async def training_provider_check(provider_id: str):
+    return await _await_guard(providers.check, provider_id)
+
+
+@router.get("/media/options")
+async def media_options():
+    return media.options()
+
+
+class MediaIn(BaseModel):
+    kind: str = "image"
+    provider: str = "sample"
+    prompt: str
+    size: str = media.IMAGE_SIZES[0]
+    duration: int = media.VIDEO_DURATIONS[0]
+
+
+@router.post("/media/generate")
+async def media_generate(body: MediaIn):
+    return await _await_guard(media.generate, body.model_dump())

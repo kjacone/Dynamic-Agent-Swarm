@@ -1,12 +1,10 @@
 import uuid
 
-import pytest
 from sqlmodel import select
 
 from nmb_marketplace_agent.enterprise.models import Approval, WorkflowRun
 from nmb_marketplace_agent.enterprise.workflows.engine import Runtime
 from nmb_marketplace_agent.enterprise.workflows.shadow import run_shadow
-
 
 SPEC = {
     "key": "kyc", "inputs": {"name": {"required": True}},

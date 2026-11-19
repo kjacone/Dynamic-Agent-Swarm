@@ -55,10 +55,32 @@ export interface SystemStatus {
   services: ServiceStatus[];
   counts: Record<string, number>;
 }
+export interface ProviderKey {
+  env: string; label: string; secret: boolean; what: string; docs: string | null;
+  pages: Array<"models" | "training" | "knowledge" | "locale" | "voice">;
+  source: "dashboard" | "environment" | null;
+  masked: string;
+  updated_at: string | null;
+}
+export interface AgentWrapperTheme {
+  accent?: string; accentInk?: string; surface?: string; text?: string; muted?: string;
+  mode?: "light" | "dark" | "system"; radius?: number;
+}
+export interface AgentWrapperConfigField {
+  key: string; label?: string; secret?: boolean; share_with_model?: boolean;
+  required?: boolean; placeholder?: string;
+}
+export interface AgentLimits {
+  sources?: "off" | "labels" | "full";
+  suggestions?: string[];
+  wrapper?: { theme?: AgentWrapperTheme; config?: AgentWrapperConfigField[] };
+  [key: string]: unknown;
+}
 export interface Agent {
   id: string; name: string; model: string; system_prompt: string;
   tool_ids: string[]; rag_collection_ids: string[]; subagent_ids: string[];
-  tenant_id: string; created_at?: string;
+  locale_profile_id?: string | null;
+  tenant_id: string; created_at?: string; limits?: AgentLimits;
 }
 export interface SubAgent {
   id: string; name: string; description: string; system_prompt: string;
@@ -113,6 +135,57 @@ export interface EvalRun {
 }
 
 
+export interface LocaleSpeech {
+  provider?: "elevenlabs" | "browser";
+  voice_id?: string; model_id?: string;
+  stability?: number; similarity?: number; style?: number; speed?: number;
+  greeting?: string; delivery?: string;
+  accents?: Array<{ label: string; note?: string }>;
+}
+export interface LocaleInference {
+  model?: string; fallback_model?: string;
+  temperature?: number; reasoning?: "off" | "light" | "deep"; notes?: string;
+}
+export interface LocaleTraining {
+  capture?: boolean; format?: "chat" | "plain" | "preference";
+  min_pairs?: number; target_job?: string; notes?: string;
+}
+export interface LocaleUnderstanding {
+  auto_detect?: boolean; languages?: string[]; translate_to?: string; notes?: string;
+}
+export interface LocaleOutput {
+  mode?: "mirror" | "fixed" | "bilingual"; language?: string;
+  second_language?: string; localise_tools?: boolean;
+}
+export interface LocaleTrainingPack {
+  profile_id: string; name: string; locale_code: string; language: string;
+  format: "chat" | "plain" | "preference"; capture: boolean; target_job: string;
+  count: number; min_pairs: number; ready: boolean;
+  rows: Array<Record<string, unknown>>;
+}
+export interface VoiceModel { id: string; label: string; detail: string }
+export interface VoiceInfo {
+  voice_id: string; name: string; category: string; gender: string;
+  accent: string; language: string; description: string; preview_url: string;
+  public_owner_id?: string; age?: string; use_case?: string;
+}
+export interface VoiceCatalog { voices: VoiceInfo[]; models: VoiceModel[]; defaults: Record<string, number | string> }
+export interface VoiceLibraryPage {
+  voices: VoiceInfo[]; page: number; has_more: boolean; total: number | null; search: string;
+}
+export interface VoiceTicket {
+  url: string; voice_id: string; model_id: string; expires_in: number; characters: number;
+}
+export interface VoiceStatus {
+  provider: string; configured: boolean; source: "dashboard" | "environment" | null;
+  models: VoiceModel[]; defaults: Record<string, number | string>; default_voice_id: string;
+  voices_cached: number; checked: boolean; detail: string;
+  subscription: { tier: string; status: string; characters_used: number | null;
+    character_limit: number | null; characters_left: number | null } | null;
+}
+export interface VoiceTranscript {
+  text: string; language_code: string; language_probability: number | null; model_id: string;
+}
 export interface LocaleProfile {
   id: string; name: string; locale_code: string; languages: string[]; default_language: string;
   register_style: "formal" | "neutral" | "casual";
@@ -123,6 +196,8 @@ export interface LocaleProfile {
   replacements: Array<{ from: string; to: string }>;
   required_phrases: string[]; banned_phrases: string[];
   sample_cases: Array<{ input: string; expected_contains?: string; criteria?: string }>;
+  understanding: LocaleUnderstanding; output: LocaleOutput;
+  speech: LocaleSpeech; inference: LocaleInference; training: LocaleTraining;
   notes: string; enabled: boolean; tenant_id: string; created_at: string; updated_at: string;
 }
 export type LocaleProfileInput = Omit<LocaleProfile, "id" | "tenant_id" | "created_at" | "updated_at">;
@@ -184,6 +259,51 @@ export interface ColabInfo {
     max_seq_length: number;
     prompt: string;
   };
+}
+
+export interface ConnectionState {
+  state: "connected" | "needs_key" | "browse" | "ready";
+  label: string;
+  detail: string;
+}
+export interface DatasetSource {
+  id: string; name: string; about: string; url: string;
+  modalities: string[]; examples: string[]; how: string[];
+  searchable: boolean; previewable: boolean; importable: boolean;
+  browse?: boolean; browse_note?: string;
+  links?: Array<{ label: string; url: string }>;
+  connection: ConnectionState; needs: string[];
+}
+export interface DatasetSourceResult {
+  id: string; title: string; description: string; url: string;
+  meta: Array<{ label: string; value: string }>; flag: string;
+}
+export interface DatasetSourceSearch {
+  source: string; query: string; note: string; results: DatasetSourceResult[];
+}
+export interface DatasetSourcePreview {
+  source: string; dataset: string; fields: string[];
+  rows: Array<Record<string, string>>;
+  total: number | null; detail: string; note: string;
+  suggested: { instruction: string; output: string };
+}
+export interface TrainingProvider {
+  id: string; name: string; kind: string; url: string; summary: string;
+  action: "colab" | "notebook" | "sources" | "check";
+  steps: string[]; connection: ConnectionState; needs: string[];
+}
+export interface MediaOption {
+  id: string; name: string; model: string; about: string;
+  configured: boolean; needs: string[]; note: string;
+}
+export interface MediaOptions {
+  image: MediaOption[]; video: MediaOption[];
+  sizes: string[]; durations: number[];
+}
+export interface MediaResult {
+  kind: "image" | "video"; provider: string; model: string; prompt: string;
+  mime: string; data_url: string; frames: string[]; sample: boolean;
+  note: string; elapsed_ms: number;
 }
 export interface Connection {
   host?: string; public_url?: string; public_key?: string; secret_key?: string;
@@ -443,6 +563,22 @@ export interface LicenceUpgradeRequest {
 export interface DemoAccount { id: string; name: string; title: string; description: string; roles: string[] }
 export interface DemoAccounts { enabled: boolean; ready?: boolean; tenant?: string; accounts: DemoAccount[] }
 
+async function requestBlob(path: string, init: RequestInit = {}): Promise<Blob> {
+  const headers = new Headers(init.headers);
+  if (!headers.has("Content-Type") && !(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+  const tok = getToken();
+  if (tok) headers.set("Authorization", `Bearer ${tok}`);
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json())?.detail ?? detail; } catch { /* not JSON */ }
+    throw new ApiError(res.status, `${res.status} ${detail}`);
+  }
+  return res.blob();
+}
+
 async function download(path: string, filename: string) {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${getToken()}`,
@@ -526,6 +662,14 @@ export const api = {
     request(`/system/connections/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   testConnection: (name: string) =>
     request<ServiceStatus>(`/system/connections/${name}/test`, { method: "POST" }),
+  providerKeys: () => request<{ keys: ProviderKey[]; encrypted: boolean }>("/system/provider-keys"),
+  saveProviderKey: (env: string, value: string) =>
+    request<{ key: ProviderKey }>(`/system/provider-keys/${encodeURIComponent(env)}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    }),
+  clearProviderKey: (env: string) =>
+    request<{ key: ProviderKey }>(`/system/provider-keys/${encodeURIComponent(env)}`, { method: "DELETE" }),
   governanceCost: (days = 30) =>
     request<CostPerCase[]>(`/enterprise/governance/cost?days=${days}`),
 
@@ -673,7 +817,8 @@ export const api = {
   listProviders: () =>
     request<Array<{
       id: string; label: string; base_url: string | null;
-      api_key_env: string | null; local: boolean; hint: string;
+      api_key_env: string | null; key_source: "dashboard" | "environment" | null;
+      local: boolean; hint: string;
     }>>("/models/providers"),
 
   // inference
@@ -746,6 +891,30 @@ export const api = {
     }
     return res.blob();
   },
+  listDatasetSources: () =>
+    request<{ sources: DatasetSource[]; modalities: string[] }>("/training/dataset-sources"),
+  searchDatasetSource: (sourceId: string, q: string, limit = 10) =>
+    request<DatasetSourceSearch>(
+      `/training/dataset-sources/${encodeURIComponent(sourceId)}/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+  previewDatasetSource: (sourceId: string, dataset: string, sample = 8) =>
+    request<DatasetSourcePreview>(
+      `/training/dataset-sources/${encodeURIComponent(sourceId)}/preview?dataset=${encodeURIComponent(dataset)}&sample=${sample}`,
+    ),
+  importDatasetSource: (body: {
+    source: string; dataset: string; name: string;
+    instruction_field?: string; output_field?: string; limit?: number; config?: string; split?: string;
+  }) => request<{ name: string; rows: number; fetched: number; skipped: number; source: string; dataset: string }>(
+    "/training/dataset-sources/import", { method: "POST", body: JSON.stringify(body) },
+  ),
+  listTrainingProviders: () => request<{ providers: TrainingProvider[] }>("/training/providers"),
+  checkTrainingProvider: (id: string) =>
+    request<{ state: string; label: string; detail: string; models?: string[] }>(
+      `/training/providers/${encodeURIComponent(id)}/check`,
+    ),
+  getMediaOptions: () => request<MediaOptions>("/training/media/options"),
+  generateMedia: (body: { kind: "image" | "video"; provider: string; prompt: string; size?: string; duration?: number }) =>
+    request<MediaResult>("/training/media/generate", { method: "POST", body: JSON.stringify(body) }),
 
   // evals
   listEvalDatasets: (t = "default") => request<EvalDataset[]>(`/evals/datasets?tenant_id=${t}`),
@@ -795,6 +964,48 @@ export const api = {
     ),
   previewLocale: (pid: string, body: { text?: string; language?: string } = {}) =>
     request<LocalePreview>(`/locale/profiles/${pid}/preview`, { method: "POST", body: JSON.stringify(body) }),
+  localeTrainingPack: (pid: string) =>
+    request<LocaleTrainingPack>(`/locale/profiles/${pid}/training-pack`),
+  downloadLocaleTrainingPack: (pid: string, filename: string) =>
+    download(`/locale/profiles/${pid}/training-pack.ndjson`, filename),
+
+  // voice (ElevenLabs)
+  voiceStatus: () => request<VoiceStatus>("/voice/status"),
+  voiceVoices: (refresh = false) =>
+    request<VoiceCatalog>(`/voice/voices${refresh ? "?refresh=true" : ""}`),
+  voiceTts: (body: {
+    text: string; profile_id?: string; voice_id?: string; model_id?: string;
+    stability?: number; similarity?: number; style?: number; speed?: number;
+  }) => requestBlob("/voice/tts", { method: "POST", body: JSON.stringify(body) }),
+  voiceTtsTicket: (body: {
+    text: string; profile_id?: string; voice_id?: string; model_id?: string;
+    stability?: number; similarity?: number; style?: number; speed?: number;
+  }) => request<VoiceTicket>("/voice/tts/ticket", { method: "POST", body: JSON.stringify(body) }),
+  voiceLibrary: (params: { search?: string; page?: number; pageSize?: number;
+    category?: string; gender?: string; accent?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.search) qs.set("search", params.search);
+    if (params.page) qs.set("page", String(params.page));
+    if (params.pageSize) qs.set("page_size", String(params.pageSize));
+    if (params.category) qs.set("category", params.category);
+    if (params.gender) qs.set("gender", params.gender);
+    if (params.accent) qs.set("accent", params.accent);
+    const tail = qs.toString();
+    return request<VoiceLibraryPage>(`/voice/library${tail ? `?${tail}` : ""}`);
+  },
+  voiceLibraryAdd: (body: { public_owner_id: string; voice_id: string; name?: string }) =>
+    request<{ voice_id: string; name: string; source_voice_id: string }>("/voice/library/add", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  voiceClone: (form: FormData) => request<{ voice_id: string; name: string; detail: string }>(
+    "/voice/clone", { method: "POST", body: form },
+  ),
+  voiceStt: async (audio: Blob, filename = "turn.webm", languageCode = "") => {
+    const form = new FormData();
+    form.append("file", audio, filename);
+    if (languageCode.trim()) form.append("language_code", languageCode.trim());
+    return request<VoiceTranscript>("/voice/stt", { method: "POST", body: form });
+  },
 
   // observability
   listTraces: (params: Record<string, string | number> = {}) =>
@@ -814,6 +1025,9 @@ export const api = {
     allowed_origins?: string[]; rate_limit_per_min?: number;
   }) => request<ApiKey>("/keys", { method: "POST", body: JSON.stringify(body) }),
   revokeKey: (id: string) => request(`/keys/${id}`, { method: "DELETE" }),
+  updateKey: (id: string, body: {
+    name?: string; allowed_origins?: string[]; rate_limit_per_min?: number;
+  }) => request<ApiKey>(`/keys/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   // ── enterprise ──
 
    listWorkflowRules: (key: string) =>

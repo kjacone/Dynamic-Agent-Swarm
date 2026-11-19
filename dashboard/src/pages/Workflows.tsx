@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, CheckCircle2, Cpu, PauseCircle, Play, Timer, Users, Workflow } from "lucide-react";
+import { Bot, CheckCircle2, Cpu, PauseCircle, Play, Timer, Users, Wand2, Workflow } from "lucide-react";
 import { api, can, type Agent, type Me, type ModelCfg, type RunView, type WfInput, type WfSpec, type WfSummary } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,8 +19,9 @@ import { useToast } from "@/components/ui/toast";
 import { agentIdsIn, agentPack, agentRole, flattenSteps } from "@/lib/workflows";
 import { WorkflowGraph, type WorkflowStepStatus } from "@/components/workflows/WorkflowGraph";
 import { cn, fmtDate } from "@/lib/utils";
+import type { TabId } from "@/components/layout/nav";
 
-export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
+export function Workflows({ me, tenant, onOpenTab }: { me: Me | null; tenant: string; onOpenTab?: (tab: TabId) => void }) {
   const [defs, setDefs] = useState<WfSummary[]>([]);
   const [specs, setSpecs] = useState<Record<string, WfSpec>>({});
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -106,7 +107,8 @@ export function Workflows({ me, tenant }: { me: Me | null; tenant: string }) {
       </div>
 
       {defs.length === 0 ? (
-        <EmptyState title="No workflows yet" body="Install an industry solution (Solutions tab) to get ready-made, configurable workflows." />
+        <EmptyState title="No workflows yet" body="Install an industry solution (Solutions tab) for ready-made workflows — or compose one yourself in the Agent Studio."
+          action={<Button onClick={() => onOpenTab?.("studio")}><Wand2 className="h-4 w-4" /> Build a workflow</Button>} />
       ) : (
         <div className="grid gap-4 md:grid-cols-[270px,minmax(0,1fr)]">
           <Card className="h-fit">

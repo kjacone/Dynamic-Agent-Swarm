@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, Plus, RefreshCw, Send, Smartphone, Trash2 } from "lucide-react";
+import { Check, CheckCheck, Plus, RefreshCw, Send, ShieldCheck, Smartphone, Trash2 } from "lucide-react";
 import {
   api,
   can,
@@ -86,7 +86,7 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
       setContacts(list);
       setAgents(ags);
       setWorkflows(wfs);
-      setNewAgent((a) => a || ags[0]?.id || "");
+      setNewAgent((a) => a || accts[0]?.agent_id || ags.find((x) => x.name !== "default")?.id || ags[0]?.id || "");
       setWfKey((k) => k || wfs[0]?.key || "");
       setWa((w) => w || list[0]?.wa_id || "");
     } catch (e: any) {
@@ -200,12 +200,30 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
   const account = accounts.find((a) => a.id === contact?.account_id) ?? accounts[0];
   const boundAgent = account ? agentRole(agentName(account.agent_id)) : null;
 
+  const steps = [
+    {
+      icon: Smartphone,
+      title: "A customer writes to your number",
+      body: "Each Meta number is bound to one agent. Its messages enter through the same webhook handler live traffic uses and land in that agent's thread.",
+    },
+    {
+      icon: ShieldCheck,
+      title: "The agent answers under your rules",
+      body: "Guardrails, locale, tools and approvals apply exactly as in chat. Every exchange keeps a reopenable thread and is written to the audit chain.",
+    },
+    {
+      icon: Send,
+      title: "Outcomes reach the customer",
+      body: "Send a one-off update, or run a workflow against the thread — completion, failure or an approval request is messaged back automatically.",
+    },
+  ];
+
   return (
     <div>
       <PageHeader
         icon={Smartphone}
         title="WhatsApp"
-        description="Customers start the conversation in WhatsApp; the same agent answers there and sends them an update when their task finishes."
+        description="Run WhatsApp support end to end: connect a number, see the agent answer, and push updates or workflow results back to the customer."
         actions={config && (
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={config.graph_configured ? "pass" : "warn"}
@@ -216,24 +234,53 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
         )}
       />
 
+      <Card className="mb-4">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">What this page gives you</CardTitle>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            A WhatsApp channel for your agents without a separate integration to build — connect a number, watch it handle real conversations, and deliver the outcome to the customer.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-3">
+          {steps.map((s, i) => (
+            <div key={s.title} className="flex gap-3 rounded-xl border p-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                <s.icon className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-medium"><span className="text-muted-foreground">{i + 1} · </span>{s.title}</div>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{s.body}</p>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
       {config && (
         <Card className="mb-4">
-          <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-2 py-3 text-sm">
-            <span className="flex items-center gap-2">
-              <span className="text-muted-foreground">Webhook</span>
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{config.webhook_path}</code>
-            </span>
-            <span className="text-muted-foreground">
-              {config.bound_numbers === 0 ? "No number bound yet" : `${config.bound_numbers} number${config.bound_numbers === 1 ? "" : "s"} bound`}
-            </span>
-            {!config.graph_configured && (
+          <CardContent className="space-y-1.5 py-3 text-sm">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              <span className="flex items-center gap-2">
+                <span className="text-muted-foreground">Webhook</span>
+                <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{config.webhook_path}</code>
+              </span>
               <span className="text-muted-foreground">
+                {config.bound_numbers === 0 ? "No number bound yet" : `${config.bound_numbers} number${config.bound_numbers === 1 ? "" : "s"} bound`}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {config.graph_configured
+                  ? "Live delivery through the Meta Graph API."
+                  : "Simulator mode: the phone below plays the customer. Inbound handling, guardrails, threads and audit are real; only delivery to Meta is stubbed."}
+              </span>
+            </div>
+            {!config.graph_configured && (
+              <span className="block text-xs text-muted-foreground">
                 Set <code className="font-mono text-xs">WHATSAPP_ACCESS_TOKEN</code> and{" "}
                 <code className="font-mono text-xs">WHATSAPP_PHONE_NUMBER_ID</code> for live delivery; sends are recorded in simulator mode until then.
               </span>
             )}
             {!config.app_secret_set && (
-              <span className="text-amber-600 dark:text-amber-400">
+              <span className="block text-xs text-amber-600 dark:text-amber-400">
                 Set <code className="font-mono text-xs">WHATSAPP_APP_SECRET</code> and <code className="font-mono text-xs">WHATSAPP_VERIFY_TOKEN</code>; unsigned webhooks are refused.
               </span>
             )}
@@ -245,8 +292,11 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
         <div className="grid items-start gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="space-y-4">
             <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Numbers</CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle className="text-sm">Connected numbers</CardTitle></CardHeader>
               <CardContent className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  A number is bound to one agent — that agent answers every message sent to it.
+                </p>
                 {accounts.length === 0 && <p className="text-sm text-muted-foreground">Bind the Meta phone number ID to the agent that should answer.</p>}
                 {accounts.map((a) => (
                   <div key={a.id} className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
@@ -318,7 +368,10 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
 
             <div className="space-y-4">
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">Send as a customer</CardTitle></CardHeader>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Try a customer message</CardTitle>
+                  <p className="text-xs text-muted-foreground">You play the customer on the phone. The reply comes from the agent's real prompt, tools and guardrails.</p>
+                </CardHeader>
                 <CardContent className="space-y-2">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div>
@@ -332,8 +385,7 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Type into the phone on the left. The message enters through the same inbound webhook handler as Meta —
-                    guardrails, locale, audit and thread history apply — but the Graph API call is stubbed.
+                    The message enters the same inbound webhook handler as Meta traffic — guardrails, locale, audit and thread history apply — but the Graph API call is stubbed.
                   </p>
                   {transcript?.contact?.thread_id && (
                     <p className="font-mono text-[11px] text-muted-foreground">thread {transcript.contact.thread_id.slice(0, 8)}</p>
@@ -342,7 +394,10 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
               </Card>
 
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">Proactive update</CardTitle></CardHeader>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Send a proactive update</CardTitle>
+                  <p className="text-xs text-muted-foreground">A message you start — “card dispatched”, “order delivered” — without waiting for the customer to write.</p>
+                </CardHeader>
                 <CardContent className="space-y-2">
                   <Input value={updateSubject} onChange={(e) => setUpdateSubject(e.target.value)} placeholder="Subject" />
                   <Textarea rows={2} value={update} onChange={(e) => setUpdate(e.target.value)}
@@ -357,26 +412,27 @@ export function WhatsApp({ me, tenant }: { me: Me | null; tenant: string }) {
               </Card>
 
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-sm">Run a task for this customer</CardTitle></CardHeader>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Run a workflow for this customer</CardTitle>
+                  <p className="text-xs text-muted-foreground">The customer becomes the run's requester, and whatever happens to the run is reported back here.</p>
+                </CardHeader>
                 <CardContent className="space-y-2">
-                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr),120px]">
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr),150px]">
                     <select className="h-9 w-full rounded-lg border bg-background px-2 text-sm" value={wfKey}
                       onChange={(e) => setWfKey(e.target.value)}>
                       {workflows.length === 0 && <option value="">No workflows installed</option>}
                       {workflows.map((w) => <option key={w.key} value={w.key}>{w.name || w.key}</option>)}
                     </select>
-                    <label className="flex items-center gap-2 text-sm">
+                    <label className="flex items-center gap-2 text-sm" title="Wait for the run to finish before replying in the console">
                       <input type="checkbox" checked={wfWait} onChange={(e) => setWfWait(e.target.checked)} />
-                      wait
+                      wait for result
                     </label>
                   </div>
                   <Textarea className="font-mono text-xs" rows={3} value={wfInputs}
                     onChange={(e) => setWfInputs(e.target.value)} placeholder='{"customer_id": "..."}' />
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      The run is attributed to this WhatsApp customer; completion, failure or cancellation is sent back here.
-                    </span>
-                    <AsyncButton onRun={startTask} disabled={!wa || !wfKey || !canRun}>Run task</AsyncButton>
+                    <span className="text-xs text-muted-foreground">Completion, failure or cancellation is messaged to this customer.</span>
+                    <AsyncButton onRun={startTask} disabled={!wa || !wfKey || !canRun}>Run workflow</AsyncButton>
                   </div>
                   {!canRun && <p className="text-xs text-amber-600 dark:text-amber-400">You need the workflows:run permission.</p>}
                 </CardContent>

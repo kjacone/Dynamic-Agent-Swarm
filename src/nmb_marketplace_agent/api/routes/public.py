@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -11,12 +12,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nmb_marketplace_agent.api.auth import (
     ChatPrincipal,
+    agent_ids_for_key,
     require_api_key,
     require_chat_principal,
 )
 from nmb_marketplace_agent.api.deps import get_db
-from nmb_marketplace_agent.config.models import AgentConfig, ApiKey, Feedback, ThreadOwner
-from nmb_marketplace_agent.rag.citations import new_run_ref, source_mode, sources_for_run
+from nmb_marketplace_agent.config.models import (
+    AgentConfig,
+    ApiKey,
+    Feedback,
+    ThreadOwner,
+)
+from nmb_marketplace_agent.rag.citations import (
+    new_run_ref,
+    source_mode,
+    sources_for_run,
+)
 
 router = APIRouter()
 
@@ -24,7 +35,54 @@ router = APIRouter()
 class SessionRequest(BaseModel):
     user_id: str | None = Field(default=None, max_length=128)
     customer_id: str | None = Field(default=None, max_length=128)
+    # Optional — pick one of the agents listed by GET /v1/agents for this key.
+    agent_id: str | None = Field(default=None, max_length=64)
     ttl_s: int | None = Field(default=None, ge=60, le=3600)
+
+
+@router.get("/agents")
+async def list_agents(key: ApiKey = Depends(require_api_key),
+                      db: AsyncSession = Depends(get_db)):
+    """Agents this key may start conversations with.
+
+    The key's own agent plus the tenant's published agents — everything a
+    customer wrapper may show in a picker. Sessions and chat reject any other id.
+    """
+    ids = await agent_ids_for_key(db, key)
+    rows = (await db.execute(select(AgentConfig).where(
+        AgentConfig.tenant_id == key.tenant_id,
+        AgentConfig.id.in_(ids),
+    ))).scalars().all()
+    agents = [{"id": a.id, "name": a.name, "default": a.id == key.agent_id,
+               **_wrapper_view(a)} for a in rows]
+    agents.sort(key=lambda a: (not a["default"], a["name"].lower()))
+    return {"agents": agents, "default_agent_id": key.agent_id}
+
+
+def _wrapper_view(agent: AgentConfig) -> dict:
+    """What a customer wrapper may show: starting prompts, theme and config fields
+    (names only — values are supplied by the page at run time)."""
+    limits = agent.limits if isinstance(agent.limits, dict) else {}
+    view: dict = {}
+    suggestions = limits.get("suggestions")
+    if isinstance(suggestions, list) and suggestions:
+        view["suggestions"] = [str(s)[:160] for s in suggestions if isinstance(s, str)][:6]
+    wrapper = limits.get("wrapper") if isinstance(limits.get("wrapper"), dict) else {}
+    theme = wrapper.get("theme") if isinstance(wrapper.get("theme"), dict) else {}
+    fields = wrapper.get("config") if isinstance(wrapper.get("config"), list) else []
+    if theme or fields:
+        view["wrapper"] = {
+            "theme": {k: theme[k] for k in
+                      ("accent", "accentInk", "surface", "text", "muted", "mode", "radius")
+                      if k in theme},
+            "config": [{
+                "key": f.get("key"), "label": f.get("label") or f.get("key"),
+                "secret": bool(f.get("secret")), "required": bool(f.get("required")),
+                "placeholder": f.get("placeholder") or "",
+                "share_with_model": bool(f.get("share_with_model")),
+            } for f in fields if isinstance(f, dict) and f.get("key")],
+        }
+    return view
 
 
 @router.post("/session")
@@ -47,15 +105,23 @@ async def create_session(body: SessionRequest, key: ApiKey = Depends(require_api
         subject = f"anon_{uuid.uuid4().hex[:12]}"
     customer_id = ((body.customer_id or "").strip() or None) if scope == "end_user" else None
 
+    agent_id = key.agent_id
+    requested = (body.agent_id or "").strip()
+    if requested and requested != agent_id:
+        if requested not in await agent_ids_for_key(db, key):
+            raise HTTPException(403, "API key not authorized for this agent")
+        agent_id = requested
+
     token, ttl = mint_session(
-        tenant_id=key.tenant_id, agent_id=key.agent_id, key_id=key.id,
+        tenant_id=key.tenant_id, agent_id=agent_id, key_id=key.id,
         subject=subject, customer_id=customer_id, scope=scope, ttl_s=body.ttl_s,
     )
     await audit.record(db, tenant_id=key.tenant_id, actor=f"key:{key.prefix or key.id}",
                        actor_type="api_key", action="session.issued", resource_type="agent",
-                       resource_id=key.agent_id,
-                       details={"scope": scope, "user_id": subject, "customer_id": customer_id, "ttl_s": ttl})
-    return {"token": token, "expires_in": ttl, "scope": scope,
+                       resource_id=agent_id,
+                       details={"scope": scope, "user_id": subject, "customer_id": customer_id,
+                                "agent_id": agent_id, "ttl_s": ttl})
+    return {"token": token, "expires_in": ttl, "scope": scope, "agent_id": agent_id,
             "user_id": subject, "customer_id": customer_id}
 
 
@@ -71,6 +137,9 @@ class ChatRequest(BaseModel):
     # policy and fenced off from the user's instruction.
     context: object | None = None
     readables: object | None = None
+    # Page-supplied key/value config (e.g. an end-user JWT for a tool). Never
+    # logged, never returned; reserved gateway keys cannot be overridden.
+    config: dict[str, str] | None = None
 
 
 @router.post("/chat")
@@ -83,7 +152,12 @@ async def chat(
     # The key/session is the source of truth. Body may confirm but never override.
     agent_id, tenant_id = principal.agent_id, principal.tenant_id
     if body.agent_id and body.agent_id != agent_id:
-        raise HTTPException(403, "API key not authorized for this agent")
+        # Raw key calls may pick another agent from the key's allowed set; a
+        # session is bound to the agent it was minted for.
+        if principal.auth != "api_key" or not principal.key \
+                or body.agent_id not in await agent_ids_for_key(db, principal.key):
+            raise HTTPException(403, "API key not authorized for this agent")
+        agent_id = body.agent_id
     if body.tenant_id and body.tenant_id != tenant_id:
         raise HTTPException(403, "API key not authorized for this tenant")
 
@@ -101,6 +175,17 @@ async def chat(
                                action="chat.identity_asserted", resource_type="agent",
                                resource_id=agent_id, details={"user_id": user_id})
 
+    agent = await db.get(AgentConfig, agent_id)
+    if agent is not None and agent.tenant_id != tenant_id:
+        agent = None
+    host_config = _host_config(agent, body.config)
+    if host_config:
+        from nmb_marketplace_agent.enterprise import audit
+        await audit.record(db, tenant_id=tenant_id, actor=principal.actor,
+                           actor_type=principal.actor_type, action="chat.host_config",
+                           resource_type="agent", resource_id=agent_id,
+                           details={"keys": sorted(host_config)})
+
     from nmb_marketplace_agent.enterprise.hooks import enforce_chat
 
     # Enterprise controls: guardrails (PII redaction / injection block), hash-only audit, usage metering.
@@ -113,6 +198,7 @@ async def chat(
     body.message = await enforce_chat(db, tenant_id=tenant_id, agent_id=agent_id,
                                       actor=principal.actor, actor_type=principal.actor_type,
                                       message=body.message)
+    app_context = _with_host_config(app_context, agent, host_config)
     lg_text = f"{app_context}\n\n{body.message}" if app_context else body.message
 
     from langgraph_sdk import get_client
@@ -150,10 +236,9 @@ async def chat(
 
     lg_in = {"messages": [{"role": "user", "content": lg_text}]}
     run_ref = new_run_ref()
-    agent = await db.get(AgentConfig, agent_id)
-    sources_mode = source_mode(agent.limits if agent and agent.tenant_id == tenant_id else None)
+    sources_mode = source_mode(agent.limits if agent else None)
     locale_profile = None
-    if agent and agent.tenant_id == tenant_id:
+    if agent:
         from nmb_marketplace_agent.locale.service import locale_for_agent
 
         locale_profile, _ = await locale_for_agent(db, agent)
@@ -163,6 +248,7 @@ async def chat(
         "citation_run_id": run_ref,
         **({"user_id": user_id} if user_id else {}),
         **({"customer_id": customer_id} if customer_id else {}),
+        **({"host_config": host_config} if host_config else {}),
     }}
 
     accept = request.headers.get("accept", "").lower()
@@ -230,6 +316,8 @@ class ResumeRequest(BaseModel):
     # Either {interrupt_id: value} (agent-kit) or a bare value for a single pause.
     resume: object = None
     user_id: str | None = Field(default=None, max_length=128)
+    # Same page-supplied config as /chat: the resumed run's tools need it too.
+    config: dict[str, str] | None = None
 
 
 MAX_RESUME_CHARS = 64_000
@@ -285,9 +373,18 @@ async def resume_chat(
 
     engine = PolicyEngine(await load_policy(db, tenant_id))
     agent = await db.get(AgentConfig, agent_id)
-    sources_mode = source_mode(agent.limits if agent and agent.tenant_id == tenant_id else None)
+    if agent is not None and agent.tenant_id != tenant_id:
+        agent = None
+    host_config = _host_config(agent, body.config)
+    if host_config:
+        from nmb_marketplace_agent.enterprise import audit
+        await audit.record(db, tenant_id=tenant_id, actor=principal.actor,
+                           actor_type=principal.actor_type, action="chat.host_config",
+                           resource_type="agent", resource_id=agent_id,
+                           details={"keys": sorted(host_config), "resume": True})
+    sources_mode = source_mode(agent.limits if agent else None)
     locale_profile = None
-    if agent and agent.tenant_id == tenant_id:
+    if agent:
         from nmb_marketplace_agent.locale.service import locale_for_agent
 
         locale_profile, _ = await locale_for_agent(db, agent)
@@ -297,6 +394,7 @@ async def resume_chat(
         "citation_run_id": new_run_ref(),
         **({"user_id": user_id} if user_id else {}),
         **({"customer_id": customer_id} if customer_id else {}),
+        **({"host_config": host_config} if host_config else {}),
     }}
     return StreamingResponse(
         _chat_sse(client=client, thread_id=body.thread_id, lg_in=None, command=command,
@@ -449,7 +547,8 @@ async def delete_thread(
 async def request_handoff(body: HandoffRequest, principal: ChatPrincipal = Depends(require_chat_principal),
                           db: AsyncSession = Depends(get_db)):
     """Ask for a human. Idempotent while a handoff is already open."""
-    from nmb_marketplace_agent.enterprise import audit, handoff as handoff_service
+    from nmb_marketplace_agent.enterprise import audit
+    from nmb_marketplace_agent.enterprise import handoff as handoff_service
 
     user_id, customer_id = _customer_identity(principal, body.user_id)
     owner = await db.get(ThreadOwner, body.thread_id)
@@ -584,6 +683,74 @@ def _context_block(context: object, readables: object) -> str:
             f"{body}\n{CONTEXT_SUFFIX}")[:MAX_CONTEXT_CHARS]
 
 
+HOST_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+RESERVED_HOST_KEYS = {"agent_id", "tenant_id", "user_id", "customer_id", "thread_id",
+                      "citation_run_id", "host_config", "configurable"}
+MAX_HOST_CONFIG = 24
+MAX_HOST_VALUE = 4096
+
+
+def _host_config(agent: AgentConfig | None, raw: object) -> dict[str, str]:
+    """Validate page-supplied key/value config.
+
+    When the agent declares ``limits.wrapper.config`` fields, only those keys are
+    accepted. Nothing is stored or logged: values live for one run, are passed to
+    tools as ``configurable.host_config`` and reach the model only when a declared
+    field is marked ``share_with_model``.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    if len(raw) > MAX_HOST_CONFIG:
+        raise HTTPException(422, f"config accepts at most {MAX_HOST_CONFIG} keys")
+    limits = agent.limits if agent and isinstance(agent.limits, dict) else {}
+    wrapper = limits.get("wrapper") if isinstance(limits.get("wrapper"), dict) else {}
+    declared = {
+        str(f.get("key")): f for f in (wrapper.get("config") or [])
+        if isinstance(f, dict) and f.get("key")
+    }
+    out: dict[str, str] = {}
+    for raw_key, value in raw.items():
+        key = str(raw_key).strip()
+        if not HOST_KEY_RE.match(key) or key.lower() in RESERVED_HOST_KEYS:
+            continue
+        if declared and key not in declared:
+            continue
+        if value is None:
+            continue
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        if len(text) > MAX_HOST_VALUE:
+            raise HTTPException(422, f"config.{key} is too large")
+        if text:
+            out[key] = text
+    return out
+
+
+def _with_host_config(block: str, agent: AgentConfig | None, cfg: dict[str, str]) -> str:
+    """Add the declared, model-visible config keys to the fenced host-context block."""
+    if not cfg:
+        return block
+    limits = agent.limits if agent and isinstance(agent.limits, dict) else {}
+    wrapper = limits.get("wrapper") if isinstance(limits.get("wrapper"), dict) else {}
+    declared = {
+        str(f.get("key")): f for f in (wrapper.get("config") or [])
+        if isinstance(f, dict) and f.get("key")
+    }
+    lines = []
+    for key, value in cfg.items():
+        field = declared.get(key) or {}
+        if not field.get("share_with_model") or field.get("secret"):
+            continue
+        text = " ".join(str(value).split())
+        lines.append(f"- config.{key}: {text[:500]}")
+    if not lines:
+        return block
+    body = "\n".join(lines)
+    merged = (f"{block[:-len(CONTEXT_SUFFIX)]}\n{body}\n{CONTEXT_SUFFIX}"
+              if block.endswith(CONTEXT_SUFFIX)
+              else f"{CONTEXT_PREFIX}\n{body}\n{CONTEXT_SUFFIX}")
+    return merged[:MAX_CONTEXT_CHARS]
+
+
 def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, default=str)}\n\n"
 
@@ -607,7 +774,10 @@ async def _chat_sse(*, client, thread_id: str, lg_in, command, lg_cfg: dict, run
     `sources` when the run completes.
     """
     from nmb_marketplace_agent.enterprise.guardrails import OutputStreamGuard
-    from nmb_marketplace_agent.enterprise.hooks import OUTPUT_BLOCK_MESSAGE, audit_output
+    from nmb_marketplace_agent.enterprise.hooks import (
+        OUTPUT_BLOCK_MESSAGE,
+        audit_output,
+    )
 
     mode = os.environ.get("CHAT_OUTPUT_STREAMING", "guarded").lower()
     if mode not in ("guarded", "buffered"):

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, Check, CheckCircle2, Clock, FlaskConical, GitBranch, Inbox, ShieldCheck, TimerOff, X, XCircle,
+  AlertTriangle, Check, CheckCircle2, ChevronDown, Clock, FlaskConical, GitBranch, Inbox, ShieldCheck, TimerOff, X, XCircle,
 } from "lucide-react";
 import { api, can, EvalDataset, type ApprovalItem, type Me } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,10 @@ import { cn, fmtDate } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 
 const FILTERS = ["pending", "approved", "rejected", "expired"] as const;
+const SELECT = "mt-1.5 h-10 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+
+const initials = (name: string) =>
+  name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase()).join("") || "?";
 
 /** Why the current user cannot decide this request (mirrors server rules; the server is the authority). */
 function blocker(a: ApprovalItem, me: Me | null): string | null {
@@ -66,7 +70,7 @@ export function Approvals({ me, onChanged }: { me: Me | null; onChanged?: () => 
             toast.push(`SLA sweep: ${r.escalated} escalated, ${r.expired} expired`, "success"); load(); loadCounts(); onChanged?.();
           }}><TimerOff className="h-4 w-4" /> Run SLA sweep</AsyncButton>) : undefined} />
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Clock} tone="amber" label="Awaiting decision" value={counts.pending ?? "—"} hint={status === "pending" && overdue ? `${overdue} past SLA` : "Maker-checker queue"} />
         <StatCard icon={CheckCircle2} tone="emerald" label="Approved" value={counts.approved ?? "—"} />
         <StatCard icon={XCircle} tone="red" label="Rejected" value={counts.rejected ?? "—"} />
@@ -74,14 +78,21 @@ export function Approvals({ me, onChanged }: { me: Me | null; onChanged?: () => 
       </div>
 
       {me?.auth === "admin_token" && (
-        <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <span>You are signed in with the shared admin token. You can view approvals but not decide them — segregation of duties requires a named approver account (SSO or tenant JWT).</span>
+        <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-sm">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-4 w-4" />
+          </span>
+          <div>
+            <div className="font-medium">View-only access</div>
+            <div className="text-muted-foreground">
+              You are signed in with the shared admin token. Deciding needs a named approver account (SSO or tenant JWT) so duties stay separated.
+            </div>
+          </div>
         </div>
       )}
 
       <FilterTabs
-        className="mb-4"
+        className="mb-5"
         value={status}
         onChange={setStatus}
         options={FILTERS.map((f) => ({ id: f, label: f, count: counts[f] }))}
@@ -95,7 +106,7 @@ export function Approvals({ me, onChanged }: { me: Me | null; onChanged?: () => 
             body={status === "pending" ? "You're all caught up — new requests will appear here automatically." : "Nothing has been decided in this state yet."}
           />
         )
-        : <div className="space-y-3">{items.map((a) => <ApprovalCard key={a.id} a={a} me={me} onAct={(decision) => setActing({ a, decision })} />)}</div>}
+        : <div className="space-y-2">{items.map((a) => <ApprovalCard key={a.id} a={a} me={me} onAct={(decision) => setActing({ a, decision })} />)}</div>}
 
       {acting && <DecideDialog {...acting} onClose={(changed) => { setActing(null); if (changed) { load(); loadCounts(); onChanged?.(); } }} />}
     </div>
@@ -107,80 +118,121 @@ function ApprovalCard({ a, me, onAct }: { a: ApprovalItem; me: Me | null; onAct:
   const due = dueLabel(a.due_at, a.status === "pending");
   const approvals = a.decisions.filter((d) => d.decision === "approve").length;
   const [asEval, setAsEval] = useState(false);
+  const [asRule, setAsRule] = useState(false);
+  const [showCase, setShowCase] = useState(false);
   const decided = a.status === "approved" || a.status === "rejected";
-    const [asRule, setAsRule] = useState(false);
-  const accent = a.status === "approved" ? "border-l-emerald-500"
-    : a.status === "rejected" ? "border-l-red-500"
-      : a.escalated || due.overdue ? "border-l-amber-500"
-        : "border-l-sky-500";
+  const hasContext = Object.keys(a.context || {}).length > 0;
+  const requester = a.requester || "system";
+
+  const accent = a.status === "approved" ? "bg-emerald-500"
+    : a.status === "rejected" ? "bg-red-500"
+      : a.escalated || due.overdue ? "bg-amber-500"
+        : "bg-sky-500";
 
   return (
-    <Card className={cn("overflow-hidden border-l-4 transition-shadow hover:shadow-md", accent)}>
-      <CardContent className="space-y-3 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="font-medium">{a.title || a.step_id}</div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
-              <span>Requested by <b>{a.requester || "system"}</b> · {fmtDate(a.created_at)}</span>
-              {due.text && (
-                <span className={cn(
-                  "rounded-full border px-1.5 py-0.5 text-[10px]",
-                  due.overdue ? "border-red-500/30 bg-red-500/10 font-medium text-red-600 dark:text-red-400" : "bg-muted/70",
-                )}>{due.text}</span>
-              )}
+    <Card className="relative overflow-hidden transition-shadow hover:shadow-md">
+      <span className={cn("absolute inset-y-0 left-0 w-1", accent)} />
+      <CardContent className="space-y-2 p-3 pl-4">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary" aria-hidden>
+            {initials(requester)}
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-sm font-semibold leading-tight" title={a.title || a.step_id}>{a.title || a.step_id}</h3>
+            <div className="truncate text-[11px] text-muted-foreground">
+              {requester} · {fmtDate(a.created_at)}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
+            {due.text && (
+              <span className={cn(
+                "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px]",
+                due.overdue ? "bg-red-500/10 font-medium text-red-600 dark:text-red-400" : "bg-muted text-muted-foreground",
+              )}>
+                <Clock className="h-3 w-3" /> {due.text}
+              </span>
+            )}
             {a.escalated && <StatusBadge value="escalated" />}
             <StatusBadge value={a.status} />
           </div>
         </div>
 
-        {a.summary && <p className="text-sm">{a.summary}</p>}
+        {a.summary && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{a.summary}</p>}
 
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Needs</span>
-          <span className="font-medium">{approvals} of {a.required_approvals} approval{a.required_approvals > 1 ? "s" : ""}</span>
-          <span className="flex gap-1">{Array.from({ length: a.required_approvals }, (_, i) => (
-            <span key={i} className={`h-2 w-6 rounded-full ${i < approvals ? "bg-emerald-500" : "bg-muted"}`} />))}</span>
-          <span className="text-muted-foreground">· roles:</span>{a.allowed_roles.map((r) => <Chip key={r}>{r}</Chip>)}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="flex w-14 gap-0.5" role="progressbar" aria-valuemin={0} aria-valuemax={a.required_approvals} aria-valuenow={approvals}>
+              {Array.from({ length: a.required_approvals }, (_, i) => (
+                <span key={i} className={cn("h-1.5 flex-1 rounded-full", i < approvals ? "bg-emerald-500" : "bg-border")} />
+              ))}
+            </span>
+            <span className="tabular-nums text-muted-foreground">{approvals}/{a.required_approvals}</span>
+            {a.allowed_roles.slice(0, 2).map((r) => <Chip key={r}>{r}</Chip>)}
+            {a.allowed_roles.length > 2 && <span className="text-muted-foreground">+{a.allowed_roles.length - 2}</span>}
+          </div>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            {a.status === "pending" && (
+              <>
+                <Button size="sm" className="h-7 gap-1 px-2.5 text-xs" disabled={!!why} onClick={() => onAct("approve")}>
+                  <Check className="h-3.5 w-3.5" /> Approve
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 gap-1 px-2.5 text-xs text-red-600 hover:text-red-600 dark:text-red-400" disabled={!!why} onClick={() => onAct("reject")}>
+                  <X className="h-3.5 w-3.5" /> Reject
+                </Button>
+              </>
+            )}
+            {decided && (
+              <>
+                <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={() => setAsEval(true)} title="Capture as a reusable test case">
+                  <FlaskConical className="h-3.5 w-3.5" /> Eval set
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={() => setAsRule(true)} title="Capture as a workflow rule">
+                  <GitBranch className="h-3.5 w-3.5" /> Rule
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
+        {a.status === "pending" && why && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" /> {why}
+          </div>
+        )}
+
         {a.decisions.length > 0 && (
-          <ul className="space-y-1 rounded-md bg-muted/40 p-2 text-xs">
-            {a.decisions.map((d, i) => (
-              <li key={i}><StatusBadge value={d.decision === "approve" ? "approved" : "rejected"} /> <b>{d.by}</b> · {fmtDate(d.ts)}
-                {d.comment && <span className="text-muted-foreground"> — “{d.comment}”</span>}</li>))}
+          <ul className="space-y-1 border-t pt-2">
+            {a.decisions.map((d, i) => {
+              const ok = d.decision === "approve";
+              return (
+                <li key={i} className="flex items-center gap-1.5 text-[11px]">
+                  {ok
+                    ? <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+                    : <X className="h-3 w-3 shrink-0 text-red-500" />}
+                  <span className="shrink-0"><b>{d.by}</b> <span className="text-muted-foreground">{fmtDate(d.ts)}</span></span>
+                  {d.comment && <span className="truncate text-muted-foreground" title={d.comment}>— “{d.comment}”</span>}
+                </li>
+              );
+            })}
           </ul>
         )}
 
-        {Object.keys(a.context || {}).length > 0 && (
-          <div className="rounded-xl border bg-muted/10 p-3">
-            <CaseData data={a.context} />
-          </div>
-        )}
-
-        {a.status === "pending" && (
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <Button size="sm" disabled={!!why} onClick={() => onAct("approve")}><Check className="h-3.5 w-3.5" /> Approve</Button>
-            <Button size="sm" variant="outline" className="text-red-600 hover:text-red-600 dark:text-red-400" disabled={!!why} onClick={() => onAct("reject")}>
-              <X className="h-3.5 w-3.5" /> Reject
-            </Button>
-            {why && <span className="text-xs text-muted-foreground">{why}</span>}
-          </div>
-        )}
-
-        {decided && (
-          <div className="flex flex-wrap items-center gap-2 border-t pt-2">
-            <Button size="sm" variant="outline" onClick={() => setAsEval(true)}>
-              <FlaskConical className="h-3.5 w-3.5" /> Add to eval set
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setAsRule(true)}>
-              <GitBranch className="h-3.5 w-3.5" /> Turn into rule
-            </Button>
-            <span className="text-xs text-muted-foreground">
-              Capture this decision as a reusable test case, or a workflow rule.
-            </span>
+        {hasContext && (
+          <div>
+            <button
+              onClick={() => setShowCase((v) => !v)}
+              aria-expanded={showCase}
+              className="flex items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            >
+              <ChevronDown className={cn("h-3 w-3 transition-transform", showCase && "rotate-180")} />
+              {showCase ? "Hide case details" : "Case details"}
+            </button>
+            {showCase && (
+              <div className="mt-1.5 rounded-lg border bg-muted/10 p-2">
+                <CaseData data={a.context} compact />
+              </div>
+            )}
           </div>
         )}
       </CardContent>
@@ -230,17 +282,16 @@ function AddEvalDialog({ approval: a, onClose }: { approval: ApprovalItem; onClo
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
+          <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-violet-500/15 text-violet-600 dark:text-violet-400">
+            <FlaskConical className="h-5 w-5" />
+          </div>
           <DialogTitle>Add “{a.title || a.step_id}” to an eval set</DialogTitle>
           <DialogDescription>Turn this human decision into a regression case the LLM judge can score future runs against.</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="max-h-[60vh] space-y-4 overflow-auto pr-1">
           <div>
             <Label>Dataset</Label>
-            <select
-              value={datasetId}
-              onChange={(e) => setDatasetId(e.target.value)}
-              className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm"
-            >
+            <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)} className={SELECT}>
               <option value="">Select dataset…</option>
               {(datasets ?? []).map((d) => (
                 <option key={d.id} value={d.id}>{d.name} ({d.cases} cases)</option>
@@ -249,17 +300,17 @@ function AddEvalDialog({ approval: a, onClose }: { approval: ApprovalItem; onClo
           </div>
           <div>
             <Label>Input</Label>
-            <Textarea rows={4} value={input} onChange={(e) => setInput(e.target.value)} />
+            <Textarea rows={4} className="mt-1.5 font-mono text-xs" value={input} onChange={(e) => setInput(e.target.value)} />
           </div>
           <div>
             <Label>Criteria</Label>
-            <Textarea rows={3} value={criteria} onChange={(e) => setCriteria(e.target.value)} />
+            <Textarea rows={3} className="mt-1.5" value={criteria} onChange={(e) => setCriteria(e.target.value)} />
           </div>
           <div>
             <Label>Expected delegations (optional)</Label>
-            <Input value={expect} onChange={(e) => setExpect(e.target.value)} placeholder="document-analyst, risk-analyst" />
+            <Input className="mt-1.5" value={expect} onChange={(e) => setExpect(e.target.value)} placeholder="document-analyst, risk-analyst" />
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">
             The reviewer's decision ({a.status}) and comment are captured in the criteria so the LLM judge knows what "correct" means.
           </p>
         </div>
@@ -287,21 +338,32 @@ function DecideDialog({ a, decision, onClose }: { a: ApprovalItem; decision: "ap
     <Dialog open onOpenChange={(v) => !v && onClose(false)}>
       <DialogContent>
         <DialogHeader>
+          <div className={cn(
+            "mb-2 flex h-11 w-11 items-center justify-center rounded-xl",
+            needReason ? "bg-red-500/15 text-red-600 dark:text-red-400" : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+          )}>
+            {needReason ? <XCircle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+          </div>
           <DialogTitle>{decision === "approve" ? "Approve" : "Reject"}: {a.title || a.step_id}</DialogTitle>
           <DialogDescription>
             {a.summary || `${a.requester || "system"} requested a decision on step “${a.step_id}”.`}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2">
+        <div className="space-y-3">
           {a.context && Object.keys(a.context).length > 0 && (
-            <div className="max-h-60 overflow-auto rounded-lg border bg-muted/10 p-2">
+            <div className="max-h-60 overflow-auto rounded-xl border bg-muted/10 p-2.5">
               <CaseData data={a.context} compact />
             </div>
           )}
-          <Label>{needReason ? "Reason (required)" : "Comment (optional)"}</Label>
-          <Textarea rows={3} autoFocus value={comment} onChange={(e) => setComment(e.target.value)}
-            placeholder={needReason ? "Why is this being rejected?" : "Evidence reviewed, conditions, etc."} />
-          <p className="text-xs text-muted-foreground">Your name, decision and comment become part of the tamper-evident audit trail.</p>
+          <div>
+            <Label>{needReason ? "Reason (required)" : "Comment (optional)"}</Label>
+            <Textarea rows={3} autoFocus className="mt-1.5" value={comment} onChange={(e) => setComment(e.target.value)}
+              placeholder={needReason ? "Why is this being rejected?" : "Evidence reviewed, conditions, etc."} />
+          </div>
+          <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Your name, decision and comment become part of the tamper-evident audit trail.
+          </p>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onClose(false)}>Cancel</Button>
@@ -313,7 +375,6 @@ function DecideDialog({ a, decision, onClose }: { a: ApprovalItem; decision: "ap
     </Dialog>
   );
 }
-
 
 function TurnIntoRuleDialog({ approval: a, onClose }: { approval: ApprovalItem; onClose: () => void }) {
   const [workflowKey, setWorkflowKey] = useState<string | null>(null);
@@ -362,31 +423,32 @@ function TurnIntoRuleDialog({ approval: a, onClose }: { approval: ApprovalItem; 
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>
-            Turn “{a.title || a.step_id}” into a workflow rule
-          </DialogTitle>
+          <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-sky-500/15 text-sky-600 dark:text-sky-400">
+            <GitBranch className="h-5 w-5" />
+          </div>
+          <DialogTitle>Turn “{a.title || a.step_id}” into a workflow rule</DialogTitle>
           <DialogDescription>Future runs will be routed or blocked automatically when the expression matches.</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          {!workflowKey && <div className="text-sm text-muted-foreground">Loading workflow…</div>}
+        <div className="max-h-[60vh] space-y-4 overflow-auto pr-1">
+          {!workflowKey && <div className="animate-pulse text-sm text-muted-foreground">Loading workflow…</div>}
           {workflowKey && (
             <>
-              <div className="rounded-md bg-muted/40 p-2 text-xs">
-                <b>Case data:</b>
+              <div className="rounded-xl border bg-muted/30 p-3 text-xs">
+                <div className="mb-1 font-medium">Case data</div>
                 <JsonView data={a.context} className="mt-1" />
               </div>
               <div>
                 <Label>Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} />
+                <Input className="mt-1.5" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
               <div>
                 <Label>When</Label>
-                <Textarea rows={2} value={when} onChange={(e) => setWhen(e.target.value)}
+                <Textarea rows={2} className="mt-1.5 font-mono text-xs" value={when} onChange={(e) => setWhen(e.target.value)}
                   placeholder='risk.score > 70 and risk.confidence < 0.7' />
-                <div className="mt-2 flex flex-wrap gap-1">
+                <div className="mt-2 flex flex-wrap gap-1.5">
                   {TEMPLATES.map(([label, expr]) => (
                     <button key={label} onClick={() => setWhen(expr)}
-                      className="rounded-md border px-2 py-1 text-xs hover:bg-muted">
+                      className="rounded-full border px-2.5 py-1 text-xs transition-colors hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
                       {label}
                     </button>
                   ))}
@@ -394,8 +456,7 @@ function TurnIntoRuleDialog({ approval: a, onClose }: { approval: ApprovalItem; 
               </div>
               <div>
                 <Label>Action</Label>
-                <select value={action} onChange={(e) => setAction(e.target.value as any)}
-                  className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm">
+                <select value={action} onChange={(e) => setAction(e.target.value as any)} className={SELECT}>
                   <option value="route_to">route_to — skip to a step</option>
                   <option value="block">block — fail the run</option>
                 </select>
@@ -403,8 +464,7 @@ function TurnIntoRuleDialog({ approval: a, onClose }: { approval: ApprovalItem; 
               {action === "route_to" && (
                 <div>
                   <Label>Target step</Label>
-                  <select value={target} onChange={(e) => setTarget(e.target.value)}
-                    className="mt-1 w-full rounded-md border bg-background px-2 py-1 text-sm">
+                  <select value={target} onChange={(e) => setTarget(e.target.value)} className={SELECT}>
                     <option value="">Select step…</option>
                     {steps.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -414,7 +474,7 @@ function TurnIntoRuleDialog({ approval: a, onClose }: { approval: ApprovalItem; 
                   </select>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground">
+              <p className="rounded-lg bg-muted/40 p-2.5 text-xs leading-relaxed text-muted-foreground">
                 The rule is attributed to approval <code>{a.id.slice(0, 8)}</code> in the audit trail.
                 It will fire on future runs of <code>{workflowKey}</code> whenever its expression matches.
               </p>

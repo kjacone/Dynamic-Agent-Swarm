@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from nmb_marketplace_agent.graph_factory import make_graph
 
 
@@ -63,7 +61,9 @@ async def test_make_graph_forwards_tenant_and_middleware_to_build_subagents(monk
     # B2.2: one shared DelegationMiddleware must be forwarded to every subagent so
     # nested `task` calls at depth >= 3 share the supervisor's per-run budget.
     assert seen["middleware"] is not None and len(seen["middleware"]) == 1
-    from nmb_marketplace_agent.enterprise.middleware.delegation import DelegationMiddleware
+    from nmb_marketplace_agent.enterprise.middleware.delegation import (
+        DelegationMiddleware,
+    )
 
     assert isinstance(seen["middleware"][0], DelegationMiddleware)
 

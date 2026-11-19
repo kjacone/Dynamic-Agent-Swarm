@@ -1,5 +1,5 @@
 import * as react from 'react';
-import { ReactNode, ChangeEvent, ClipboardEvent, ComponentType } from 'react';
+import { ReactNode, ChangeEvent, ClipboardEvent, ComponentType, SVGProps } from 'react';
 import * as _langchain_langgraph_sdk from '@langchain/langgraph-sdk';
 import { Client, Message, Checkpoint, Assistant, ToolMessage } from '@langchain/langgraph-sdk';
 import { UIMessage, RemoveUIMessage } from '@langchain/langgraph-sdk/react-ui';
@@ -11,6 +11,27 @@ import { Options } from 'react-markdown';
  * mints a short-lived session token and keeps sessions, guardrails, citations,
  * thread ownership and human handoff server-side.
  */
+/** Page-supplied key/value config (e.g. a signed-in customer's JWT). Sent per
+ * request, passed to tools, never stored by the gateway and never shown to the model
+ * unless the agent marks a field shareable. */
+type GatewayHostConfig = Record<string, string>;
+interface GatewayTheme {
+    accent?: string;
+    accentInk?: string;
+    surface?: string;
+    text?: string;
+    muted?: string;
+    mode?: "light" | "dark" | "system";
+    radius?: number;
+}
+/** A value the page must supply, declared by the agent's wrapper settings. */
+interface GatewayConfigField {
+    key: string;
+    label: string;
+    secret: boolean;
+    required: boolean;
+    placeholder?: string;
+}
 interface GatewayConfig {
     /** e.g. https://agents.bank.co — no trailing slash */
     baseUrl: string;
@@ -20,10 +41,27 @@ interface GatewayConfig {
     userId?: string;
     /** Only meaningful when a server-side secret key minted the session. */
     customerId?: string;
+    /** Agent to talk to. Defaults to the key's own agent; list choices with listGatewayAgents. */
+    agentId?: string;
     /** Namespace for the persisted thread map. Defaults to the gateway host. */
     persistKey?: string;
+    /** Values sent with every message for tools that call external services. */
+    hostConfig?: GatewayHostConfig;
     /** Injectable fetch (tests, non-browser runtimes). */
     fetch?: typeof fetch;
+}
+interface GatewayAgent {
+    id: string;
+    name: string;
+    /** The key's own agent — used when no agentId is selected. */
+    default?: boolean;
+    /** Starting prompts saved in the agent's wrapper settings. */
+    suggestions?: string[];
+    /** Customer-facing look and the config values the page should supply. */
+    wrapper?: {
+        theme?: GatewayTheme;
+        config?: GatewayConfigField[];
+    };
 }
 interface GatewaySource {
     id?: number | string;
@@ -64,6 +102,10 @@ interface GatewayEventBus {
 }
 /** Exchanges the publishable key for a short-lived session token; falls back to the key. */
 declare function gatewayToken(cfg: GatewayConfig, force?: boolean): Promise<string>;
+/** Agents a publishable key may start conversations with (own + published). */
+declare function listGatewayAgents(cfg: GatewayConfig, init?: {
+    signal?: AbortSignal;
+}): Promise<GatewayAgent[]>;
 declare function requestHandoff(cfg: GatewayConfig, threadId: string, reason?: string): Promise<{
     handoff: GatewayHandoff;
     created: boolean;
@@ -106,6 +148,12 @@ declare class GatewayTransport {
     private get storeKey();
     private restore;
     private remember;
+    /**
+     * Whether an id is a thread the gateway already stores: a client id mapped to
+     * a server thread, a mapped server id (from history), or the running thread.
+     * A fresh client-side id has no transcript yet, so asking for one 404s.
+     */
+    hasServerThread(id: string): boolean;
     stream(payload: TransportPayload): AsyncGenerator<Chunk>;
     private failure;
     private consume;
@@ -540,6 +588,56 @@ declare function HistoryPanel({ onClose, title }: {
     title?: string;
 }): react.JSX.Element;
 
+type PhoneCallMode = "live" | "studio";
+interface PhoneTurn {
+    id: string;
+    role: "agent" | "caller";
+    text: string;
+    at: string;
+    source?: "greeting" | "speech" | "stt" | "typed";
+    /** Recorded caller audio (studio mode). */
+    audioUrl?: string;
+    /** Set while a recorded turn is being transcribed. */
+    pending?: boolean;
+}
+interface PhoneCallLocale {
+    /** Locale profile id in the console, recorded in the dataset. */
+    profileId?: string;
+    /** BCP-47 tag used for speech recognition and the browser voice. */
+    code?: string;
+    name?: string;
+    greeting?: string;
+}
+interface PhoneCallProps {
+    /** NMB gateway the agent is served from (`baseUrl` + publishable key). */
+    gateway: GatewayConfig;
+    /**
+     * `live` — conversation mode: the browser listens, the agent streams a reply and
+     * the line speaks it back (SpeechRecognition + gateway SSE).
+     * `studio` — turn-by-turn: each caller utterance is recorded as a clip, transcribed
+     * by the STT endpoint, answered by the agent, and can be exported as a JSONL dataset.
+     */
+    mode?: PhoneCallMode;
+    locale?: PhoneCallLocale;
+    /** POST JSON `{ text, voice_id, profile_id }` → audio bytes (ElevenLabs proxy). */
+    ttsEndpoint?: string;
+    /** POST multipart `file` → `{ text }` (speech-to-text proxy). */
+    sttEndpoint?: string;
+    /** ElevenLabs voice id forwarded to `ttsEndpoint`. */
+    voiceId?: string;
+    /** Agent display name on the call screen. */
+    agentName?: string;
+    /** Opening line. Falls back to `locale.greeting`. */
+    greeting?: string;
+    /** Base name for the exported dataset file. */
+    datasetName?: string;
+    onTurn?: (turn: PhoneTurn) => void;
+    /** Rows collected for fine-tuning, in the console's training-pack shape. */
+    onDataset?: (rows: Array<Record<string, unknown>>) => void;
+    className?: string;
+}
+declare function PhoneCall({ gateway, mode, locale, ttsEndpoint, sttEndpoint, voiceId, agentName, greeting, datasetName, onTurn, onDataset, className, }: PhoneCallProps): react.JSX.Element;
+
 /** First-run setup: where the server is, which agent to talk to, and how to authenticate. */
 declare function ConnectionForm({ defaultApiUrl, defaultAssistantId, onConnected }: {
     defaultApiUrl?: string;
@@ -656,6 +754,13 @@ declare function ExpandableText({ text, maxLines, maxChars }: {
     maxChars?: number;
 }): react.JSX.Element;
 
+declare function UiStyles(): react.JSX.Element;
+type P = SVGProps<SVGSVGElement>;
+declare const PhoneIcon: (p: P) => react.JSX.Element;
+declare const ArrowIcon: (p: P) => react.JSX.Element;
+declare const DocIcon: (p: P) => react.JSX.Element;
+declare const CheckIcon: (p: P) => react.JSX.Element;
+
 type Setter<T> = (value: T | ((value: T) => T)) => void;
 type Slot<T> = [T, Setter<T>];
 declare function useArtifact(): readonly [(props: {
@@ -679,4 +784,4 @@ declare function useArtifactContext(): Slot<Record<string, unknown>>;
  */
 declare function ensureToolCallsHaveResponses(messages: Message[]): Message[];
 
-export { type ActionRequest, type AgentState, type AgentToolDefinition, AssistantMessage, Chat, type ChatFeatures, ChatPopup, type ChatPopupProps, type ChatProps, ChatSidebar, type ChatSidebarProps, Composer, type Connection, ConnectionForm, type ConnectionStatus, DO_NOT_RENDER_ID_PREFIX, type Decision, type DecisionType, ExpandableText, type GatewayConfig, type GatewayEvent, type GatewayHandoff, type GatewaySource, type GatewayStaffMessage, GatewayTransport, GenUi, GenericInterrupt, HistoryPanel, type HitlRequest, HitlReview, HumanMessage, type InterruptRenderProps, InterruptView, KeyValueTable, type KitContextValue, LangGraphKitProvider, type LangGraphKitProviderProps, Markdown, type MarkdownOptions, type MultimodalBlock, Playground, type ReviewConfig, type SendInput, ThreadHistory, type ThreadSummary, ToolCallCard, ToolOutput, type ToolRenderProps, type ToolStatus, type UiComponents, type UiSpec, ensureToolCallsHaveResponses, gatewayToken, handoffSnapshot, isHitlRequest, messageReasoning, messageText, messageToolCalls, requestHandoff, sendFeedback, uiSpecs, useAgent, useAgentContext, useAgentReadable, useAgentTool, useArtifact, useArtifactContext, useArtifactOpen, useAssistants, useFileUpload, useKit, useThreads };
+export { type ActionRequest, type AgentState, type AgentToolDefinition, ArrowIcon, AssistantMessage, Chat, type ChatFeatures, ChatPopup, type ChatPopupProps, type ChatProps, ChatSidebar, type ChatSidebarProps, CheckIcon, Composer, type Connection, ConnectionForm, type ConnectionStatus, DO_NOT_RENDER_ID_PREFIX, type Decision, type DecisionType, DocIcon, ExpandableText, type GatewayAgent, type GatewayConfig, type GatewayConfigField, type GatewayEvent, type GatewayHandoff, type GatewayHostConfig, type GatewaySource, type GatewayStaffMessage, type GatewayTheme, GatewayTransport, GenUi, GenericInterrupt, HistoryPanel, type HitlRequest, HitlReview, HumanMessage, type InterruptRenderProps, InterruptView, KeyValueTable, type KitContextValue, LangGraphKitProvider, type LangGraphKitProviderProps, Markdown, type MarkdownOptions, type MultimodalBlock, PhoneCall, type PhoneCallLocale, type PhoneCallMode, type PhoneCallProps, PhoneIcon, type PhoneTurn, Playground, type ReviewConfig, type SendInput, type ThemeMode, type ThemeVars, ThreadHistory, type ThreadSummary, ToolCallCard, ToolOutput, type ToolRenderProps, type ToolStatus, type UiComponents, type UiSpec, UiStyles, ensureToolCallsHaveResponses, gatewayToken, handoffSnapshot, isHitlRequest, listGatewayAgents, messageReasoning, messageText, messageToolCalls, requestHandoff, sendFeedback, uiSpecs, useAgent, useAgentContext, useAgentReadable, useAgentTool, useArtifact, useArtifactContext, useArtifactOpen, useAssistants, useFileUpload, useKit, useThreads };

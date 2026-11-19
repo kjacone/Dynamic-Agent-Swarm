@@ -9,7 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { TabId } from "@/components/layout/nav";
 import { PageHeader } from "@/components/common/PageHeader";
+import { ScopeBar } from "@/components/common/ScopeBar";
 import { EmptyState, LoadingBlock } from "@/components/common/AsyncState";
 import { AsyncButton } from "@/components/common/AsyncButton";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
@@ -28,12 +30,22 @@ const FIELDS: Array<{ key: (typeof KEYS)[number]; label: string; hint: string }>
   { key: "langfuse_days", label: "Langfuse traces", hint: "Only traces tagged for this tenant." },
 ];
 
-export function Privacy({ me }: { me: Me | null }) {
+export function Privacy({ me, tenant, onOpenTab }: {
+  me: Me | null;
+  tenant: string;
+  onOpenTab?: (tab: TabId) => void;
+}) {
   const writable = can(me, "privacy:write");
   return (
     <div>
       <PageHeader icon={ShieldCheck} title="Privacy"
         description="Retention windows, legal holds and data-subject access/erasure across the runtime, registry, vector stores and Langfuse." />
+      <ScopeBar
+        tenant={tenant}
+        onOpenTab={onOpenTab}
+        title="Covers every conversation these agents run"
+        note="Retention windows, holds and erasure reach the threads, checkpoints and traces produced by these agents, whether a person called the agent directly or a workflow step did."
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         <RetentionCard writable={writable} />
         <HoldsCard writable={writable} />

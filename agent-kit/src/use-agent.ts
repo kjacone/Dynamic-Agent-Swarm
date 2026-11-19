@@ -113,6 +113,7 @@ export function useAgent() {
   useEffect(() => {
     setHistory([]);
     if (!gateway || !threadId) return;
+    if (gatewayTransport && !gatewayTransport.hasServerThread(threadId)) return;
     let off = false;
     gatewayThreadMessages(
       { baseUrl: gateway.baseUrl, publishableKey: gateway.publishableKey, userId: gateway.userId, fetch: gateway.fetch },
@@ -211,7 +212,8 @@ export function useAgent() {
 
   /** Branching info for a message: which branch it is on and which exist. */
   const getBranch = useCallback((message: Message) => {
-    const meta = latest.current.stream.getMessagesMetadata(message);
+    // Custom transports (e.g. the gateway) have no checkpoint metadata.
+    const meta = latest.current.stream.getMessagesMetadata?.(message);
     return {
       branch: meta?.branch,
       branchOptions: meta?.branchOptions,
@@ -229,7 +231,7 @@ export function useAgent() {
   /** Replace a human message and continue from there (creates a branch). */
   const editMessage = useCallback(async (message: Message, text: string) => {
     const { stream: s } = latest.current;
-    const meta = s.getMessagesMetadata(message);
+    const meta = s.getMessagesMetadata?.(message);
     const newMessage: Message = { type: "human", content: text };
     await s.submit(
       { messages: [newMessage] },

@@ -1,4 +1,5 @@
 import hashlib
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -63,6 +64,93 @@ class AgentPatch(BaseModel):
     limits: dict | None = None
 
 
+MAX_SUGGESTIONS = 6
+MAX_CONFIG_FIELDS = 16
+HOST_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+THEME_COLORS = ("accent", "accentInk", "surface", "text", "muted")
+THEME_MODES = ("light", "dark", "system")
+
+
+def _check_suggestions(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        raise HTTPException(422, "limits.suggestions must be a list of strings")
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise HTTPException(422, "limits.suggestions must be a list of strings")
+        text = " ".join(item.split())[:160]
+        if text and text not in out:
+            out.append(text)
+    return out[:MAX_SUGGESTIONS]
+
+
+def _check_wrapper_theme(raw: object) -> dict:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise HTTPException(422, "limits.wrapper.theme must be an object")
+    out: dict = {}
+    for key in THEME_COLORS:
+        value = raw.get(key)
+        if value in (None, ""):
+            continue
+        if not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{3,8}", value.strip()):
+            raise HTTPException(422, f"limits.wrapper.theme.{key} must be a hex colour")
+        out[key] = value.strip()
+    mode = str(raw.get("mode") or "").strip().lower()
+    if mode:
+        if mode not in THEME_MODES:
+            raise HTTPException(422, "limits.wrapper.theme.mode must be light, dark or system")
+        out["mode"] = mode
+    radius = raw.get("radius")
+    if radius not in (None, ""):
+        if isinstance(radius, str) and re.fullmatch(r"\d{1,2}(px)?", radius.strip()):
+            radius = int(radius.strip().removesuffix("px"))
+        if not isinstance(radius, int) or not 0 <= radius <= 28:
+            raise HTTPException(422, "limits.wrapper.theme.radius must be 0–28 px")
+        out["radius"] = radius
+    return out
+
+
+def _check_wrapper_config(raw: object) -> list[dict]:
+    """Declared wrapper key/value fields. Values are supplied by the page at run time."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(422, "limits.wrapper.config must be a list of fields")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw[:MAX_CONFIG_FIELDS]:
+        if not isinstance(item, dict):
+            raise HTTPException(422, "limits.wrapper.config entries must be objects")
+        key = str(item.get("key") or "").strip()
+        if not HOST_KEY_RE.match(key):
+            raise HTTPException(422, "limits.wrapper.config[].key must start with a letter and use letters, digits, _ . or -")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "key": key,
+            "label": str(item.get("label") or key).strip()[:80],
+            "secret": bool(item.get("secret")),
+            "share_with_model": bool(item.get("share_with_model")) and not bool(item.get("secret")),
+            "required": bool(item.get("required")),
+            "placeholder": str(item.get("placeholder") or "").strip()[:80],
+        })
+    return out
+
+
+def _check_wrapper(raw: object) -> dict:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise HTTPException(422, "limits.wrapper must be an object")
+    return {
+        "theme": _check_wrapper_theme(raw.get("theme")),
+        "config": _check_wrapper_config(raw.get("config")),
+    }
+
+
 def _check_limits(limits: dict) -> dict:
     """Validate/normalise presentation + budget settings; unknown keys pass through."""
     from nmb_marketplace_agent.rag.citations import SOURCE_MODES
@@ -73,6 +161,10 @@ def _check_limits(limits: dict) -> dict:
         if mode not in SOURCE_MODES:
             raise HTTPException(422, "limits.sources must be one of: off, labels, full")
         out["sources"] = mode
+    if "suggestions" in out:
+        out["suggestions"] = _check_suggestions(out["suggestions"])
+    if "wrapper" in out:
+        out["wrapper"] = _check_wrapper(out["wrapper"])
     return out
 
 

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Ban, Bug, Lock, Pencil, Plus, ShieldBan, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api, can, type Guardrail, type GuardrailInput, type Me, type PolicyDecision } from "@/lib/api";
+import type { TabId } from "@/components/layout/nav";
 import { PageHeader } from "@/components/common/PageHeader";
+import { ScopeBar } from "@/components/common/ScopeBar";
 import { EmptyState, LoadingBlock } from "@/components/common/AsyncState";
 import { AsyncButton } from "@/components/common/AsyncButton";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
@@ -26,7 +28,11 @@ const ATTACKS = [
 
 const DIRECTIONS = ["input", "document", "tool_result"];
 
-export function Guardrails({ me }: { me: Me | null }) {
+export function Guardrails({ me, tenant, onOpenTab }: {
+  me: Me | null;
+  tenant: string;
+  onOpenTab?: (tab: TabId) => void;
+}) {
   const [rows, setRows] = useState<Guardrail[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<Guardrail | "new" | null>(null);
@@ -86,6 +92,13 @@ export function Guardrails({ me }: { me: Me | null }) {
             </Button>
           </div>
         ) : undefined}
+      />
+
+      <ScopeBar
+        tenant={tenant}
+        onOpenTab={onOpenTab}
+        title="Applies to every agent call"
+        note="Directives harden every agent — supervisors, specialists and agents inside workflow steps — and watch phrases screen messages, documents and tool results."
       />
 
       <div className="mb-4 grid gap-3 lg:grid-cols-2">

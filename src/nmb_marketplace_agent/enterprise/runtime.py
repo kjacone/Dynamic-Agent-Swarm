@@ -11,8 +11,16 @@ from sqlmodel import select
 from nmb_marketplace_agent.config.models import AgentConfig
 from nmb_marketplace_agent.enterprise.connectors import EgressPolicy, build_connector
 from nmb_marketplace_agent.enterprise.connectors.base import ConnectorError
-from nmb_marketplace_agent.enterprise.guardrails import DEFAULT_POLICY, Policy, PolicyEngine
-from nmb_marketplace_agent.enterprise.models import ConnectorConfig, GuardrailInstruction, PolicySet
+from nmb_marketplace_agent.enterprise.guardrails import (
+    DEFAULT_POLICY,
+    Policy,
+    PolicyEngine,
+)
+from nmb_marketplace_agent.enterprise.models import (
+    ConnectorConfig,
+    GuardrailInstruction,
+    PolicySet,
+)
 from nmb_marketplace_agent.enterprise.workflows.engine import Runtime
 
 log = logging.getLogger(__name__)
@@ -75,6 +83,7 @@ async def _sdk_agent(
     accounting is a hard requirement, use ``SUPERVISOR_RUNTIME=inprocess``.
     """
     from langgraph_sdk import get_client
+
     from nmb_marketplace_agent.api.routes.public import _final_reply
 
     agent = (await db.execute(

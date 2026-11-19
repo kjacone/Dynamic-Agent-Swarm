@@ -431,17 +431,33 @@
     s.dataset.title = title;
     s.dataset.color = color;
     s.dataset.greeting = greeting;
+    s.dataset.suggestions = '["Show me the cheapest phones","Only fashion items","Where is order ORD-100245?"]';
     s.onload = function () {
       if (!window.NMB) return;
       NMB.tool("set_filter", setFilter, {
-        title: "Filter the catalogue?", applyLabel: "Apply filter", doneTitle: "Catalogue filtered",
+        title: "Filter the catalogue?",
+        describe: function (a) {
+          var bits = [];
+          if (a.category) bits.push(a.category);
+          if (a.brand) bits.push(a.brand);
+          if (a.max_price) bits.push("under " + a.max_price);
+          return bits.length ? "Show only " + bits.join(" · ") + "." : "Apply these filters to the catalogue.";
+        },
+        progress: "Updating the page",
+        applyLabel: "Apply filter", doneTitle: "Catalogue filtered",
       });
       NMB.tool("add_to_cart", addToCart, {
-        title: "Add to cart?", applyLabel: "Add to cart", declineLabel: "Not now", doneTitle: "Added to cart",
+        title: "Add to cart?",
+        describe: function (a) {
+          return "Add " + (a.name || ("product " + (a.product_id || ""))) +
+            " × " + (a.quantity || 1) + ".";
+        },
+        progress: "Updating your cart",
+        applyLabel: "Add to cart", declineLabel: "Not now", doneTitle: "Added to cart",
       });
-      NMB.tool("show_products", showProducts, { auto: true });
-      NMB.tool("navigate", navigate, { auto: true });
-      NMB.tool("show_order", showOrder, { auto: true });
+      NMB.tool("show_products", showProducts, { auto: true, progress: "Checking the catalogue" });
+      NMB.tool("navigate", navigate, { auto: true, progress: "Opening that section" });
+      NMB.tool("show_order", showOrder, { auto: true, progress: "Checking your order" });
 
       NMB.ui("show_products", renderProducts);
       NMB.ui("add_to_cart", renderCartResult);

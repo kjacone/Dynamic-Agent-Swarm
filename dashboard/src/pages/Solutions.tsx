@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  Blocks, Building2, CheckCircle2, Layers, Package, RefreshCw, Sparkles,
+  Blocks, Building2, CheckCircle2, ChevronRight, Landmark, Layers, Package, RefreshCw, Search,
+  ShieldCheck, Sparkles, Stethoscope, GraduationCap, Store, Radio, Heart, Briefcase, Scale, type LucideIcon,
 } from "lucide-react";
 import { api, can, type MarketplaceCatalog, type MarketplacePackDetail, type Me, type Pack } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,22 @@ import { cn } from "@/lib/utils";
 
 const INDUSTRY: Record<string, string> = { banking: "Banking", insurance: "Insurance", telecom: "Telecoms", government: "Government",
   healthcare: "Healthcare", ngo: "NGOs", corporate: "Corporate", education: "Education", retail: "Retail & commerce" };
+
+// One colour per industry so cards are recognisable at a glance. Full class names so Tailwind keeps them.
+const THEME: Record<string, { icon: LucideIcon; tile: string; bar: string; dot: string }> = {
+  banking:    { icon: Landmark,      tile: "bg-sky-500/15 text-sky-600 dark:text-sky-400",             bar: "from-sky-500 to-sky-400/0",         dot: "bg-sky-500" },
+  insurance:  { icon: ShieldCheck,   tile: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400", bar: "from-emerald-500 to-emerald-400/0", dot: "bg-emerald-500" },
+  telecom:    { icon: Radio,         tile: "bg-violet-500/15 text-violet-600 dark:text-violet-400",    bar: "from-violet-500 to-violet-400/0",   dot: "bg-violet-500" },
+  government: { icon: Scale,         tile: "bg-slate-500/15 text-slate-600 dark:text-slate-300",       bar: "from-slate-500 to-slate-400/0",     dot: "bg-slate-500" },
+  healthcare: { icon: Stethoscope,   tile: "bg-rose-500/15 text-rose-600 dark:text-rose-400",          bar: "from-rose-500 to-rose-400/0",       dot: "bg-rose-500" },
+  ngo:        { icon: Heart,         tile: "bg-orange-500/15 text-orange-600 dark:text-orange-400",    bar: "from-orange-500 to-orange-400/0",   dot: "bg-orange-500" },
+  corporate:  { icon: Briefcase,     tile: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",    bar: "from-indigo-500 to-indigo-400/0",   dot: "bg-indigo-500" },
+  education:  { icon: GraduationCap, tile: "bg-amber-500/15 text-amber-600 dark:text-amber-400",       bar: "from-amber-500 to-amber-400/0",     dot: "bg-amber-500" },
+  retail:     { icon: Store,         tile: "bg-teal-500/15 text-teal-600 dark:text-teal-400",          bar: "from-teal-500 to-teal-400/0",       dot: "bg-teal-500" },
+};
+const FALLBACK_THEME = { icon: Blocks, tile: "bg-primary/10 text-primary", bar: "from-primary to-primary/0", dot: "bg-primary" };
+const themeOf = (industry: string) => THEME[industry] ?? FALLBACK_THEME;
+
 const DELIVERY: Record<string, { label: string; tone: "gray" | "blue" | "green"; hint: string }> = {
   workflow: { label: "Backend workflow", tone: "gray" as const, hint: "Runs behind the scenes: documents, approvals, system integrations" },
   agent_kit: { label: "Agent-kit widget", tone: "blue" as const, hint: "A chat assistant embedded in your website or app" },
@@ -28,9 +45,11 @@ const DELIVERY: Record<string, { label: string; tone: "gray" | "blue" | "green";
 export function Solutions({ me }: { me: Me | null }) {
   const [catalog, setCatalog] = useState<MarketplaceCatalog | null>(null);
   const [failed, setFailed] = useState(false);
+  const [query, setQuery] = useState("");
   const [industry, setIndustry] = useState<string>("all");
   const [delivery, setDelivery] = useState<string>("all");
   const [status, setStatus] = useState<"all" | "installed" | "upgrade" | "available">("all");
+  const [group, setGroup] = useState<"first" | "later" | "rest">("first");
   const [open, setOpen] = useState<Pack | null>(null);
   const [testDrive, setTestDrive] = useState<Pack | null>(null);
   const [installing, setInstalling] = useState<Pack | null>(null);
@@ -49,19 +68,25 @@ export function Solutions({ me }: { me: Me | null }) {
     return [...m.entries()];
   }, [packs]);
 
+  const q = query.trim().toLowerCase();
   const shown = (packs || []).filter((p) =>
     (industry === "all" || p.industry === industry) &&
-    (delivery === "all" || p.delivery === delivery ||
-      (delivery !== "workflow" && p.delivery === "both") ||
-      (delivery === "workflow" && p.delivery === "both")) &&
+    (delivery === "all" || p.delivery === delivery || p.delivery === "both") &&
     (status === "all" ||
       (status === "installed" && p.installed) ||
       (status === "upgrade" && p.upgrade_available) ||
-      (status === "available" && !p.installed)));
+      (status === "available" && !p.installed)) &&
+    (!q || `${p.name} ${p.summary} ${INDUSTRY[p.industry] ?? p.industry}`.toLowerCase().includes(q)));
 
   const launch = shown.filter((p) => p.priority === "first");
   const next = shown.filter((p) => p.priority === "later");
   const rest = shown.filter((p) => p.priority !== "first" && p.priority !== "later");
+  const groups = ([
+    { id: "first", label: "Launch solutions", sub: "Ready to install and proven in production", list: launch },
+    { id: "later", label: "Next wave", sub: "Coming soon, available to preview", list: next },
+    { id: "rest", label: "More solutions", sub: "", list: rest },
+  ] as const).filter((g) => g.list.length > 0);
+  const activeGroup = groups.some((g) => g.id === group) ? group : groups[0]?.id ?? "first";
 
   return (
     <div>
@@ -72,7 +97,7 @@ export function Solutions({ me }: { me: Me | null }) {
       />
 
       {catalog && (
-        <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard icon={Package} label="Solutions" value={catalog.counts.total} tone="sky" hint="In the marketplace catalogue" />
           <StatCard icon={CheckCircle2} label="Installed" value={catalog.counts.installed} tone="emerald" />
           <StatCard icon={RefreshCw} label="Updates" value={catalog.counts.upgrades} tone="amber"
@@ -89,56 +114,73 @@ export function Solutions({ me }: { me: Me | null }) {
       ) : packs.length === 0 ? (
         <EmptyState icon={Package} title="No solutions available" body="Your licence does not include any industry packs." />
       ) : (
-        <div className="grid gap-5 md:grid-cols-[220px,minmax(0,1fr)]">
-          <Card className="h-fit md:sticky md:top-4">
-            <CardContent className="space-y-1 p-2">
-              <div className="flex items-center gap-2 px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <Building2 className="h-3.5 w-3.5" /> Industries
+        <div className="grid gap-6 md:grid-cols-[230px,minmax(0,1fr)]">
+          <Card className="h-fit overflow-hidden md:sticky md:top-4">
+            <CardContent className="space-y-0.5 p-2">
+              <div className="flex items-center gap-2 px-3 pb-2 pt-2 text-xs font-semibold text-muted-foreground">
+                <Building2 className="h-3.5 w-3.5" /> Browse by industry
               </div>
               <Rail active={industry === "all"} onClick={() => setIndustry("all")} label="All industries" n={packs.length} />
-              {industries.map(([k, n]) => <Rail key={k} active={industry === k} onClick={() => setIndustry(k)} label={INDUSTRY[k] ?? k} n={n} />)}
+              {industries.map(([k, n]) => (
+                <Rail key={k} active={industry === k} onClick={() => setIndustry(k)} label={INDUSTRY[k] ?? k} n={n} theme={themeOf(k)} />
+              ))}
             </CardContent>
           </Card>
+
           <div className="min-w-0">
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <FilterTabs
-                value={delivery}
-                onChange={setDelivery}
-                options={[
-                  { id: "all", label: "Any delivery" },
-                  { id: "workflow", label: "Workflow" },
-                  { id: "agent_kit", label: "Widget" },
-                ]}
-              />
-              <FilterTabs
-                value={status}
-                onChange={(v) => setStatus(v as typeof status)}
-                options={[
-                  { id: "all", label: "Any status" },
-                  { id: "installed", label: "Installed", count: catalog?.counts.installed },
-                  { id: "upgrade", label: "Updates", count: catalog?.counts.upgrades },
-                  { id: "available", label: "Not installed" },
-                ]}
-              />
+            <div className="mb-5 space-y-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search solutions, e.g. loan onboarding or claims"
+                  className="h-11 rounded-xl pl-10"
+                  aria-label="Search solutions"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <FilterTabs
+                  value={delivery}
+                  onChange={setDelivery}
+                  options={[
+                    { id: "all", label: "Any delivery" },
+                    { id: "workflow", label: "Workflow" },
+                    { id: "agent_kit", label: "Widget" },
+                  ]}
+                />
+                <FilterTabs
+                  value={status}
+                  onChange={(v) => setStatus(v as typeof status)}
+                  options={[
+                    { id: "all", label: "Any status" },
+                    { id: "installed", label: "Installed", count: catalog?.counts.installed },
+                    { id: "upgrade", label: "Updates", count: catalog?.counts.upgrades },
+                    { id: "available", label: "Not installed" },
+                  ]}
+                />
+                <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                  {shown.length} of {packs.length} solutions
+                </span>
+              </div>
             </div>
+
             {shown.length === 0 ? (
-              <EmptyState title="Nothing matches these filters" body="Try a different industry or status." />
+              <EmptyState title="Nothing matches these filters" body="Clear the search or pick a different industry or status." />
             ) : (
-              ([
-                ["first", "Launch solutions", launch],
-                ["later", "Next wave", next],
-                ["rest", "Everything else", rest],
-              ] as const).map(([k, title, list]) => list.length > 0 && (
-                <section key={k} className="mb-8">
-                  {title && <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h2>}
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {list.map((p) => (
-                      <PackCard key={p.id} p={p} onOpen={() => setOpen(p)}
-                        onTestDrive={() => setTestDrive(p)} />
-                    ))}
-                  </div>
-                </section>
-              ))
+              <>
+                <FilterTabs
+                  value={activeGroup}
+                  onChange={(v) => setGroup(v as typeof group)}
+                  options={groups.map((g) => ({ id: g.id, label: g.label, count: g.list.length }))}
+                />
+                <p className="mb-3 mt-2 text-xs text-muted-foreground">{groups.find((g) => g.id === activeGroup)?.sub}</p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {(groups.find((g) => g.id === activeGroup)?.list ?? []).map((p) => (
+                    <PackCard key={p.id} p={p} onOpen={() => setOpen(p)} onTestDrive={() => setTestDrive(p)} />
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -177,6 +219,9 @@ export function Solutions({ me }: { me: Me | null }) {
         <Dialog open onOpenChange={(v) => !v && setDone(null)}>
           <DialogContent>
             <DialogHeader>
+              <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="h-6 w-6" />
+              </div>
               <DialogTitle>{done.pack.name} is ready</DialogTitle>
               <DialogDescription>Everything below was created in this tenant. Connectors arrive disabled until you add endpoints and secrets.</DialogDescription>
             </DialogHeader>
@@ -191,11 +236,14 @@ export function Solutions({ me }: { me: Me | null }) {
                   {done.res.created.connectors.map((c) => <Chip key={c}>{c}</Chip>)}
                 </div>
               )}
-              <ol className="list-decimal space-y-1.5 rounded-xl border bg-muted/30 p-3 pl-7 text-xs leading-relaxed text-muted-foreground">
-                <li>Add endpoints and secret references (<code className="rounded bg-background px-1">env:NAME</code>) for each connector, then enable it.</li>
-                <li>Assign named users the roles the workflow needs (e.g. approvers) in your identity provider.</li>
-                <li>Run the pack’s evaluation dataset, then start a test workflow run.</li>
-              </ol>
+              <div className="rounded-xl border bg-muted/30 p-3">
+                <div className="mb-2 text-xs font-medium">What to do next</div>
+                <ol className="list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-muted-foreground">
+                  <li>Add endpoints and secret references (<code className="rounded bg-background px-1">env:NAME</code>) for each connector, then enable it.</li>
+                  <li>Assign named users the roles the workflow needs (e.g. approvers) in your identity provider.</li>
+                  <li>Run the pack’s evaluation dataset, then start a test workflow run.</li>
+                </ol>
+              </div>
             </div>
             <DialogFooter><Button onClick={() => setDone(null)}>Done</Button></DialogFooter>
           </DialogContent>
@@ -205,73 +253,87 @@ export function Solutions({ me }: { me: Me | null }) {
   );
 }
 
-const Rail = ({ active, onClick, label, n }: { active: boolean; onClick: () => void; label: string; n?: number }) => (
-  <button onClick={onClick} className={cn(
-    "flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
-    active ? "border-primary/40 bg-primary/5 font-medium shadow-sm" : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-  )}>
-    <span className="truncate">{label}</span>
-    {n !== undefined && (
-      <span className={cn(
-        "rounded-full px-1.5 py-0.5 text-[11px] tabular-nums",
-        active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
-      )}>{n}</span>
-    )}
-  </button>
-);
+const Rail = ({ active, onClick, label, n, theme }: {
+  active: boolean; onClick: () => void; label: string; n?: number; theme?: { icon: LucideIcon; tile: string };
+}) => {
+  const Icon = theme?.icon ?? Building2;
+  return (
+    <button onClick={onClick} aria-pressed={active} className={cn(
+      "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+      active ? "bg-primary/10 font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+    )}>
+      <span className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md", theme?.tile ?? "bg-muted text-muted-foreground")}>
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <span className="flex-1 truncate text-left">{label}</span>
+      {n !== undefined && <span className="text-xs tabular-nums text-muted-foreground">{n}</span>}
+    </button>
+  );
+};
+
+function Metric({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="min-w-0 flex-1 rounded-lg bg-muted/40 px-2 py-1.5 text-center">
+      <div className="text-sm font-semibold tabular-nums leading-tight">{value}</div>
+      <div className="truncate text-[11px] text-muted-foreground">{label}</div>
+    </div>
+  );
+}
 
 function PackCard({ p, onOpen, onTestDrive }: { p: Pack; onOpen: () => void; onTestDrive: () => void }) {
   const d = DELIVERY[p.delivery];
   const a = p.assets;
+  const t = themeOf(p.industry);
+  const Icon = t.icon;
+  const agents = a.agents + (a.supervisor ? 1 : 0);
+
   return (
     <Card
-      className="group flex cursor-pointer flex-col transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+      className={cn(
+        "group relative flex cursor-pointer flex-col overflow-hidden transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+        p.upgrade_available && "ring-1 ring-amber-500/40",
+      )}
       onClick={onOpen}
     >
-      <CardContent className="flex flex-1 flex-col gap-3 p-4">
-        <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 text-primary">
-            <Blocks className="h-4 w-4" />
+      <div className={cn("h-0.5 w-full bg-gradient-to-r", t.bar)} />
+      <CardContent className="flex flex-1 flex-col gap-2 p-3">
+        <div className="flex items-center gap-2.5">
+          <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", t.tile)}>
+            <Icon className="h-4 w-4" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate font-medium" title={p.name}>{p.name}</div>
-            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+            <div className="truncate text-sm font-semibold leading-tight" title={p.name}>{p.name}</div>
+            <div className="truncate text-[11px] text-muted-foreground">
               {INDUSTRY[p.industry] ?? p.industry} · v{p.version}
-              {p.installed_at && ` · installed ${new Date(p.installed_at).toLocaleDateString()}`}
             </div>
           </div>
+          {p.installed && !p.upgrade_available && (
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" aria-label="Installed" />
+          )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
+        <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{p.summary}</p>
+
+        <div className="flex flex-wrap items-center gap-1">
           <StatusBadge value={p.delivery} label={d.label} tone={d.tone} />
-          {p.installed && <StatusBadge value="installed" label={`installed v${p.installed_version}`} />}
           {p.upgrade_available && <StatusBadge value="warn" label={`update v${p.version}`} />}
           {!p.installed && !p.entitled && <StatusBadge value="warn" label="not in licence" />}
         </div>
 
-        <p className="line-clamp-3 text-sm text-muted-foreground">{p.summary}</p>
-
-        <div className="flex flex-wrap gap-1 text-[11px]">
-          <Chip>{a.agents + (a.supervisor ? 1 : 0)} agents</Chip><Chip>{a.workflows} workflows</Chip>
-          {a.knowledge_docs > 0 && <Chip>{a.knowledge_docs} KB docs</Chip>}
-          {a.training_rows > 0 && <Chip>{a.training_rows} training rows</Chip>}
-          {a.eval_cases > 0 && <Chip>{a.eval_cases} eval cases</Chip>}
-          {a.samples > 0 && <Chip>{a.samples} sample cases</Chip>}
-          {p.conformance && !p.conformance.error && (
-            <Chip>conformance {p.conformance.passed ?? 0}/{p.conformance.total ?? 0}</Chip>
-          )}
-        </div>
-        {p.kpis.length > 0 && <div className="text-[11px] text-muted-foreground">KPIs: {p.kpis.slice(0, 2).map((x) => x.replace(/_/g, " ")).join(", ")}</div>}
-
-        <div className="mt-auto flex items-end justify-between gap-2 border-t border-border/60 pt-3">
-          <div className="flex flex-wrap gap-1">{p.frameworks.slice(0, 3).map((f) => <Chip key={f}>{f}</Chip>)}</div>
+        <div className="mt-auto flex items-center justify-between gap-2 border-t border-border/60 pt-2">
+          <span className="truncate text-[11px] tabular-nums text-muted-foreground">
+            {agents} agents · {a.workflows} workflows
+          </span>
           <Button
             size="sm"
             variant="ghost"
-            className="shrink-0 text-xs text-muted-foreground hover:text-foreground group-hover:bg-primary/5"
+            className="h-7 shrink-0 gap-1 px-2 text-xs"
             onClick={(e) => { e.stopPropagation(); onTestDrive(); }}
           >
-            <Sparkles className="h-3.5 w-3.5" /> Test drive
+            <Sparkles className="h-3 w-3" /> Test drive
           </Button>
         </div>
       </CardContent>
@@ -290,6 +352,8 @@ function Detail({ pack: p, me, onClose, onInstall, onUpgraded }: {
   const toast = useToast();
   const writer = can(me, "solutions:write");
   const pc = p.parameter_changes;
+  const t = themeOf(p.industry);
+  const Icon = t.icon;
 
   useEffect(() => {
     if (tab !== "contents" || contents) return;
@@ -309,6 +373,7 @@ function Detail({ pack: p, me, onClose, onInstall, onUpgraded }: {
       : []),
     { label: "Go live in shadow mode", done: false, hint: "Run beside your team and compare decisions before switching over" },
   ];
+  const doneCount = steps.filter((s) => s.done).length;
   const TABS = [
     ["journey", "Getting started"],
     ["contents", "Contents"],
@@ -321,10 +386,17 @@ function Detail({ pack: p, me, onClose, onInstall, onUpgraded }: {
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{p.name}</DialogTitle>
-          <DialogDescription>
-            {INDUSTRY[p.industry] ?? p.industry} · v{p.version} · {DELIVERY[p.delivery].hint}
-          </DialogDescription>
+          <div className="flex items-start gap-3">
+            <span className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl", t.tile)}>
+              <Icon className="h-6 w-6" />
+            </span>
+            <div className="min-w-0">
+              <DialogTitle>{p.name}</DialogTitle>
+              <DialogDescription>
+                {INDUSTRY[p.industry] ?? p.industry} · v{p.version} · {DELIVERY[p.delivery].hint}
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge value={p.delivery} label={DELIVERY[p.delivery].label} tone={DELIVERY[p.delivery].tone} />
@@ -362,15 +434,30 @@ function Detail({ pack: p, me, onClose, onInstall, onUpgraded }: {
         <div className="max-h-[55vh] overflow-auto pr-1 text-sm">
           {tab === "journey" && (
             <>
-              <ol className="space-y-3">
+              <div className="mb-4">
+                <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Your progress</span>
+                  <span className="tabular-nums">{doneCount} of {steps.length} steps</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
+                    style={{ width: `${(doneCount / steps.length) * 100}%` }}
+                  />
+                </div>
+              </div>
+              <ol>
                 {steps.map((s, i) => (
-                  <li key={i} className="flex gap-3">
+                  <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
+                    {i < steps.length - 1 && (
+                      <span className={cn("absolute left-3 top-7 h-[calc(100%-1.75rem)] w-px", s.done ? "bg-emerald-500/40" : "bg-border")} />
+                    )}
                     <span className={cn(
-                      "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium",
-                      s.done ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-muted text-muted-foreground",
+                      "relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium",
+                      s.done ? "bg-emerald-500 text-white" : "border bg-background text-muted-foreground",
                     )}>{s.done ? <CheckCircle2 className="h-4 w-4" /> : i + 1}</span>
                     <div>
-                      <div className="font-medium">{s.label}</div>
+                      <div className={cn("font-medium", s.done && "text-muted-foreground line-through decoration-muted-foreground/40")}>{s.label}</div>
                       <div className="text-xs text-muted-foreground">{s.hint}</div>
                     </div>
                   </li>
@@ -378,12 +465,12 @@ function Detail({ pack: p, me, onClose, onInstall, onUpgraded }: {
               </ol>
               {p.conformance && (
                 p.conformance.error ? (
-                  <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+                  <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
                     <b>Conformance</b> could not run: {p.conformance.error}
                   </div>
                 ) : (
                   <div className={cn(
-                    "mt-3 rounded-xl border p-3 text-xs",
+                    "mt-4 rounded-xl border p-3 text-xs",
                     (p.conformance.passed ?? 0) === (p.conformance.total ?? 0)
                       ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
                       : "border-amber-500/30 bg-amber-500/5",
@@ -403,15 +490,13 @@ function Detail({ pack: p, me, onClose, onInstall, onUpgraded }: {
                 </div>
               )}
               {p.installed && p.rollback_versions && p.rollback_versions.length > 0 && (
-                <div className="mt-3 space-y-1">
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Previous versions
-                  </h4>
+                <div className="mt-4 space-y-1.5">
+                  <h4 className="text-xs font-semibold text-muted-foreground">Previous versions</h4>
                   <p className="text-xs text-muted-foreground">
                     Re-applies the saved pack and its settings. You can upgrade again afterwards.
                   </p>
                   {p.rollback_versions.map((v) => (
-                    <div key={v.version} className="flex items-center justify-between rounded-md border p-2 text-xs">
+                    <div key={v.version} className="flex items-center justify-between rounded-lg border p-2 text-xs">
                       <div>
                         <b>v{v.version}</b>{" "}
                         <span className="text-muted-foreground">
@@ -526,36 +611,42 @@ function Detail({ pack: p, me, onClose, onInstall, onUpgraded }: {
 
 function PackContents({ d }: { d: MarketplacePackDetail }) {
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap gap-1">
-        <Chip>{d.agents.length + (d.supervisor ? 1 : 0)} agents</Chip>
-        <Chip>{d.workflows.length} workflows</Chip>
-        <Chip>{d.connectors.length} connector templates</Chip>
-        <Chip>{d.evals.reduce((n, e) => n + e.cases, 0)} eval cases</Chip>
-        {d.policy.rules > 0 && <Chip>{d.policy.rules} policy rules</Chip>}
-        {d.policy.tool_rules > 0 && <Chip>{d.policy.tool_rules} tool rules</Chip>}
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Metric value={d.agents.length + (d.supervisor ? 1 : 0)} label="agents" />
+        <Metric value={d.workflows.length} label="workflows" />
+        <Metric value={d.connectors.length} label="connectors" />
+        <Metric value={d.evals.reduce((n, e) => n + e.cases, 0)} label="eval cases" />
       </div>
+      {(d.policy.rules > 0 || d.policy.tool_rules > 0) && (
+        <div className="flex flex-wrap gap-1">
+          {d.policy.rules > 0 && <Chip>{d.policy.rules} policy rules</Chip>}
+          {d.policy.tool_rules > 0 && <Chip>{d.policy.tool_rules} tool rules</Chip>}
+        </div>
+      )}
       {d.supervisor && (
         <Section title="Supervisor">
-          <div className="font-medium">{d.supervisor.name}</div>
-          <div className="flex flex-wrap gap-1">
-            {d.supervisor.delegates.map((x) => <Chip key={x}>{x}</Chip>)}
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {Object.entries(d.supervisor.limits).map(([k, v]) => (
-              <Chip key={k}>{k.replace(/_/g, " ")}: {String(v)}</Chip>
-            ))}
+          <div className="space-y-1.5 rounded-xl border bg-muted/20 p-3">
+            <div className="font-medium">{d.supervisor.name}</div>
+            <div className="flex flex-wrap gap-1">
+              {d.supervisor.delegates.map((x) => <Chip key={x}>{x}</Chip>)}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(d.supervisor.limits).map(([k, v]) => (
+                <Chip key={k}>{k.replace(/_/g, " ")}: {String(v)}</Chip>
+              ))}
+            </div>
           </div>
         </Section>
       )}
       <Section title="Agents">
         {d.agents.map((a) => (
-          <div key={a.key} className="flex items-center justify-between rounded-md border p-2">
-            <div>
-              <div className="font-medium">{a.name}</div>
+          <div key={a.key} className="flex items-center justify-between gap-3 rounded-xl border p-2.5">
+            <div className="min-w-0">
+              <div className="truncate font-medium">{a.name}</div>
               <code className="text-[11px] text-muted-foreground">{a.key}</code>
             </div>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap justify-end gap-1">
               {a.tools.length ? a.tools.map((t) => <Chip key={t}>{t}</Chip>) : <Chip>no tools</Chip>}
             </div>
           </div>
@@ -563,17 +654,17 @@ function PackContents({ d }: { d: MarketplacePackDetail }) {
       </Section>
       <Section title="Workflows">
         {d.workflows.map((w) => (
-          <div key={w.key} className="rounded-md border p-2">
+          <div key={w.key} className="rounded-xl border p-2.5">
             <div className="font-medium">{w.name}</div>
             <code className="text-[11px] text-muted-foreground">{w.key}</code>
-            {w.description && <div className="text-xs text-muted-foreground">{w.description}</div>}
+            {w.description && <div className="mt-0.5 text-xs text-muted-foreground">{w.description}</div>}
           </div>
         ))}
       </Section>
       {d.knowledge.length > 0 && (
         <Section title="Knowledge">
           {d.knowledge.map((k) => (
-            <div key={k.collection} className="flex items-center justify-between rounded-md border p-2">
+            <div key={k.collection} className="flex items-center justify-between rounded-xl border p-2.5">
               <div>
                 <div className="font-medium">{k.collection}</div>
                 {k.description && <div className="text-xs text-muted-foreground">{k.description}</div>}
@@ -586,7 +677,7 @@ function PackContents({ d }: { d: MarketplacePackDetail }) {
       {d.connectors.length > 0 && (
         <Section title="Connector templates">
           {d.connectors.map((c) => (
-            <div key={c.name} className="flex items-center justify-between rounded-md border p-2">
+            <div key={c.name} className="flex items-center justify-between rounded-xl border p-2.5">
               <code className="text-xs">{c.name}</code><Chip>{c.type}</Chip>
             </div>
           ))}
@@ -633,6 +724,8 @@ function TestDrive({ pack, me, onClose, onInstall }: {
   const [error, setError] = useState<string | null>(null);
   const writer = can(me, "solutions:write");
   const delivery = DELIVERY[pack.delivery];
+  const t = themeOf(pack.industry);
+  const Icon = t.icon;
 
   useEffect(() => {
     let alive = true;
@@ -646,17 +739,24 @@ function TestDrive({ pack, me, onClose, onInstall }: {
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{pack.name} · test drive</DialogTitle>
-          <DialogDescription>
-            {INDUSTRY[pack.industry] ?? pack.industry} · v{pack.version} · preview only, nothing is installed
-          </DialogDescription>
+          <div className="flex items-start gap-3">
+            <span className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl", t.tile)}>
+              <Icon className="h-6 w-6" />
+            </span>
+            <div className="min-w-0">
+              <DialogTitle>{pack.name} · test drive</DialogTitle>
+              <DialogDescription>
+                {INDUSTRY[pack.industry] ?? pack.industry} · v{pack.version} · preview only, nothing is installed
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge value={pack.delivery} label={delivery.label} tone={delivery.tone} />
           <span className="text-xs text-muted-foreground">{delivery.hint}</span>
         </div>
         <div className="max-h-[60vh] space-y-4 overflow-auto pr-1 text-sm">
-          <p>{pack.summary}</p>
+          <p className="leading-relaxed">{pack.summary}</p>
           <div className="flex flex-wrap gap-1">
             {pack.frameworks.map((f) => <Chip key={f}>{f}</Chip>)}
             {pack.audience.map((a) => <Chip key={a}>{a.replace(/_/g, " ")}</Chip>)}
@@ -673,7 +773,7 @@ function TestDrive({ pack, me, onClose, onInstall }: {
               {detail.samples.length > 0 && (
                 <Section title="Sample cases">
                   {detail.samples.map((s) => (
-                    <div key={s.id} className="rounded-md border p-2">
+                    <div key={s.id} className="rounded-xl border p-2.5">
                       <div className="font-medium">{s.title}</div>
                       {s.expect && (
                         <div className="text-xs text-muted-foreground">
@@ -687,7 +787,7 @@ function TestDrive({ pack, me, onClose, onInstall }: {
               {detail.models.length > 0 && (
                 <Section title="Recommended models">
                   {detail.models.map((m) => (
-                    <div key={m.role} className="flex items-center justify-between rounded-md border p-2 text-xs">
+                    <div key={m.role} className="flex items-center justify-between rounded-xl border p-2.5 text-xs">
                       <div><b>{m.role}</b> · <code>{m.recommended}</code></div>
                       <Chip>{m.tier}</Chip>
                     </div>
@@ -715,8 +815,8 @@ function TestDrive({ pack, me, onClose, onInstall }: {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-1">
-      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h4>
+    <section className="space-y-1.5">
+      <h4 className="text-xs font-semibold text-muted-foreground">{title}</h4>
       {children}
     </section>
   );
@@ -749,15 +849,22 @@ function InstallDialog({ pack, onClose }: { pack: Pack; onClose: (res?: Awaited<
               : "This solution has no tunable parameters."}
           </DialogDescription>
         </DialogHeader>
-        <div className="max-h-[60vh] space-y-3 overflow-auto pr-1">
+        <div className="max-h-[60vh] space-y-4 overflow-auto pr-1">
           {Object.entries(pack.parameters).map(([k, v]) => (
-            <div key={k} className="space-y-1.5"><Label className="capitalize">{k.replace(/_/g, " ")}</Label>
+            <div key={k} className="space-y-1.5">
+              <Label className="capitalize">{k.replace(/_/g, " ")}</Label>
               <Input value={vals[k] ?? ""} onChange={(e) => setVals({ ...vals, [k]: e.target.value })} />
-              {v.description && <p className="text-xs text-muted-foreground">{v.description}</p>}</div>
+              {v.description && <p className="text-xs text-muted-foreground">{v.description}</p>}
+            </div>
           ))}
-          <p className="text-xs text-muted-foreground">Workflow definitions are versioned, so running cases are not affected by this change.</p>
+          <p className="rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">
+            Workflow definitions are versioned, so running cases are not affected by this change.
+          </p>
         </div>
-        <DialogFooter><Button variant="outline" onClick={() => onClose()}>Cancel</Button><AsyncButton onRun={go}>{pack.installed ? "Apply" : "Install"}</AsyncButton></DialogFooter>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onClose()}>Cancel</Button>
+          <AsyncButton onRun={go}>{pack.installed ? "Apply" : "Install"}</AsyncButton>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

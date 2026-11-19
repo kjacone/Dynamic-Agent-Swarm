@@ -5,7 +5,11 @@ from typing import Any
 
 import httpx
 
-from nmb_marketplace_agent.enterprise.connectors.base import Connector, ConnectorError, resolve_secret
+from nmb_marketplace_agent.enterprise.connectors.base import (
+    Connector,
+    ConnectorError,
+    resolve_secret,
+)
 
 
 class RestConnector(Connector):

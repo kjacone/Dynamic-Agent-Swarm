@@ -240,6 +240,7 @@ class WorkflowEngine:
         inflating the operator-visible counter with replay traffic).
         """
         from sqlalchemy import select as _select
+
         from nmb_marketplace_agent.enterprise.models import WorkflowRule
 
         fired = set(st.get("_fired_rules", []))
@@ -395,7 +396,9 @@ class WorkflowEngine:
             return out
 
         if step.agent in self.rt.supervisor_ids and self.rt.supervisor_runner:
-            from nmb_marketplace_agent.enterprise.observability.cost_tracker import CostTracker
+            from nmb_marketplace_agent.enterprise.observability.cost_tracker import (
+                CostTracker,
+            )
 
             tracker = CostTracker(tenant_id=self.tenant, run_id=run.id, step_id=step.id)
 

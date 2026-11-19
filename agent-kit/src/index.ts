@@ -1,13 +1,16 @@
 // Provider + hooks
 export { LangGraphKitProvider, useKit } from "./provider";
-export type { LangGraphKitProviderProps, KitContextValue } from "./provider";
+export type { LangGraphKitProviderProps, KitContextValue, ThemeMode, ThemeVars } from "./provider";
 export { useAgent } from "./use-agent";
 export type { AgentState, SendInput } from "./use-agent";
 export { useAgentContext } from "./agent-context";
 export { useAgentTool, useAgentReadable, useAssistants, useThreads } from "./hooks";
-export { GatewayTransport, gatewayToken, requestHandoff, handoffSnapshot, sendFeedback } from "./gateway";
+export {
+  GatewayTransport, gatewayToken, listGatewayAgents, requestHandoff, handoffSnapshot, sendFeedback,
+} from "./gateway";
 export type {
-  GatewayConfig, GatewayEvent, GatewayHandoff, GatewaySource, GatewayStaffMessage,
+  GatewayAgent, GatewayConfig, GatewayConfigField, GatewayEvent, GatewayHandoff,
+  GatewayHostConfig, GatewaySource, GatewayStaffMessage, GatewayTheme,
 } from "./gateway";
 export type { ThreadSummary } from "./hooks";
 export { useFileUpload } from "./use-file-upload";
@@ -22,6 +25,8 @@ export { ChatSidebar } from "./components/ChatSidebar";
 export type { ChatSidebarProps } from "./components/ChatSidebar";
 export { Playground } from "./components/Playground";
 export { HistoryPanel } from "./components/HistoryPanel";
+export { PhoneCall } from "./components/PhoneCall";
+export type { PhoneCallProps, PhoneCallMode, PhoneCallLocale, PhoneTurn } from "./components/PhoneCall";
 
 // Building blocks for custom layouts
 export { ConnectionForm } from "./components/ConnectionForm";
@@ -40,6 +45,9 @@ export { GenericInterrupt } from "./components/interrupts/GenericInterrupt";
 export { Markdown } from "./components/Markdown";
 export type { MarkdownOptions } from "./components/Markdown";
 export { KeyValueTable, ExpandableText } from "./components/ui/KeyValueTable";
+export {
+  UiStyles, PhoneIcon, ArrowIcon, DocIcon, CheckIcon,
+} from "./components/ui/icons";
 
 // Artifacts (side panel)
 export { useArtifact, useArtifactOpen, useArtifactContext } from "./artifact";

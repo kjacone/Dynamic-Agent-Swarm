@@ -1,10 +1,12 @@
 import { useMemo, useRef, useState } from "react";
 import {
-  Boxes, Check, Copy, Eraser, Eye, Layers, Link2, Maximize2, Minimize2, Pencil, Search, Sparkles,
-  Undo2, Wand2, Wrench,
+  Boxes, Check, Copy, Eraser, Eye, Layers, Link2, Maximize2, Minimize2, Palette, Pencil, Plus,
+  Search, Sparkles, Undo2, Wand2, Wrench, X,
 } from "lucide-react";
 
-import type { Agent, ModelCfg, Rag, SubAgent, Tool } from "@/lib/api";
+import type {
+  Agent, AgentLimits, AgentWrapperConfigField, AgentWrapperTheme, ModelCfg, Rag, SubAgent, Tool,
+} from "@/lib/api";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -241,10 +243,15 @@ export function AgentForm({
   const [expanded, setExpanded] = useState(false);
   const [cleared, setCleared] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [capTab, setCapTab] = useState<"tools" | "rag" | "subs">("tools");
+  const [capTab, setCapTab] = useState<"tools" | "rag" | "subs" | "wrapper">("tools");
   const [toolIds, setToolIds] = useState<string[]>(initial?.tool_ids || []);
   const [ragIds, setRagIds] = useState<string[]>(initial?.rag_collection_ids || []);
   const [subIds, setSubIds] = useState<string[]>(initial?.subagent_ids || []);
+  const limits = (initial?.limits ?? {}) as AgentLimits;
+  const [suggestions, setSuggestions] = useState<string[]>(limits.suggestions ?? []);
+  const [suggestionDraft, setSuggestionDraft] = useState("");
+  const [wrapperTheme, setWrapperTheme] = useState<AgentWrapperTheme>(limits.wrapper?.theme ?? {});
+  const [configFields, setConfigFields] = useState<AgentWrapperConfigField[]>(limits.wrapper?.config ?? []);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const toast = useToast();
 
@@ -289,11 +296,38 @@ export function AgentForm({
     setPrompt("");
   }
 
+  function addSuggestion() {
+    const text = suggestionDraft.trim().replace(/\s+/g, " ").slice(0, 160);
+    if (!text || suggestions.includes(text) || suggestions.length >= 6) return;
+    setSuggestions([...suggestions, text]);
+    setSuggestionDraft("");
+  }
+
+  function patchWrapperConfig(i: number, patch: Partial<AgentWrapperConfigField>) {
+    setConfigFields(configFields.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  }
+
   async function save() {
     try {
+      const theme: AgentWrapperTheme = { ...wrapperTheme };
+      for (const key of Object.keys(theme) as (keyof AgentWrapperTheme)[]) {
+        if (theme[key] === "" || theme[key] === undefined) delete theme[key];
+      }
+      const wrapperLimits = {
+        ...limits,
+        suggestions,
+        wrapper: {
+          ...(limits.wrapper ?? {}),
+          theme,
+          config: configFields
+            .filter((f) => f.key.trim())
+            .map((f) => ({ ...f, key: f.key.trim(), label: (f.label || f.key).trim() })),
+        },
+      };
       const body = {
         name, model, system_prompt: finalPrompt, tenant_id: tenant,
         tool_ids: toolIds, rag_collection_ids: ragIds, subagent_ids: subIds,
+        limits: wrapperLimits,
       };
       if (initial) await api.patchAgent(initial.id, body);
       else await api.createAgent(body);
@@ -540,6 +574,7 @@ export function AgentForm({
                     { value: "tools", label: "Tools", icon: Wrench, badge: toolIds.length },
                     { value: "rag", label: "RAG", icon: Layers, badge: ragIds.length },
                     { value: "subs", label: "Subagents", icon: Boxes, badge: subIds.length },
+                    { value: "wrapper", label: "Wrapper", icon: Palette, badge: suggestions.length },
                   ]}
                 />
                 {capTab === "tools" && (
@@ -562,6 +597,117 @@ export function AgentForm({
                     selected={subIds} onChange={setSubIds}
                     empty="No subagents yet. Create one on the Subagents page."
                   />
+                )}
+                {capTab === "wrapper" && (
+                  <div className="space-y-4">
+                    <section className="space-y-2">
+                      <div>
+                        <p className="text-xs font-medium">Starting suggestions</p>
+                        <p className="text-[11px] text-muted-foreground">Quick replies shown when the chat opens. Up to 6.</p>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {suggestions.length === 0 && (
+                          <span className="text-[11px] text-muted-foreground">No suggestions yet.</span>
+                        )}
+                        {suggestions.map((s) => (
+                          <span key={s} className="inline-flex max-w-full items-center gap-1 rounded-full border bg-muted/50 py-0.5 pl-2.5 pr-1 text-[11px]">
+                            <span className="truncate">{s}</span>
+                            <button type="button" aria-label={`Remove ${s}`} className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                              onClick={() => setSuggestions(suggestions.filter((x) => x !== s))}>
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex gap-1.5">
+                        <Input value={suggestionDraft} onChange={(e) => setSuggestionDraft(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSuggestion(); } }}
+                          placeholder="Why is my bill higher this month?" className="h-8 text-xs"
+                          disabled={suggestions.length >= 6} />
+                        <Button type="button" size="sm" variant="outline" className="h-8 shrink-0 px-2"
+                          onClick={addSuggestion} disabled={!suggestionDraft.trim() || suggestions.length >= 6}>
+                          <Plus className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </section>
+
+                    <section className="space-y-2 border-t pt-3">
+                      <div>
+                        <p className="text-xs font-medium">Look and feel</p>
+                        <p className="text-[11px] text-muted-foreground">Accent colour and appearance for the customer chat.</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="relative h-8 w-8 cursor-pointer overflow-hidden rounded-full border"
+                          style={{ background: wrapperTheme.accent || "#2f5cff" }} title="Accent colour">
+                          <input type="color" aria-label="Accent colour" value={wrapperTheme.accent || "#2f5cff"}
+                            onChange={(e) => setWrapperTheme({ ...wrapperTheme, accent: e.target.value })}
+                            className="absolute inset-0 h-full w-full cursor-pointer border-0 p-0 opacity-0" />
+                        </label>
+                        <div className="inline-flex rounded-lg bg-muted p-0.5">
+                          {(["system", "light", "dark"] as const).map((m) => (
+                            <button key={m} type="button"
+                              className={cn("rounded-md px-2 py-1 text-[11px] capitalize",
+                                (wrapperTheme.mode ?? "system") === m ? "bg-background shadow-sm" : "text-muted-foreground")}
+                              onClick={() => setWrapperTheme({ ...wrapperTheme, mode: m })}>
+                              {m === "system" ? "Auto" : m}
+                            </button>
+                          ))}
+                        </div>
+                        {wrapperTheme.accent && (
+                          <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground"
+                            onClick={() => setWrapperTheme({ ...wrapperTheme, accent: "" })}>
+                            Reset colour
+                          </button>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="space-y-2 border-t pt-3">
+                      <div>
+                        <p className="text-xs font-medium">Config from the page</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Keys the wrapper may send per request, e.g. a customer JWT. Values are never stored or logged; HTTP tools can use them as <code className="font-mono">{"{host.KEY}"}</code> in headers.
+                        </p>
+                      </div>
+                      {configFields.map((field, i) => (
+                        <div key={i} className="space-y-1.5 rounded-lg border p-2">
+                          <div className="flex gap-1.5">
+                            <Input value={field.key} onChange={(e) => patchWrapperConfig(i, { key: e.target.value })}
+                              placeholder="USER_JWT" className="h-7 font-mono text-[11px]" aria-label="Config key" />
+                            <Input value={field.label ?? ""} onChange={(e) => patchWrapperConfig(i, { label: e.target.value })}
+                              placeholder="Customer token" className="h-7 text-[11px]" aria-label="Config label" />
+                            <button type="button" aria-label="Remove field" className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
+                              onClick={() => setConfigFields(configFields.filter((_, j) => j !== i))}>
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+                            <label className="flex items-center gap-1">
+                              <input type="checkbox" className="h-3.5 w-3.5 accent-primary" checked={!!field.secret}
+                                onChange={(e) => patchWrapperConfig(i, { secret: e.target.checked, ...(e.target.checked ? { share_with_model: false } : {}) })} />
+                              Secret
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input type="checkbox" className="h-3.5 w-3.5 accent-primary" disabled={!!field.secret}
+                                checked={!!field.share_with_model}
+                                onChange={(e) => patchWrapperConfig(i, { share_with_model: e.target.checked })} />
+                              Show to the model
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input type="checkbox" className="h-3.5 w-3.5 accent-primary" checked={!!field.required}
+                                onChange={(e) => patchWrapperConfig(i, { required: e.target.checked })} />
+                              Required
+                            </label>
+                          </div>
+                        </div>
+                      ))}
+                      <Button type="button" size="sm" variant="outline" className="h-7 w-full text-[11px]"
+                        disabled={configFields.length >= 8}
+                        onClick={() => setConfigFields([...configFields, { key: "", label: "", secret: false, share_with_model: false, required: false }])}>
+                        <Plus className="h-3.5 w-3.5" /> Add key
+                      </Button>
+                    </section>
+                  </div>
                 )}
               </aside>
             )}

@@ -27,7 +27,10 @@ async def _seed(db, tenant, status="approved"):
 
 
 async def test_approval_to_eval_defaults_from_run(db):
-    from nmb_marketplace_agent.enterprise.api import ToEvalCase, approval_to_eval_case
+    from nmb_marketplace_agent.enterprise.approvals_api import (
+        ToEvalCase,
+        approval_to_eval_case,
+    )
     from nmb_marketplace_agent.enterprise.rbac import Principal
 
     ap_id, ds_id = await _seed(db, "t1")
@@ -41,7 +44,10 @@ async def test_approval_to_eval_defaults_from_run(db):
 
 
 async def test_approval_to_eval_rejects_pending(db):
-    from nmb_marketplace_agent.enterprise.api import ToEvalCase, approval_to_eval_case
+    from nmb_marketplace_agent.enterprise.approvals_api import (
+        ToEvalCase,
+        approval_to_eval_case,
+    )
     from nmb_marketplace_agent.enterprise.rbac import Principal
 
     ap_id, ds_id = await _seed(db, "t1", status="pending")
@@ -52,7 +58,10 @@ async def test_approval_to_eval_rejects_pending(db):
 
 
 async def test_approval_to_eval_rejects_other_tenant(db):
-    from nmb_marketplace_agent.enterprise.api import ToEvalCase, approval_to_eval_case
+    from nmb_marketplace_agent.enterprise.approvals_api import (
+        ToEvalCase,
+        approval_to_eval_case,
+    )
     from nmb_marketplace_agent.enterprise.rbac import Principal
 
     ap_id, ds_id = await _seed(db, "t1")

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, KeyRound, Settings2 } from "lucide-react";
+import { Check, Copy, KeyRound, Pencil, RefreshCw, Settings2 } from "lucide-react";
 import { api, type ApiKey, type Agent, type Connection, type ServiceStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -169,6 +169,8 @@ function KeysTab({ tenant }: { tenant: string }) {
   const [open, setOpen] = useState(false);
   const [created, setCreated] = useState<ApiKey | null>(null);
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
+  const [rotating, setRotating] = useState<ApiKey | null>(null);
+  const [editing, setEditing] = useState<ApiKey | null>(null);
   const [copied, setCopied] = useState(false);
   const toast = useToast();
 
@@ -245,19 +247,57 @@ function KeysTab({ tenant }: { tenant: string }) {
                   <TD className="text-right text-xs tabular-nums">{k.rate_limit_per_min}/min</TD>
                   <TD className="whitespace-nowrap text-xs">{fmtDate(k.created_at)}</TD>
                   <TD>
-                    {k.revoked ? (
-                      <StatusBadge value="cancelled" label="revoked" />
-                    ) : (
-                      <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setRevoking(k)}>
-                        Revoke
+                    <div className="flex items-center justify-end gap-1">
+                      {k.revoked && <StatusBadge value="cancelled" label="revoked" />}
+                      <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setEditing(k)}>
+                        <Pencil className="h-3.5 w-3.5" /> Edit
                       </Button>
-                    )}
+                      {!k.revoked && (
+                        <>
+                          <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setRotating(k)}>
+                            <RefreshCw className="h-3.5 w-3.5" /> Rotate &amp; copy
+                          </Button>
+                          <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => setRevoking(k)}>
+                            Revoke
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </TD>
                 </TR>
               ))}
             </TBody>
           </Table>
         </Card>
+      )}
+
+      {rotating && (
+        <ConfirmDialog
+          title={`Rotate ${rotating.name}?`}
+          description="The current key stops working immediately. A replacement with the same agent, origins and rate is issued — its full value is shown once, so copy it straight away."
+          confirmLabel="Rotate and show new key"
+          onClose={() => setRotating(null)}
+          onConfirm={async () => {
+            const target = rotating;
+            const fresh = await api.createKey({
+              name: target.name, agent_id: target.agent_id, tenant_id: target.tenant_id,
+              kind: target.kind, allowed_origins: target.allowed_origins,
+              rate_limit_per_min: target.rate_limit_per_min,
+            });
+            setCreated(fresh);
+            await api.revokeKey(target.id);
+            await refresh();
+            toast.push("Key rotated — copy the new key below", "success");
+          }}
+        />
+      )}
+
+      {editing && (
+        <KeyEditDialog
+          k={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); refresh(); }}
+        />
       )}
 
       {revoking && (
@@ -274,6 +314,92 @@ function KeysTab({ tenant }: { tenant: string }) {
         />
       )}
     </div>
+  );
+}
+
+function KeyEditDialog({ k, onClose, onSaved }: {
+  k: ApiKey;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(k.name);
+  const [origins, setOrigins] = useState(k.allowed_origins.join(", "));
+  const [rate, setRate] = useState(String(k.rate_limit_per_min));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const toast = useToast();
+
+  async function save() {
+    setErr(null);
+    const trimmed = name.trim();
+    if (!trimmed) { setErr("Name is required"); return; }
+    const n = Number(rate);
+    if (!Number.isFinite(n) || n < 1) { setErr("Rate limit must be at least 1 request per minute"); return; }
+    setBusy(true);
+    try {
+      await api.updateKey(k.id, {
+        name: trimmed,
+        ...(k.kind === "publishable"
+          ? { allowed_origins: origins.split(",").map((s) => s.trim()).filter(Boolean) }
+          : {}),
+        rate_limit_per_min: Math.round(n),
+      });
+      toast.push("Key details saved", "success");
+      onSaved();
+    } catch (e: any) {
+      setErr(e.message ?? "Could not save");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && !busy && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit key</DialogTitle>
+          <DialogDescription>
+            The key value itself is never stored — use Rotate &amp; copy to issue a new one.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Name</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
+          </div>
+          {k.kind === "publishable" && (
+            <div className="space-y-1.5">
+              <Label>Allowed origins</Label>
+              <Input
+                value={origins}
+                onChange={(e) => setOrigins(e.target.value)}
+                placeholder="http://localhost:3000, https://shop.example.com"
+              />
+              <p className="text-xs text-muted-foreground">
+                Comma-separated. Use <code>*</code> to allow any origin.
+              </p>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <Label>Rate limit (requests per minute)</Label>
+            <Input type="number" min={1} value={rate} onChange={(e) => setRate(e.target.value)} />
+          </div>
+          <div className="rounded-lg border bg-muted/40 p-2.5 text-xs text-muted-foreground">
+            Agent <span className="font-mono">{k.agent_id.slice(0, 8)}…</span> · {k.kind} · fixed scope —
+            issue a new key to target another agent.
+          </div>
+          {err && (
+            <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              {err}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={save} disabled={busy}>{busy ? "Saving…" : "Save changes"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

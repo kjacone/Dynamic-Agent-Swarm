@@ -1,8 +1,6 @@
-import pytest
 
 from nmb_marketplace_agent.enterprise.workflows.conformance import (
     ConformanceCase,
-    _ConformanceUnavailable,
     _walk,
     load_cases,
     run_conformance,

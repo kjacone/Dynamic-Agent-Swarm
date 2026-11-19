@@ -1,8 +1,4 @@
-import json
 import uuid
-
-import pytest
-from sqlmodel import select
 
 from nmb_marketplace_agent.config.models import (
     AgentConfig,

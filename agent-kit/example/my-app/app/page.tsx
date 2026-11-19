@@ -1,19 +1,15 @@
 "use client";
-import { ChatPopup, Playground } from "langgraph-kit";
+import { Playground } from "langgraph-kit";
+import { GatewayAgents } from "./components/gateway-agents";
 
 const gatewayMode = !!process.env.NEXT_PUBLIC_GATEWAY_URL;
 
 export default function Page() {
-  // Gateway mode: the copilot talks to /v1/session + /v1/chat (citations, handoff,
-  // feedback). LangGraph mode keeps the original playground with thread history.
+  // Gateway mode: the customer wrapper lists the agents its publishable key may
+  // use and chats with the chosen one (citations, handoff, feedback).
+  // LangGraph mode keeps the original playground with thread history.
   if (gatewayMode) {
-    return (
-      <ChatPopup
-        defaultOpen
-        title="NMB Service Assistant"
-        suggestions={["Why is my bill higher this month?", "What is the status of ticket 48213?"]}
-      />
-    );
+    return <GatewayAgents />;
   }
   return (
     <Playground

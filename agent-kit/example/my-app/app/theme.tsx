@@ -8,6 +8,10 @@ import {
 
 const STORAGE_KEY = "lgk-theme";
 
+type ThemeMode = "light" | "dark" | "system";
+type ThemeTokens = { accent: string; accentInk: string };
+type ThemeConfig = { mode: ThemeMode; tokens: ThemeTokens };
+
 /** Default = blue primary, follows OS. */
 const DEFAULT_THEME: ThemeConfig = {
   mode: "system",

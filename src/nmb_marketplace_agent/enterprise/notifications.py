@@ -29,7 +29,10 @@ from sqlmodel import select
 
 from nmb_marketplace_agent.config import database
 from nmb_marketplace_agent.enterprise import audit
-from nmb_marketplace_agent.enterprise.connectors.base import ConnectorError, EgressPolicy
+from nmb_marketplace_agent.enterprise.connectors.base import (
+    ConnectorError,
+    EgressPolicy,
+)
 from nmb_marketplace_agent.enterprise.models import (
     Approval,
     Notification,

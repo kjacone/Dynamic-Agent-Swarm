@@ -4,17 +4,19 @@ import logging
 from deepagents import create_deep_agent
 from langchain_core.runnables import RunnableConfig
 
+from nmb_marketplace_agent.checkpoint_store import install_checkpoint_encryption
 from nmb_marketplace_agent.config.database import async_session
 from nmb_marketplace_agent.config.models import AgentConfig
 from nmb_marketplace_agent.config.settings import settings
 from nmb_marketplace_agent.config.versioning import effective_config
-from nmb_marketplace_agent.checkpoint_store import install_checkpoint_encryption
 from nmb_marketplace_agent.enterprise.middleware.delegation import DelegationMiddleware
-from nmb_marketplace_agent.enterprise.middleware.injection import InjectionShieldMiddleware
+from nmb_marketplace_agent.enterprise.middleware.injection import (
+    InjectionShieldMiddleware,
+)
 from nmb_marketplace_agent.enterprise.runtime import load_guards
+from nmb_marketplace_agent.llm.registry import resolve_model
 from nmb_marketplace_agent.locale.middleware import LocaleMiddleware
 from nmb_marketplace_agent.locale.service import load_examples, load_profile
-from nmb_marketplace_agent.llm.registry import resolve_model
 from nmb_marketplace_agent.observability import attach
 from nmb_marketplace_agent.prompts.resolver import resolve_system_prompt
 from nmb_marketplace_agent.prompts.system import (

@@ -11,6 +11,39 @@ import { KeyValueTable } from "../ui/KeyValueTable";
 const pretty = (name: string) => { const s = name.replace(/[_-]+/g, " "); return s.charAt(0).toUpperCase() + s.slice(1); };
 const LABEL: Record<DecisionType, string> = { approve: "Approve", edit: "Edit", reject: "Reject" };
 
+type HistoryRow = { who: string; text: string };
+
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (part && typeof part === "object" && "text" in part
+        ? String((part as { text?: unknown }).text ?? "") : ""))
+      .join(" ");
+  }
+  return "";
+}
+
+/** Reviewer-friendly recap: what the customer asked and what the agent did, without raw state. */
+function historyRows(messages: unknown): HistoryRow[] {
+  if (!Array.isArray(messages)) return [];
+  const rows: HistoryRow[] = [];
+  for (const raw of messages) {
+    const m = raw as { type?: string; role?: string; name?: string; content?: unknown };
+    const type = m?.type ?? m?.role;
+    if (type === "tool") {
+      rows.push({ who: m.name ? pretty(m.name) : "Step", text: "Completed" });
+      continue;
+    }
+    const text = contentText(m?.content).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    const clipped = text.length > 140 ? `${text.slice(0, 137)}…` : text;
+    if (type === "human" || type === "user") rows.push({ who: "You", text: clipped });
+    else if (type === "ai" || type === "assistant") rows.push({ who: "Agent", text: clipped });
+  }
+  return rows.slice(-8);
+}
+
 function ActionReview({ action, allowed, draft, onChange }: {
   action: ActionRequest; allowed: DecisionType[]; draft: Draft; onChange: (d: Draft) => void;
 }) {
@@ -94,6 +127,7 @@ export function HitlReview({ interrupts }: { interrupts: { id?: string; value?: 
 
   const allApprovable = request.action_requests.every((a) => allowedFor(request, a).includes("approve"));
   const complete = list.every((d) => d.type);
+  const history = historyRows(agent.messages);
 
   return (
     <div className="lgk-hitl">
@@ -125,8 +159,16 @@ export function HitlReview({ interrupts }: { interrupts: { id?: string; value?: 
       </div>
 
       <details className="lgk-hitl-state">
-        <summary>View thread state</summary>
-        <pre className="lgk-pre">{JSON.stringify(agent.values ?? {}, null, 2)}</pre>
+        <summary>What has happened so far</summary>
+        {history.length > 0 ? (
+          <ol className="lgk-hitl-log">
+            {history.map((row, i) => (
+              <li key={i}><span>{row.who}</span>{row.text}</li>
+            ))}
+          </ol>
+        ) : (
+          <p className="lgk-muted-block">No earlier steps are recorded for this request.</p>
+        )}
       </details>
     </div>
   );

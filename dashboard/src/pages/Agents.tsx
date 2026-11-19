@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Bot, Boxes, Cpu, GitBranch, History, Layers, Pencil, Play, Plus, Trash2, UserX, Wrench,
+  Bot, Boxes, Cpu, GitBranch, History, Layers, Pencil, Play, Plus, Trash2, UserX, Wand2, Wrench,
 } from "lucide-react";
 
-import { api, type Agent, type ModelCfg, type Rag, type SubAgent, type Tool, type WfSpec } from "@/lib/api";
+import { api, type Agent, type ApiKey, type EvalDataset, type LocaleProfileRow, type ModelCfg, type Rag, type SubAgent, type Tool, type WfSpec } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,24 +25,36 @@ import { useToast } from "@/components/ui/toast";
 import { agentRole, flattenSteps } from "@/lib/workflows";
 import { cn, truncate } from "@/lib/utils";
 import { AgentForm } from "@/components/agents/AgentForm";
+import { AgentWorkspace, type AgentWorkflowUse } from "@/components/agents/AgentWorkspace";
+import type { TabId } from "@/components/layout/nav";
 
-type WorkflowUsage = { key: string; name: string; steps: string[] };
+type WorkflowUsage = AgentWorkflowUse;
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
-export function Agents({ tenant, onTest }: { tenant: string; onTest?: (agent: Agent) => void }) {
+export function Agents({ tenant, onTest, onOpenTab, focusAgentId, onFocusConsumed }: {
+  tenant: string;
+  onTest?: (agent: Agent) => void;
+  onOpenTab?: (tab: TabId) => void;
+  focusAgentId?: string | null;
+  onFocusConsumed?: () => void;
+}) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [rags, setRags] = useState<Rag[]>([]);
   const [subs, setSubs] = useState<SubAgent[]>([]);
   const [models, setModels] = useState<ModelCfg[]>([]);
   const [specs, setSpecs] = useState<WfSpec[]>([]);
+  const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [evals, setEvals] = useState<EvalDataset[]>([]);
+  const [locales, setLocales] = useState<LocaleProfileRow[]>([]);
   const [selected, setSelected] = useState("all");
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Agent | null>(null);
   const [creating, setCreating] = useState(false);
+  const [workspaceFor, setWorkspaceFor] = useState<Agent | null>(null);
   const [versionsFor, setVersionsFor] = useState<Agent | null>(null);
   const [deleting, setDeleting] = useState<Agent | null>(null);
   const toast = useToast();
@@ -66,8 +78,24 @@ export function Agents({ tenant, onTest }: { tenant: string; onTest?: (agent: Ag
     } finally {
       setLoading(false);
     }
+    // Secondary wiring data for the workspace panel; a missing permission must not blank the page.
+    const [k, e, l] = await Promise.allSettled([
+      api.listKeys(tenant), api.listEvalDatasets(tenant), api.listLocaleProfiles(tenant),
+    ]);
+    if (k.status === "fulfilled") setKeys(k.value);
+    if (e.status === "fulfilled") setEvals(e.value);
+    if (l.status === "fulfilled") setLocales(l.value);
   }
   useEffect(() => { refresh(); }, [tenant]);
+  // Deep link from the Overview map: open the workspace as soon as the agent list is in.
+  useEffect(() => {
+    if (!focusAgentId) return;
+    const agent = agents.find((a) => a.id === focusAgentId);
+    if (agent) {
+      setWorkspaceFor(agent);
+      onFocusConsumed?.();
+    }
+  }, [focusAgentId, agents]);
 
   const usage = useMemo(() => {
     const map = new Map<string, WorkflowUsage[]>();
@@ -136,7 +164,14 @@ export function Agents({ tenant, onTest }: { tenant: string; onTest?: (agent: Ag
         icon={Bot}
         title="Agents"
         description="The top-level graph each chat session runs against."
-        actions={<Button onClick={() => setCreating(true)}><Plus className="h-4 w-4" /> New agent</Button>}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => onOpenTab?.("studio")}>
+              <Wand2 className="h-4 w-4" /> Agent Studio
+            </Button>
+            <Button onClick={() => setCreating(true)}><Plus className="h-4 w-4" /> New agent</Button>
+          </div>
+        }
       />
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -152,8 +187,13 @@ export function Agents({ tenant, onTest }: { tenant: string; onTest?: (agent: Ag
       ) : agents.length === 0 ? (
         <EmptyState
           title="No agents yet"
-          body="Create one and configure its tools, RAG collections, and subagents."
-          action={<Button onClick={() => setCreating(true)}>Create agent</Button>}
+          body="Create one and configure its tools, RAG collections, and subagents — or let the Agent Studio compose it from a short brief."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button onClick={() => onOpenTab?.("studio")}><Wand2 className="h-4 w-4" /> Guided studio</Button>
+              <Button variant="outline" onClick={() => setCreating(true)}>Create agent</Button>
+            </div>
+          }
         />
       ) : (
         <div className="grid items-start gap-4 lg:grid-cols-[280px,minmax(0,1fr)]">
@@ -209,6 +249,7 @@ export function Agents({ tenant, onTest }: { tenant: string; onTest?: (agent: Ag
                     onModel={(m) => changeModel(a, m)}
                     onEdit={() => setEditing(a)}
                     onTest={() => onTest?.(a)}
+                    onWorkspace={() => setWorkspaceFor(a)}
                     onVersions={() => setVersionsFor(a)}
                     onDelete={() => setDeleting(a)}
                   />
@@ -237,6 +278,18 @@ export function Agents({ tenant, onTest }: { tenant: string; onTest?: (agent: Ag
         />
       )}
       {versionsFor && <VersionsDialog agent={versionsFor} tenant={tenant} onClose={() => setVersionsFor(null)} />}
+      {workspaceFor && (
+        <AgentWorkspace
+          agent={workspaceFor}
+          models={models} tools={tools} rags={rags} subs={subs}
+          workflows={usage.get(workspaceFor.id) ?? []}
+          keys={keys} evals={evals} locales={locales}
+          onClose={() => setWorkspaceFor(null)}
+          onEdit={() => setEditing(workspaceFor)}
+          onTest={onTest ? () => onTest(workspaceFor) : undefined}
+          onOpenTab={onOpenTab}
+        />
+      )}
       {deleting && (
         <ConfirmDialog
           title={`Delete ${deleting.name}?`}
@@ -276,7 +329,7 @@ function RailItem({ active, name, meta, count, onClick }: {
 }
 
 function AgentCard({
-  agent, models, trails, onModel, onEdit, onTest, onVersions, onDelete,
+  agent, models, trails, onModel, onEdit, onTest, onWorkspace, onVersions, onDelete,
 }: {
   agent: Agent;
   models: ModelCfg[];
@@ -284,6 +337,7 @@ function AgentCard({
   onModel: (m: string) => void;
   onEdit: () => void;
   onTest: () => void;
+  onWorkspace: () => void;
   onVersions: () => void;
   onDelete: () => void;
 }) {
@@ -329,6 +383,9 @@ function AgentCard({
         <div className="mt-auto flex items-center gap-0.5 border-t pt-2">
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onEdit}>
             <Pencil className="h-3.5 w-3.5" /> Edit
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onWorkspace} title="See everything wired into this agent">
+            <GitBranch className="h-3.5 w-3.5" /> Wiring
           </Button>
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onTest} title="Open this agent on the demo bench">
             <Play className="h-3.5 w-3.5" /> Test

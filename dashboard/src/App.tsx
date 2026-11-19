@@ -5,6 +5,7 @@ import type { TabId } from "@/components/layout/nav";
 import { Login } from "@/pages/Login";
 import { Overview } from "@/pages/Overview";
 import { Agents } from "@/pages/Agents";
+import { Studio } from "@/pages/Studio";
 import { LiveDemo, type DemoRequest } from "@/pages/LiveDemo";
 import { Subagents } from "@/pages/Subagents";
 import { Prompts } from "@/pages/Prompts";
@@ -35,6 +36,7 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean>(() => !!getToken());
   const [tab, setTab] = useState<TabId>("overview");
   const [demoRequest, setDemoRequest] = useState<DemoRequest | null>(null);
+  const [agentFocus, setAgentFocus] = useState<string | null>(null);
   const [tenant, setTenant] = useState<string>(() => sessionStorage.getItem(TENANT_KEY) || "default");
 
   const [me, setMe] = useState<Me | null>(null);
@@ -69,6 +71,8 @@ export default function App() {
     return () => clearInterval(id);
   }, [authed, me, tenant]);
 
+  const openAgent = (id: string) => { setAgentFocus(id); setTab("agents"); };
+
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
   return (
@@ -77,10 +81,31 @@ export default function App() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Topbar tenant={tenant} onTenant={setTenant} onLogout={() => { clearToken(); setAuthed(false); }} lockedTenant={!!me && me.auth !== "admin_token"} user={me ? `${me.sub} · ${me.roles.join(", ") || "no roles"}` : undefined} />
         <main className="flex-1 overflow-auto p-6">
-          {tab === "overview" && <Overview tenant={tenant} onManageLicence={() => setTab("licence")} />}
+          {tab === "overview" && (
+            <Overview
+              tenant={tenant}
+              onManageLicence={() => setTab("licence")}
+              onOpenTab={setTab}
+              onOpenAgent={openAgent}
+            />
+          )}
+          {tab === "studio" && (
+            <Studio
+              tenant={tenant}
+              onOpenTab={setTab}
+              onOpenAgent={openAgent}
+              onTest={(agent) => {
+                setDemoRequest({ agentId: agent.id, channel: "chat", nonce: Date.now() });
+                setTab("demo");
+              }}
+            />
+          )}
           {tab === "agents" && (
             <Agents
               tenant={tenant}
+              focusAgentId={agentFocus}
+              onFocusConsumed={() => setAgentFocus(null)}
+              onOpenTab={setTab}
               onTest={(agent) => {
                 setDemoRequest({ agentId: agent.id, channel: "chat", nonce: Date.now() });
                 setTab("demo");
@@ -104,9 +129,9 @@ export default function App() {
           {tab === "prompts" && <Prompts />}
           {tab === "tools" && <Tools tenant={tenant} />}
           {tab === "knowledge" && <Knowledge tenant={tenant} />}
-          {tab === "models" && <Models tenant={tenant} />}
+          {tab === "models" && <Models tenant={tenant} onOpenTab={setTab} />}
           {tab === "locale" && <Locale tenant={tenant} />}
-          {tab === "training" && <Training />}
+          {tab === "training" && <Training onOpenTab={setTab} />}
           {tab === "evals" && <Evaluations tenant={tenant} />}
           {tab === "observability" && <Observability />}
           {tab === "settings" && <Settings tenant={tenant} />}
@@ -120,14 +145,15 @@ export default function App() {
               tenant={tenant}
               onOpenGuardrails={() => setTab("guardrails")}
               onOpenSolutions={() => setTab("solutions")}
+              onOpenLocale={() => setTab("locale")}
             />
           )}
-          {tab === "workflows" && <Workflows key={tenant} me={me} tenant={tenant} />}
+          {tab === "workflows" && <Workflows key={tenant} me={me} tenant={tenant} onOpenTab={setTab} />}
           {tab === "solutions" && <Solutions key={tenant} me={me} />}
-          {tab === "audit" && <Audit key={tenant} me={me} />}
-          {tab === "privacy" && <Privacy key={tenant} me={me} />}
-          {tab === "governance" && <Governance key={tenant} me={me} />}
-          {tab === "guardrails" && <Guardrails key={tenant} me={me} />}
+          {tab === "audit" && <Audit key={tenant} me={me} tenant={tenant} onOpenTab={setTab} onOpenAgent={openAgent} />}
+          {tab === "privacy" && <Privacy key={tenant} me={me} tenant={tenant} onOpenTab={setTab} />}
+          {tab === "governance" && <Governance key={tenant} me={me} tenant={tenant} onOpenTab={setTab} onOpenAgent={openAgent} />}
+          {tab === "guardrails" && <Guardrails key={tenant} me={me} tenant={tenant} onOpenTab={setTab} />}
           {tab === "licence" && <Licence key={tenant} me={me} />}
         </main>
       </div>

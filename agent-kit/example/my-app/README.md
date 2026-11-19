@@ -1,36 +1,44 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Example app
 
-## Getting Started
+Next.js customer app for `langgraph-kit`. It has three surfaces:
 
-First, run the development server:
+- `/` — chat: lists the agents the publishable key may use, then opens `ChatSidebar` (gateway mode), or the original `Playground` when no gateway is configured.
+- `/orders`, `/reports` — pages that register `useAgentReadable` / `useAgentTool` for the copilot.
+- `/phone` — the `<PhoneCall>` surface: live voice turn-taking, or turn-by-turn recording that collects a JSONL dataset for the language lab.
+
+## Environment
+
+Create `.env.local` (or `.env`) in this directory:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# gateway the agent is served from (dashboard → Agents → publish)
+NEXT_PUBLIC_GATEWAY_URL=http://localhost:8000
+NEXT_PUBLIC_GATEWAY_KEY=pk_test_…
+NEXT_PUBLIC_GATEWAY_USER=demo-user
+
+# optional: dialect voice (voice ids are public; the key is not)
+NEXT_PUBLIC_ELEVENLABS_VOICE_ID=
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Server-only, for the phone line's `/api/tts` and `/api/stt` routes:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+ELEVENLABS_API_KEY=
+# optional overrides
+ELEVENLABS_VOICE_ID=
+ELEVENLABS_TTS_MODEL=eleven_multilingual_v2
+ELEVENLABS_STT_MODEL=scribe_v1
+ELEVENLABS_STT_LANGUAGE=
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`ELEVENLABS_API_KEY` is read in the route handlers and never sent to the browser. Without it the phone line falls back to the browser voice and typed input, and recorded turns still collect.
 
-## Learn More
+## Run
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm install
+npm run build   # in ../.. first, the app imports the built kit
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open <http://localhost:3000/phone> for the phone line.

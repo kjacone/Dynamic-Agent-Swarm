@@ -6,6 +6,30 @@
  * mints a short-lived session token and keeps sessions, guardrails, citations,
  * thread ownership and human handoff server-side.
  */
+/** Page-supplied key/value config (e.g. a signed-in customer's JWT). Sent per
+ * request, passed to tools, never stored by the gateway and never shown to the model
+ * unless the agent marks a field shareable. */
+export type GatewayHostConfig = Record<string, string>;
+
+export interface GatewayTheme {
+  accent?: string;
+  accentInk?: string;
+  surface?: string;
+  text?: string;
+  muted?: string;
+  mode?: "light" | "dark" | "system";
+  radius?: number;
+}
+
+/** A value the page must supply, declared by the agent's wrapper settings. */
+export interface GatewayConfigField {
+  key: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  placeholder?: string;
+}
+
 export interface GatewayConfig {
   /** e.g. https://agents.bank.co — no trailing slash */
   baseUrl: string;
@@ -15,10 +39,25 @@ export interface GatewayConfig {
   userId?: string;
   /** Only meaningful when a server-side secret key minted the session. */
   customerId?: string;
+  /** Agent to talk to. Defaults to the key's own agent; list choices with listGatewayAgents. */
+  agentId?: string;
   /** Namespace for the persisted thread map. Defaults to the gateway host. */
   persistKey?: string;
+  /** Values sent with every message for tools that call external services. */
+  hostConfig?: GatewayHostConfig;
   /** Injectable fetch (tests, non-browser runtimes). */
   fetch?: typeof fetch;
+}
+
+export interface GatewayAgent {
+  id: string;
+  name: string;
+  /** The key's own agent — used when no agentId is selected. */
+  default?: boolean;
+  /** Starting prompts saved in the agent's wrapper settings. */
+  suggestions?: string[];
+  /** Customer-facing look and the config values the page should supply. */
+  wrapper?: { theme?: GatewayTheme; config?: GatewayConfigField[] };
 }
 
 export interface GatewaySource {
@@ -75,7 +114,7 @@ const sessions = new Map<string, { token: string; exp: number }>();
 /** Exchanges the publishable key for a short-lived session token; falls back to the key. */
 export async function gatewayToken(cfg: GatewayConfig, force = false): Promise<string> {
   const url = trimBase(cfg.baseUrl);
-  const key = `${url}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}`;
+  const key = `${url}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}|${cfg.agentId ?? ""}`;
   const hit = sessions.get(key);
   if (!force && hit && hit.exp > Date.now() + 30_000) return hit.token;
 
@@ -87,6 +126,7 @@ export async function gatewayToken(cfg: GatewayConfig, force = false): Promise<s
       body: JSON.stringify({
         ...(cfg.userId ? { user_id: cfg.userId } : {}),
         ...(cfg.customerId ? { customer_id: cfg.customerId } : {}),
+        ...(cfg.agentId ? { agent_id: cfg.agentId } : {}),
       }),
     });
     if (res.ok) {
@@ -100,6 +140,19 @@ export async function gatewayToken(cfg: GatewayConfig, force = false): Promise<s
   return cfg.publishableKey;
 }
 
+/** Agents a publishable key may start conversations with (own + published). */
+export async function listGatewayAgents(cfg: GatewayConfig, init: { signal?: AbortSignal } = {}): Promise<GatewayAgent[]> {
+  const doFetch = cfg.fetch ?? fetch;
+  // Authenticates the raw key (not the session token): discovery happens before a session exists.
+  const res = await doFetch(`${trimBase(cfg.baseUrl)}/v1/agents`, {
+    headers: { Authorization: `Bearer ${cfg.publishableKey}` },
+    signal: init.signal,
+  });
+  if (!res.ok) throw new Error(`agents failed (${res.status})`);
+  const data = await res.json() as { agents?: GatewayAgent[] };
+  return data.agents ?? [];
+}
+
 export async function gatewayFetch(cfg: GatewayConfig, path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   const token = await gatewayToken(cfg, retried);
   const doFetch = cfg.fetch ?? fetch;
@@ -108,7 +161,7 @@ export async function gatewayFetch(cfg: GatewayConfig, path: string, init: Reque
     headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
   });
   if (res.status === 401 && !retried) {
-    sessions.delete(`${trimBase(cfg.baseUrl)}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}`);
+    sessions.delete(`${trimBase(cfg.baseUrl)}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}|${cfg.agentId ?? ""}`);
     return gatewayFetch(cfg, path, init, true);
   }
   return res;
@@ -245,6 +298,9 @@ const stringify = (value: unknown): string => {
   try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
 };
 
+const hostConfigBody = (cfg: GatewayConfig): { config?: GatewayHostConfig } =>
+  cfg.hostConfig && Object.keys(cfg.hostConfig).length ? { config: cfg.hostConfig } : {};
+
 /** Tool results in a resume payload, whether keyed by interrupt id or call id. */
 function resumeResults(resume: unknown): Array<[string, unknown]> {
   const out: Array<[string, unknown]> = [];
@@ -283,7 +339,7 @@ export class GatewayTransport {
 
   private get storeKey(): string {
     const base = trimBase(this.cfg.baseUrl);
-    return `nmb_gw_threads:${this.cfg.persistKey || base}:${this.cfg.publishableKey.slice(0, 10)}`;
+    return `nmb_gw_threads:${this.cfg.persistKey || base}:${this.cfg.publishableKey.slice(0, 10)}:${this.cfg.agentId ?? "default"}`;
   }
 
   private restore(clientThread: string): string | null {
@@ -302,6 +358,21 @@ export class GatewayTransport {
       const entries = Object.entries(map).slice(-20);
       localStorage.setItem(this.storeKey, JSON.stringify(Object.fromEntries(entries)));
     } catch { /* storage unavailable */ }
+  }
+
+  /**
+   * Whether an id is a thread the gateway already stores: a client id mapped to
+   * a server thread, a mapped server id (from history), or the running thread.
+   * A fresh client-side id has no transcript yet, so asking for one 404s.
+   */
+  hasServerThread(id: string): boolean {
+    if (this.serverThread === id) return true;
+    try {
+      const raw = localStorage.getItem(this.storeKey);
+      if (!raw) return false;
+      const map = JSON.parse(raw) as Record<string, string>;
+      return Boolean(map[id]) || Object.values(map).includes(id);
+    } catch { return true; }
   }
 
   async *stream(payload: TransportPayload): AsyncGenerator<Chunk> {
@@ -333,6 +404,7 @@ export class GatewayTransport {
           thread_id: this.serverThread,
           resume: command.resume,
           ...(this.cfg.userId ? { user_id: this.cfg.userId } : {}),
+          ...hostConfigBody(this.cfg),
         }),
       });
       if (!res.ok) throw await this.failure(res);
@@ -361,8 +433,10 @@ export class GatewayTransport {
           message: text,
           thread_id: this.serverThread,
           ...(this.cfg.userId ? { user_id: this.cfg.userId } : {}),
+          ...(this.cfg.agentId ? { agent_id: this.cfg.agentId } : {}),
           ...(context !== undefined ? { context } : {}),
           ...(readables !== undefined ? { readables } : {}),
+          ...hostConfigBody(this.cfg),
         }),
       });
       if (!res.ok) throw await this.failure(res);

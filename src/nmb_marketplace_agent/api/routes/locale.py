@@ -4,11 +4,14 @@ A profile is pure data; nothing here is language-specific. Attaching compiles it
 into a ``Locale Specialist`` subagent plus a runtime middleware rule block, so the
 same endpoints serve any language pair or register.
 """
+import json
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -46,6 +49,11 @@ class ProfileIn(BaseModel):
     required_phrases: list[str] = []
     banned_phrases: list[str] = []
     sample_cases: list[dict] = []
+    understanding: dict = {}
+    output: dict = {}
+    speech: dict = {}
+    inference: dict = {}
+    training: dict = {}
     notes: str = ""
     enabled: bool = True
 
@@ -68,6 +76,11 @@ class ProfilePatch(BaseModel):
     required_phrases: list[str] | None = None
     banned_phrases: list[str] | None = None
     sample_cases: list[dict] | None = None
+    understanding: dict | None = None
+    output: dict | None = None
+    speech: dict | None = None
+    inference: dict | None = None
+    training: dict | None = None
     notes: str | None = None
     enabled: bool | None = None
 
@@ -297,6 +310,76 @@ async def preview_profile(profile_id: str, body: PreviewIn, db: AsyncSession = D
     if body.language:
         out["rules"] += f"\n\nThis turn's user language: {body.language}"
     return out
+
+
+# ── Training pack: corrections become a fine-tune dataset ────────────
+
+def _pack_rows(profile: LocaleProfile, examples: list[LocaleExample]) -> list[dict]:
+    """One row per reviewed pair, in the shape the chosen fine-tune format wants."""
+    training = profile.training if isinstance(profile.training, dict) else {}
+    fmt = training.get("format") if training.get("format") in {"chat", "plain", "preference"} else "chat"
+    pairs: list[dict] = []
+    for ex in examples:
+        if ex.input and ex.corrected_output:
+            pairs.append({"input": ex.input, "good": ex.corrected_output,
+                          "bad": ex.bad_output or "", "source": ex.source})
+    for case in getattr(profile, "sample_cases", None) or []:
+        if not isinstance(case, dict) or not case.get("input"):
+            continue
+        good = case.get("output") or case.get("expected_contains") or ""
+        if good:
+            pairs.append({"input": str(case["input"]), "good": str(good),
+                          "bad": "", "source": "sample"})
+    rows: list[dict] = []
+    for pair in pairs:
+        if fmt == "preference":
+            if not pair["bad"]:
+                continue
+            rows.append({"prompt": pair["input"], "chosen": pair["good"],
+                         "rejected": pair["bad"]})
+        elif fmt == "plain":
+            rows.append({"prompt": pair["input"], "completion": pair["good"]})
+        else:
+            rows.append({"messages": [
+                {"role": "user", "content": pair["input"]},
+                {"role": "assistant", "content": pair["good"]},
+            ]})
+    return rows
+
+
+@router.get("/profiles/{profile_id}/training-pack")
+async def training_pack(profile_id: str, db: AsyncSession = Depends(get_db)):
+    """The dataset the dashboard previews before sending it to Training."""
+    profile = await _profile(db, profile_id)
+    examples = await service.load_examples(db, profile.id)
+    training = profile.training if isinstance(profile.training, dict) else {}
+    rows = _pack_rows(profile, examples)
+    minimum = training.get("min_pairs") if isinstance(training.get("min_pairs"), int) else 20
+    return {
+        "profile_id": profile.id,
+        "name": profile.name,
+        "locale_code": profile.locale_code,
+        "language": profile.default_language or (profile.languages or [""])[0],
+        "format": training.get("format", "chat"),
+        "capture": bool(training.get("capture")),
+        "target_job": training.get("target_job", ""),
+        "count": len(rows),
+        "min_pairs": minimum,
+        "ready": len(rows) >= minimum,
+        "rows": rows[:200],
+    }
+
+
+@router.get("/profiles/{profile_id}/training-pack.ndjson")
+async def download_training_pack(profile_id: str, db: AsyncSession = Depends(get_db)):
+    profile = await _profile(db, profile_id)
+    examples = await service.load_examples(db, profile.id)
+    rows = _pack_rows(profile, examples)
+    body = "\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
+    slug = re.sub(r"[^a-z0-9]+", "-", (profile.locale_code or profile.name).lower()).strip("-")
+    return Response(content=body + ("\n" if body else ""), media_type="application/x-ndjson",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="locale-{slug or "training"}.jsonl"'})
 
 
 @router.post("/profiles/{profile_id}/seed-eval")

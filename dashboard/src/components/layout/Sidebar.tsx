@@ -5,14 +5,16 @@ import { cn } from "@/lib/utils";
 /** Which tabs a signed-in principal may see. The server enforces the same rules; this only hides dead ends. */
 export function visibleTabs(me: Me | null): TabId[] {
   const admin = !me || can(me, "agents:write") || me.permissions.includes("*");
-  return NAV.filter((n) => (n.section === "platform" ? admin : can(me, n.perm))).map((n) => n.id);
+  return NAV.filter((n) =>
+    n.section === "platform" || n.section === "create" ? admin : can(me, n.perm),
+  ).map((n) => n.id);
 }
 
 export function Sidebar({ active, onSelect, me, badges = {} }: {
   active: TabId; onSelect: (id: TabId) => void; me: Me | null; badges?: Partial<Record<TabId, number>>;
 }) {
   const show = new Set(visibleTabs(me));
-  const sections: Array<["platform" | "enterprise" | "products", string]> = [["products", "Products"],["enterprise", "Operate & govern"], ["platform", "Build"]];
+  const sections: Array<["create" | "platform" | "enterprise" | "products", string]> = [["create", "Create"], ["products", "Products"], ["enterprise", "Operate & govern"], ["platform", "Build"]];
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/30">
       <div className="border-b p-4">

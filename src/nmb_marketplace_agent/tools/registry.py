@@ -64,7 +64,9 @@ def _materialize(cfg: ToolConfig) -> BaseTool:
         endpoint = cfg.config.get("endpoint")
         if not endpoint:
             raise ValueError(f"HTTP tool '{cfg.name}' missing endpoint")
-        return make_http_tool(cfg.name, endpoint, cfg.description)
+        headers = cfg.config.get("headers")
+        return make_http_tool(cfg.name, endpoint, cfg.description,
+                              headers if isinstance(headers, dict) else None)
 
     if cfg.type == "frontend":
         from nmb_marketplace_agent.tools.builtin.frontend import make_frontend_tool
@@ -75,7 +77,9 @@ def _materialize(cfg: ToolConfig) -> BaseTool:
         operation = cfg.config.get("operation")
         if not connector or not operation:
             raise ValueError(f"Connector tool '{cfg.name}' needs config.connector and config.operation")
-        from nmb_marketplace_agent.tools.builtin.connector_tool import make_connector_tool
+        from nmb_marketplace_agent.tools.builtin.connector_tool import (
+            make_connector_tool,
+        )
         return make_connector_tool(cfg.name, cfg.tenant_id, connector, operation, cfg.description)
 
     if cfg.type == "python":

@@ -39,6 +39,28 @@ class LocaleProfile(SQLModel, table=True):
     # Cases used when seeding a locale eval dataset on an agent.
     sample_cases: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
     #   [{"input": "hello", "expected_contains": "Karibu"}]
+    # How localised input is understood.
+    understanding: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    #   {"auto_detect": true, "languages": ["Kiswahili", "English"],
+    #    "translate_to": "", "notes": ""}
+    # How replies are localised.
+    output: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    #   {"mode": "mirror|fixed|bilingual", "language": "Kiswahili",
+    #    "second_language": "English", "localise_tools": true}
+    # How the dialect should sound. Read by the voice line and the agent-kit
+    # phone component; empty means "browser voice at the default settings".
+    speech: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    #   {"provider": "elevenlabs", "voice_id": "", "model_id": "eleven_multilingual_v2",
+    #    "stability": 0.5, "similarity": 0.75, "style": 0.0, "speed": 1.0,
+    #    "greeting": "", "accents": [{"label": "Dar es Salaam", "note": ""}]}
+    # Which model the locale specialist runs on, and how hard it should try.
+    inference: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    #   {"model": "", "temperature": 0.3, "reasoning": "off|light|deep",
+    #    "fallback_model": "", "notes": ""}
+    # How corrections become training data.
+    training: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    #   {"capture": false, "format": "chat|plain|preference", "verifier": "eval",
+    #    "min_pairs": 20, "target_job": "", "notes": ""}
     notes: str = Field(default="", sa_column=Column(Text))
     enabled: bool = Field(default=True)
     tenant_id: str = Field(default="default", index=True)

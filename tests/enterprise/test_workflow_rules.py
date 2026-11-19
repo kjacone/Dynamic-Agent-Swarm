@@ -1,11 +1,9 @@
 import uuid
 
-import pytest
 from sqlmodel import select
 
-from nmb_marketplace_agent.enterprise.models import WorkflowRule, WorkflowRun
+from nmb_marketplace_agent.enterprise.models import WorkflowRule
 from nmb_marketplace_agent.enterprise.workflows.engine import Runtime, WorkflowEngine
-
 
 SPEC = {
     "key": "kyc", "inputs": {"name": {"required": True}},
@@ -154,7 +152,7 @@ async def test_shadow_does_not_increment_fired_count(db):
 
     from nmb_marketplace_agent.enterprise.workflows.shadow import run_shadow
     r = runtime(10)
-    report = await run_shadow(db, "t1", r, "kyc", days=365)
+    await run_shadow(db, "t1", r, "kyc", days=365)
     # We didn't seed any historical runs, so total=0 — but the important check is that
     # even if runs were replayed, the fired_count would stay 0.
 

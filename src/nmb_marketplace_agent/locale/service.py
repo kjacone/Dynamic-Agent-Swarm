@@ -73,6 +73,8 @@ async def attach(db: AsyncSession, profile: LocaleProfile, agent: AgentConfig,
     row.description = spec["description"]
     row.system_prompt = spec["system_prompt"]
     row.mode = "sync"
+    inference = profile.inference if isinstance(profile.inference, dict) else {}
+    row.model = (inference.get("model") or None)  # None = inherit the agent's model
     db.add(row)
 
     agent.locale_profile_id = profile.id

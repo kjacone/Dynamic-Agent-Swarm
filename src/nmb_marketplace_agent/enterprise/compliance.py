@@ -17,7 +17,12 @@ from sqlmodel import select
 from nmb_marketplace_agent.enterprise import audit
 from nmb_marketplace_agent.enterprise.licensing import current_license
 from nmb_marketplace_agent.enterprise.metering import quota_status, summarize
-from nmb_marketplace_agent.enterprise.models import Approval, InstalledSolution, PolicySet, WorkflowRun
+from nmb_marketplace_agent.enterprise.models import (
+    Approval,
+    InstalledSolution,
+    PolicySet,
+    WorkflowRun,
+)
 
 # capability id -> (description, status). "roadmap" = not built yet; reported honestly.
 CAPABILITIES: dict[str, tuple[str, str]] = {

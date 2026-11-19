@@ -116,7 +116,7 @@ var trimBase = (url) => url.replace(/\/+$/, "");
 var sessions = /* @__PURE__ */ new Map();
 async function gatewayToken(cfg, force = false) {
   const url = trimBase(cfg.baseUrl);
-  const key = `${url}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}`;
+  const key = `${url}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}|${cfg.agentId ?? ""}`;
   const hit = sessions.get(key);
   if (!force && hit && hit.exp > Date.now() + 3e4) return hit.token;
   const doFetch = cfg.fetch ?? fetch;
@@ -126,7 +126,8 @@ async function gatewayToken(cfg, force = false) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.publishableKey}` },
       body: JSON.stringify({
         ...cfg.userId ? { user_id: cfg.userId } : {},
-        ...cfg.customerId ? { customer_id: cfg.customerId } : {}
+        ...cfg.customerId ? { customer_id: cfg.customerId } : {},
+        ...cfg.agentId ? { agent_id: cfg.agentId } : {}
       })
     });
     if (res.ok) {
@@ -140,6 +141,16 @@ async function gatewayToken(cfg, force = false) {
   }
   return cfg.publishableKey;
 }
+async function listGatewayAgents(cfg, init = {}) {
+  const doFetch = cfg.fetch ?? fetch;
+  const res = await doFetch(`${trimBase(cfg.baseUrl)}/v1/agents`, {
+    headers: { Authorization: `Bearer ${cfg.publishableKey}` },
+    signal: init.signal
+  });
+  if (!res.ok) throw new Error(`agents failed (${res.status})`);
+  const data = await res.json();
+  return data.agents ?? [];
+}
 async function gatewayFetch(cfg, path, init = {}, retried = false) {
   const token = await gatewayToken(cfg, retried);
   const doFetch = cfg.fetch ?? fetch;
@@ -148,7 +159,7 @@ async function gatewayFetch(cfg, path, init = {}, retried = false) {
     headers: { ...init.body ? { "Content-Type": "application/json" } : {}, ...init.headers, Authorization: `Bearer ${token}` }
   });
   if (res.status === 401 && !retried) {
-    sessions.delete(`${trimBase(cfg.baseUrl)}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}`);
+    sessions.delete(`${trimBase(cfg.baseUrl)}|${cfg.publishableKey}|${cfg.userId ?? ""}|${cfg.customerId ?? ""}|${cfg.agentId ?? ""}`);
     return gatewayFetch(cfg, path, init, true);
   }
   return res;
@@ -244,6 +255,7 @@ var stringify = (value) => {
     return String(value);
   }
 };
+var hostConfigBody = (cfg) => cfg.hostConfig && Object.keys(cfg.hostConfig).length ? { config: cfg.hostConfig } : {};
 function resumeResults(resume) {
   const out = [];
   if (!resume || typeof resume !== "object" || Array.isArray(resume)) return out;
@@ -272,7 +284,7 @@ var GatewayTransport = class {
   }
   get storeKey() {
     const base2 = trimBase(this.cfg.baseUrl);
-    return `nmb_gw_threads:${this.cfg.persistKey || base2}:${this.cfg.publishableKey.slice(0, 10)}`;
+    return `nmb_gw_threads:${this.cfg.persistKey || base2}:${this.cfg.publishableKey.slice(0, 10)}:${this.cfg.agentId ?? "default"}`;
   }
   restore(clientThread) {
     try {
@@ -291,6 +303,22 @@ var GatewayTransport = class {
       const entries = Object.entries(map).slice(-20);
       localStorage.setItem(this.storeKey, JSON.stringify(Object.fromEntries(entries)));
     } catch {
+    }
+  }
+  /**
+   * Whether an id is a thread the gateway already stores: a client id mapped to
+   * a server thread, a mapped server id (from history), or the running thread.
+   * A fresh client-side id has no transcript yet, so asking for one 404s.
+   */
+  hasServerThread(id) {
+    if (this.serverThread === id) return true;
+    try {
+      const raw = localStorage.getItem(this.storeKey);
+      if (!raw) return false;
+      const map = JSON.parse(raw);
+      return Boolean(map[id]) || Object.values(map).includes(id);
+    } catch {
+      return true;
     }
   }
   async *stream(payload) {
@@ -315,7 +343,8 @@ var GatewayTransport = class {
         body: JSON.stringify({
           thread_id: this.serverThread,
           resume: command.resume,
-          ...this.cfg.userId ? { user_id: this.cfg.userId } : {}
+          ...this.cfg.userId ? { user_id: this.cfg.userId } : {},
+          ...hostConfigBody(this.cfg)
         })
       });
       if (!res.ok) throw await this.failure(res);
@@ -341,8 +370,10 @@ var GatewayTransport = class {
           message: text2,
           thread_id: this.serverThread,
           ...this.cfg.userId ? { user_id: this.cfg.userId } : {},
+          ...this.cfg.agentId ? { agent_id: this.cfg.agentId } : {},
           ...context !== void 0 ? { context } : {},
-          ...readables !== void 0 ? { readables } : {}
+          ...readables !== void 0 ? { readables } : {},
+          ...hostConfigBody(this.cfg)
         })
       });
       if (!res.ok) throw await this.failure(res);
@@ -603,7 +634,9 @@ function LangGraphKitProvider({
   const gatewayKey = gateway?.publishableKey;
   const gatewayUser = gateway?.userId;
   const gatewayCustomer = gateway?.customerId;
+  const gatewayAgent = gateway?.agentId;
   const gatewayPersist = gateway?.persistKey;
+  const gatewayHostConfig = gateway?.hostConfig;
   const gatewayFetchImpl = gateway?.fetch;
   const gatewayTransport = useMemo(
     () => gatewayBaseUrl && gatewayKey ? new GatewayTransport({
@@ -611,10 +644,12 @@ function LangGraphKitProvider({
       publishableKey: gatewayKey,
       userId: gatewayUser,
       customerId: gatewayCustomer,
+      agentId: gatewayAgent,
       persistKey: gatewayPersist,
+      hostConfig: gatewayHostConfig,
       fetch: gatewayFetchImpl
     }, gatewayEvents.emit) : null,
-    [gatewayBaseUrl, gatewayKey, gatewayUser, gatewayCustomer, gatewayPersist, gatewayFetchImpl, gatewayEvents]
+    [gatewayBaseUrl, gatewayKey, gatewayUser, gatewayCustomer, gatewayAgent, gatewayPersist, gatewayHostConfig, gatewayFetchImpl, gatewayEvents]
   );
   const [status, setStatus] = useState3("idle");
   useEffect2(() => {
@@ -891,6 +926,7 @@ function useAgent() {
   useEffect3(() => {
     setHistory([]);
     if (!gateway || !threadId) return;
+    if (gatewayTransport && !gatewayTransport.hasServerThread(threadId)) return;
     let off = false;
     gatewayThreadMessages(
       { baseUrl: gateway.baseUrl, publishableKey: gateway.publishableKey, userId: gateway.userId, fetch: gateway.fetch },
@@ -979,7 +1015,7 @@ function useAgent() {
     );
   }, [opts]);
   const getBranch = useCallback4((message) => {
-    const meta = latest.current.stream.getMessagesMetadata(message);
+    const meta = latest.current.stream.getMessagesMetadata?.(message);
     return {
       branch: meta?.branch,
       branchOptions: meta?.branchOptions,
@@ -992,7 +1028,7 @@ function useAgent() {
   );
   const editMessage = useCallback4(async (message, text2) => {
     const { stream: s } = latest.current;
-    const meta = s.getMessagesMetadata(message);
+    const meta = s.getMessagesMetadata?.(message);
     const newMessage = { type: "human", content: text2 };
     await s.submit(
       { messages: [newMessage] },
@@ -1410,6 +1446,156 @@ import { useEffect as useEffect7, useRef as useRef8, useState as useState8 } fro
 
 // src/components/ui/icons.tsx
 import { jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
+var uiCss = `
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=DM+Sans:wght@400;500;600&display=swap");
+
+.ui-root {
+  --ink: #0c2b35;
+  --mute: #58777d;
+  --line: #d5e3e0;
+  --paper: #ffffff;
+  --wash: #f2f6f4;
+  --teal: #14586a;
+  --foam: #7ee6c4;
+  --foam-ink: #04251c;
+  min-height: 100dvh;
+  color: var(--ink);
+  font-family: "DM Sans", system-ui, sans-serif;
+  background: radial-gradient(800px 420px at 100% 0%, #dcefe9 0%, transparent 70%), var(--wash);
+}
+.ui-fill { height: 100dvh; min-height: 0; }
+
+.ui-page { max-width: 900px; margin: 0 auto; padding: 36px 28px 64px; display: grid; gap: 24px; align-content: start; }
+.ui-head h1 {
+  margin: 0; font-family: "Bricolage Grotesque", sans-serif; font-weight: 700;
+  font-size: clamp(28px, 3.6vw, 38px); letter-spacing: -0.02em; line-height: 1.08;
+}
+.ui-head p { margin: 8px 0 0; max-width: 60ch; color: var(--mute); font-size: 15px; line-height: 1.55; }
+.ui-title { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.ui-hint { margin: 0 0 12px; font-size: 13.5px; color: var(--mute); }
+
+/* link to the phone line */
+.ui-callout {
+  display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 18px;
+  text-decoration: none; color: #eafaf5; background: linear-gradient(135deg, #0f3b47, #14586a);
+  transition: transform .2s, box-shadow .2s;
+}
+.ui-callout:hover { transform: translateY(-1px); box-shadow: 0 14px 30px -16px rgba(12, 43, 53, .7); }
+.ui-callout:focus-visible, .ui-agent:focus-visible, .ui-chip:focus-visible, .ui-btn:focus-visible, .ui-report:focus-visible {
+  outline: 2px solid var(--teal); outline-offset: 3px;
+}
+.ui-callout-icon {
+  font-size: 20px; flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--foam); color: var(--foam-ink);
+}
+.ui-callout strong { display: block; font-size: 15px; }
+.ui-callout .sub { font-size: 13px; color: #a9d9ce; }
+.ui-callout-arrow { margin-left: auto; opacity: .8; display: flex; font-size: 18px; }
+
+/* agent picker */
+.ui-agents { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.ui-agent {
+  display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; padding: 14px;
+  border-radius: 16px; border: 1.5px solid var(--line); background: var(--paper); font: inherit; color: inherit;
+  transition: border-color .2s, box-shadow .2s;
+}
+.ui-agent:hover { border-color: #9cc3c0; }
+.ui-agent[aria-checked="true"] { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(126, 230, 196, .45); }
+.ui-avatar {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--wash); color: var(--teal); font-family: "Bricolage Grotesque", sans-serif; font-weight: 700;
+}
+.ui-agent[aria-checked="true"] .ui-avatar { background: var(--teal); color: #fff; }
+.ui-agent-name { display: block; font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+.ui-pill {
+  display: inline-block; margin-top: 3px; font-size: 11.5px; font-weight: 600; padding: 2px 8px;
+  border-radius: 999px; background: #e3f5ef; color: #0c5a45;
+}
+
+/* loading, error, empty */
+.ui-state {
+  display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-radius: 16px;
+  background: #fff; border: 1px solid var(--line); font-size: 15px;
+}
+.ui-state.error { flex-direction: column; align-items: flex-start; gap: 6px; border-color: #f3c4bd; background: #fff6f4; }
+.ui-state.error strong { color: #b42318; }
+.ui-state p { margin: 0; font-size: 14px; color: var(--mute); line-height: 1.5; }
+.ui-spinner {
+  width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid var(--line);
+  border-top-color: var(--teal); animation: ui-spin .8s linear infinite;
+}
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+
+/* filter chips */
+.ui-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ui-chip {
+  cursor: pointer; display: inline-flex; gap: 8px; align-items: center; padding: 8px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: #fff; font: inherit; font-size: 14px; color: inherit;
+  text-transform: capitalize; transition: background .2s, border-color .2s;
+}
+.ui-chip b { font-weight: 600; font-size: 12.5px; color: var(--mute); }
+.ui-chip:hover { border-color: #9cc3c0; }
+.ui-chip[aria-pressed="true"] { background: var(--teal); border-color: var(--teal); color: #fff; }
+.ui-chip[aria-pressed="true"] b { color: #bff5e2; }
+
+/* table */
+.ui-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 18px; background: #fff; }
+.ui-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 14px; }
+.ui-table th {
+  text-align: left; font-weight: 500; font-size: 13px; color: var(--mute); padding: 12px 16px;
+  border-bottom: 1px solid var(--line); background: #fafcfb;
+}
+.ui-table td { padding: 14px 16px; border-bottom: 1px solid #edf3f1; vertical-align: middle; }
+.ui-table tr:last-child td { border-bottom: 0; }
+.ui-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ui-order-id { font-weight: 600; }
+.ui-sub { display: block; font-size: 12.5px; color: var(--mute); }
+.ui-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; text-transform: capitalize; }
+.ui-badge.open { background: #fef3c7; color: #92400e; }
+.ui-badge.shipped { background: #dff1f5; color: #0f4d5e; }
+.ui-badge.delivered { background: #dcfce7; color: #166534; }
+.ui-empty { padding: 36px 16px; text-align: center; color: var(--mute); }
+
+/* tool cards inside the chat */
+.ui-tool { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; font-size: 14px; }
+.ui-tool svg { flex: none; font-size: 16px; color: #0c8a68; }
+.ui-report {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 12px 14px;
+  border-radius: 14px; cursor: pointer;
+}
+.ui-report-icon {
+  font-size: 20px; flex: none; width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center;
+  background: #e3f5ef; color: #0c5a45;
+}
+.ui-report-text { display: grid; gap: 2px; min-width: 0; }
+.ui-report-text strong { overflow-wrap: anywhere; }
+.ui-report-text small { display: flex; align-items: center; gap: 6px; font-size: 12.5px; opacity: .75; }
+.ui-dot { width: 7px; height: 7px; border-radius: 50%; background: #14a37f; animation: ui-pulse 1.2s ease-in-out infinite; }
+@keyframes ui-pulse { 50% { opacity: .25; } }
+
+/* report document in the side panel */
+.ui-doc {
+  white-space: pre-wrap; max-width: 68ch; font-size: 15px; line-height: 1.7;
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+.ui-doc-actions { margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5ece9; display: flex; gap: 8px; }
+.ui-btn {
+  cursor: pointer; font: inherit; font-size: 14px; font-weight: 500; padding: 9px 16px; border-radius: 10px;
+  border: 1px solid #14586a; background: #14586a; color: #fff;
+}
+.ui-btn:hover { background: #0f4655; }
+
+@media (max-width: 560px) {
+  .ui-page { padding: 24px 16px 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-spinner, .ui-dot { animation: none; }
+  .ui-callout { transition: none; }
+}
+`;
+function UiStyles() {
+  return /* @__PURE__ */ jsx4("style", { children: uiCss });
+}
 function Icon({ children, ...p }) {
   return /* @__PURE__ */ jsx4(
     "svg",
@@ -1429,6 +1615,17 @@ function Icon({ children, ...p }) {
     }
   );
 }
+var PhoneIcon = (p) => /* @__PURE__ */ jsx4(Icon, { ...p, children: /* @__PURE__ */ jsx4("path", { d: "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" }) });
+var ArrowIcon = (p) => /* @__PURE__ */ jsxs4(Icon, { ...p, children: [
+  /* @__PURE__ */ jsx4("path", { d: "M5 12h14" }),
+  /* @__PURE__ */ jsx4("path", { d: "m13 6 6 6-6 6" })
+] });
+var DocIcon = (p) => /* @__PURE__ */ jsxs4(Icon, { ...p, children: [
+  /* @__PURE__ */ jsx4("path", { d: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" }),
+  /* @__PURE__ */ jsx4("path", { d: "M14 3v5h5" }),
+  /* @__PURE__ */ jsx4("path", { d: "M9 13h6" }),
+  /* @__PURE__ */ jsx4("path", { d: "M9 17h6" })
+] });
 var CopyIcon = (p) => /* @__PURE__ */ jsxs4(Icon, { ...p, children: [
   /* @__PURE__ */ jsx4("rect", { x: "9", y: "9", width: "13", height: "13", rx: "2" }),
   /* @__PURE__ */ jsx4("path", { d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" })
@@ -1773,6 +1970,31 @@ var pretty = (name) => {
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 var LABEL = { approve: "Approve", edit: "Edit", reject: "Reject" };
+function contentText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => part && typeof part === "object" && "text" in part ? String(part.text ?? "") : "").join(" ");
+  }
+  return "";
+}
+function historyRows(messages) {
+  if (!Array.isArray(messages)) return [];
+  const rows = [];
+  for (const raw of messages) {
+    const m = raw;
+    const type = m?.type ?? m?.role;
+    if (type === "tool") {
+      rows.push({ who: m.name ? pretty(m.name) : "Step", text: "Completed" });
+      continue;
+    }
+    const text2 = contentText(m?.content).replace(/\s+/g, " ").trim();
+    if (!text2) continue;
+    const clipped = text2.length > 140 ? `${text2.slice(0, 137)}\u2026` : text2;
+    if (type === "human" || type === "user") rows.push({ who: "You", text: clipped });
+    else if (type === "ai" || type === "assistant") rows.push({ who: "Agent", text: clipped });
+  }
+  return rows.slice(-8);
+}
 function ActionReview({ action, allowed, draft, onChange }) {
   return /* @__PURE__ */ jsxs11("fieldset", { className: "lgk-hitl-action", children: [
     /* @__PURE__ */ jsx12("legend", { children: pretty(action.name) }),
@@ -1838,6 +2060,7 @@ function HitlReview({ interrupts }) {
   };
   const allApprovable = request.action_requests.every((a) => allowedFor(request, a).includes("approve"));
   const complete = list.every((d) => d.type);
+  const history = historyRows(agent.messages);
   return /* @__PURE__ */ jsxs11("div", { className: "lgk-hitl", children: [
     /* @__PURE__ */ jsx12("strong", { children: "Review needed" }),
     interrupts.length > 1 && /* @__PURE__ */ jsx12("div", { className: "lgk-hitl-tabs", role: "tablist", children: interrupts.map((it, i) => /* @__PURE__ */ jsx12("button", { type: "button", role: "tab", "aria-selected": i === active, onClick: () => setActive(i), children: pretty(it.value.action_requests[0]?.name ?? `Request ${i + 1}`) }, it.id ?? i)) }),
@@ -1857,8 +2080,11 @@ function HitlReview({ interrupts }) {
       /* @__PURE__ */ jsx12("button", { type: "button", className: "lgk-primary", disabled: !complete, onClick: submit, children: "Submit" })
     ] }),
     /* @__PURE__ */ jsxs11("details", { className: "lgk-hitl-state", children: [
-      /* @__PURE__ */ jsx12("summary", { children: "View thread state" }),
-      /* @__PURE__ */ jsx12("pre", { className: "lgk-pre", children: JSON.stringify(agent.values ?? {}, null, 2) })
+      /* @__PURE__ */ jsx12("summary", { children: "What has happened so far" }),
+      history.length > 0 ? /* @__PURE__ */ jsx12("ol", { className: "lgk-hitl-log", children: history.map((row, i) => /* @__PURE__ */ jsxs11("li", { children: [
+        /* @__PURE__ */ jsx12("span", { children: row.who }),
+        row.text
+      ] }, i)) }) : /* @__PURE__ */ jsx12("p", { className: "lgk-muted-block", children: "No earlier steps are recorded for this request." })
     ] })
   ] });
 }
@@ -3186,14 +3412,684 @@ function Playground(props) {
     ) })
   ] });
 }
+
+// src/components/PhoneCall.tsx
+import { useCallback as useCallback8, useEffect as useEffect10, useRef as useRef9, useState as useState22 } from "react";
+import { Fragment as Fragment10, jsx as jsx26, jsxs as jsxs24 } from "react/jsx-runtime";
+function recognitionCtor() {
+  if (typeof window === "undefined") return null;
+  const w = window;
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+function recorderMime() {
+  if (typeof MediaRecorder === "undefined") return void 0;
+  for (const type of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]) {
+    if (MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return void 0;
+}
+function clock(seconds) {
+  return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
+}
+async function consumeStream(res, state, onToken) {
+  if (!res.body) throw new Error("The gateway returned no stream.");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut = buffer.indexOf("\n\n");
+      while (cut >= 0) {
+        const block = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        cut = buffer.indexOf("\n\n");
+        const data = block.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+        if (!data || data === "[DONE]") continue;
+        let event;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        if (event.type === "thread" && event.threadId) state.threadId = String(event.threadId);
+        else if (event.type === "token" && event.text) {
+          state.text += String(event.text);
+          onToken(state.text);
+        } else if (event.type === "interrupt" && Array.isArray(event.interrupts)) {
+          state.interrupts.push(...event.interrupts);
+        } else if (event.type === "error") {
+          throw new Error(String(event.error || "The agent failed."));
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+async function streamReply(cfg, message, threadId, onToken, signal) {
+  const state = { text: "", threadId, interrupts: [] };
+  let res = await gatewayFetch(cfg, "/v1/chat", {
+    method: "POST",
+    headers: { Accept: "text/event-stream" },
+    signal,
+    body: JSON.stringify({
+      message,
+      thread_id: threadId,
+      ...cfg.userId ? { user_id: cfg.userId } : {},
+      ...cfg.agentId ? { agent_id: cfg.agentId } : {}
+    })
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(res.status === 429 ? "The line is busy \u2014 try again in a moment." : `Gateway error ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ""}`);
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await consumeStream(res, state, onToken);
+    if (state.interrupts.length === 0 || !state.threadId) break;
+    const resume = {};
+    for (const raw of state.interrupts) {
+      const value = raw.value;
+      const callId = value?.tool_call?.id ?? value?.toolCall?.id ?? raw.id;
+      if (callId) {
+        resume[callId] = {
+          status: "acknowledged",
+          channel: "voice",
+          instruction: "The caller hears speech only. Summarise the result as one short spoken answer; do not show UI cards."
+        };
+      }
+    }
+    state.interrupts = [];
+    if (Object.keys(resume).length === 0) break;
+    res = await gatewayFetch(cfg, "/v1/chat/resume", {
+      method: "POST",
+      headers: { Accept: "text/event-stream" },
+      signal,
+      body: JSON.stringify({
+        thread_id: state.threadId,
+        resume,
+        ...cfg.userId ? { user_id: cfg.userId } : {}
+      })
+    });
+    if (!res.ok) break;
+  }
+  return { text: state.text, threadId: state.threadId };
+}
+function download(rows, filename) {
+  const body = rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
+  const url = URL.createObjectURL(new Blob([body], { type: "application/x-ndjson" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1e3);
+}
+function PhoneCall({
+  gateway,
+  mode = "live",
+  locale,
+  ttsEndpoint,
+  sttEndpoint,
+  voiceId,
+  agentName = "Service line",
+  greeting,
+  datasetName,
+  onTurn,
+  onDataset,
+  className = ""
+}) {
+  const [active, setActive] = useState22(false);
+  const [phase, setPhase] = useState22("idle");
+  const [turns, setTurns] = useState22([]);
+  const [partial, setPartial] = useState22("");
+  const [liveText, setLiveText] = useState22("");
+  const [error, setError] = useState22(null);
+  const [muted, setMuted] = useState22(false);
+  const [speakReplies, setSpeakReplies] = useState22(mode === "live");
+  const [elapsed, setElapsed] = useState22(0);
+  const [draft, setDraft] = useState22("");
+  const [micSupported, setMicSupported] = useState22(true);
+  const activeRef = useRef9(false);
+  const phaseRef = useRef9("idle");
+  const mutedRef = useRef9(false);
+  const micDeniedRef = useRef9(false);
+  const threadIdRef = useRef9(null);
+  const abortRef = useRef9(null);
+  const recognitionRef = useRef9(null);
+  const recorderRef = useRef9(null);
+  const recordStreamRef = useRef9(null);
+  const audioRef = useRef9(null);
+  const audioUrlRef = useRef9(null);
+  const audioDoneRef = useRef9(null);
+  const speechResolveRef = useRef9(null);
+  const turnSeq = useRef9(0);
+  const turnsRef = useRef9([]);
+  const runTurnRef = useRef9(async () => {
+  });
+  const greetingText = greeting ?? locale?.greeting ?? "";
+  const lang = locale?.code || "en-US";
+  const setStage = useCallback8((next) => {
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
+  const keepTurns = useCallback8((next) => {
+    turnsRef.current = next;
+    setTurns(next);
+  }, []);
+  const pushTurn = useCallback8((turn) => {
+    const next = [...turnsRef.current, turn];
+    keepTurns(next);
+    onTurn?.(turn);
+  }, [keepTurns, onTurn]);
+  const patchTurn = useCallback8((id, patch) => {
+    keepTurns(turnsRef.current.map((t) => t.id === id ? { ...t, ...patch } : t));
+  }, [keepTurns]);
+  const stopAudio = useCallback8(() => {
+    if (audioRef.current) {
+      audioRef.current.onended = null;
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+    audioDoneRef.current?.();
+    audioDoneRef.current = null;
+    speechResolveRef.current?.();
+    speechResolveRef.current = null;
+  }, []);
+  const say = useCallback8(async (text2) => {
+    if (!text2.trim() || mutedRef.current) return;
+    if (ttsEndpoint) {
+      try {
+        const res = await fetch(ttsEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: text2,
+            ...voiceId ? { voice_id: voiceId } : {},
+            ...locale?.profileId ? { profile_id: locale.profileId } : {},
+            ...locale?.code ? { locale: locale.code } : {}
+          })
+        });
+        if (!res.ok) throw new Error(`Voice service answered ${res.status}`);
+        const url = URL.createObjectURL(await res.blob());
+        audioUrlRef.current = url;
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        await new Promise((resolve) => {
+          const watchdog = window.setTimeout(() => resolve(), 15e3);
+          audioDoneRef.current = () => {
+            window.clearTimeout(watchdog);
+            resolve();
+          };
+          audio.onended = () => {
+            window.clearTimeout(watchdog);
+            resolve();
+          };
+          audio.onerror = () => {
+            window.clearTimeout(watchdog);
+            resolve();
+          };
+          audio.play().catch(() => {
+            window.clearTimeout(watchdog);
+            resolve();
+          });
+        });
+        audioDoneRef.current = null;
+        audioRef.current = null;
+        if (audioUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          audioUrlRef.current = null;
+        }
+        if (mutedRef.current || !activeRef.current) return;
+        return;
+      } catch {
+      }
+    }
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    await new Promise((resolve) => {
+      const utter = new SpeechSynthesisUtterance(text2);
+      utter.lang = lang;
+      const watchdog = window.setTimeout(() => {
+        speechResolveRef.current = null;
+        window.speechSynthesis.cancel();
+        resolve();
+      }, Math.min(3e4, 5e3 + text2.length * 90));
+      speechResolveRef.current = () => {
+        window.clearTimeout(watchdog);
+        resolve();
+      };
+      utter.onend = () => {
+        window.clearTimeout(watchdog);
+        speechResolveRef.current = null;
+        resolve();
+      };
+      utter.onerror = () => {
+        window.clearTimeout(watchdog);
+        speechResolveRef.current = null;
+        resolve();
+      };
+      window.speechSynthesis.speak(utter);
+    });
+  }, [ttsEndpoint, voiceId, locale?.profileId, locale?.code, lang]);
+  const stopListening = useCallback8(() => {
+    const rec2 = recognitionRef.current;
+    recognitionRef.current = null;
+    if (rec2) {
+      rec2.onresult = null;
+      rec2.onerror = null;
+      rec2.onend = null;
+      try {
+        rec2.abort();
+      } catch {
+      }
+    }
+  }, []);
+  const listen = useCallback8(() => {
+    if (!activeRef.current || phaseRef.current === "speaking" || phaseRef.current === "thinking") return;
+    if (micDeniedRef.current) {
+      setStage("ready");
+      return;
+    }
+    const Ctor = recognitionCtor();
+    if (!Ctor) {
+      setMicSupported(false);
+      setStage("ready");
+      return;
+    }
+    if (recognitionRef.current) return;
+    const rec2 = new Ctor();
+    rec2.lang = lang;
+    rec2.continuous = false;
+    rec2.interimResults = true;
+    rec2.onresult = (event) => {
+      let finalText = "";
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const text2 = result?.[0]?.transcript ?? "";
+        if (result?.isFinal) finalText += text2;
+        else interim += text2;
+      }
+      if (interim) setLiveText(interim.trim());
+      if (finalText.trim()) {
+        recognitionRef.current = null;
+        setLiveText("");
+        setStage("thinking");
+        rec2.stop();
+        void runTurnRef.current({ text: finalText.trim(), source: "speech" });
+      }
+    };
+    rec2.onerror = (event) => {
+      recognitionRef.current = null;
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        micDeniedRef.current = true;
+        setMicSupported(false);
+        setError("Microphone access was blocked. Type the caller's line instead.");
+        setStage("ready");
+      }
+    };
+    rec2.onend = () => {
+      recognitionRef.current = null;
+      setLiveText("");
+      if (activeRef.current && phaseRef.current === "listening") {
+        window.setTimeout(() => {
+          if (activeRef.current && phaseRef.current === "listening") listen();
+        }, 200);
+      }
+    };
+    recognitionRef.current = rec2;
+    setError(null);
+    setStage("listening");
+    try {
+      rec2.start();
+    } catch {
+      recognitionRef.current = null;
+      setStage("ready");
+    }
+  }, [lang, setStage]);
+  const runTurn = useCallback8(async ({ text: text2, source, audioUrl, turnId }) => {
+    const message = text2.trim();
+    if (!message) return;
+    setError(null);
+    turnSeq.current += 1;
+    const caller = {
+      id: turnId ?? `caller-${turnSeq.current}`,
+      role: "caller",
+      text: message,
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      source,
+      ...audioUrl ? { audioUrl } : {}
+    };
+    if (turnId) {
+      const updated = { ...caller, pending: false };
+      keepTurns(turnsRef.current.map((t) => t.id === turnId ? { ...t, ...updated } : t));
+      onTurn?.(updated);
+    } else pushTurn(caller);
+    setStage("thinking");
+    setPartial("");
+    setLiveText("");
+    stopListening();
+    if (!abortRef.current) abortRef.current = new AbortController();
+    try {
+      const reply = await streamReply(gateway, message, threadIdRef.current, setPartial, abortRef.current.signal);
+      threadIdRef.current = reply.threadId;
+      setPartial("");
+      if (reply.text.trim()) {
+        turnSeq.current += 1;
+        pushTurn({ id: `agent-${turnSeq.current}`, role: "agent", text: reply.text.trim(), at: (/* @__PURE__ */ new Date()).toISOString() });
+      }
+      if (activeRef.current && speakReplies && reply.text.trim()) {
+        setStage("speaking");
+        await say(reply.text.trim());
+      }
+    } catch (e) {
+      setPartial("");
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        setError(e instanceof Error ? e.message : "The call dropped.");
+      }
+    } finally {
+      if (activeRef.current) {
+        setStage(mode === "live" ? "listening" : "ready");
+        if (mode === "live") listen();
+      }
+    }
+  }, [gateway, keepTurns, listen, mode, onTurn, pushTurn, say, speakReplies, stopListening]);
+  runTurnRef.current = runTurn;
+  const startCall = useCallback8(async () => {
+    if (activeRef.current) return;
+    activeRef.current = true;
+    threadIdRef.current = null;
+    abortRef.current = new AbortController();
+    keepTurns([]);
+    setError(null);
+    setPartial("");
+    setLiveText("");
+    setElapsed(0);
+    setActive(true);
+    setStage("speaking");
+    if (greetingText) {
+      turnSeq.current += 1;
+      const turn = { id: `agent-${turnSeq.current}`, role: "agent", text: greetingText, at: (/* @__PURE__ */ new Date()).toISOString(), source: "greeting" };
+      pushTurn(turn);
+      if (speakReplies) await say(greetingText);
+    }
+    if (!activeRef.current) return;
+    setStage("ready");
+    if (mode === "live") listen();
+  }, [greetingText, keepTurns, listen, mode, pushTurn, say, setStage, speakReplies]);
+  const stopRecording = useCallback8((keep) => {
+    const rec2 = recorderRef.current;
+    recorderRef.current = null;
+    if (rec2 && rec2.state !== "inactive") {
+      if (!keep) rec2.onstop = null;
+      rec2.stop();
+    }
+    recordStreamRef.current?.getTracks().forEach((t) => t.stop());
+    recordStreamRef.current = null;
+  }, []);
+  const endCall = useCallback8(() => {
+    activeRef.current = false;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    stopListening();
+    stopRecording(false);
+    stopAudio();
+    setLiveText("");
+    setPartial("");
+    setActive(false);
+    setStage("idle");
+  }, [setStage, stopAudio, stopListening, stopRecording]);
+  useEffect10(() => () => {
+    activeRef.current = false;
+    abortRef.current?.abort();
+    recognitionRef.current?.abort();
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    recordStreamRef.current?.getTracks().forEach((t) => t.stop());
+  }, []);
+  useEffect10(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setElapsed((s) => s + 1), 1e3);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  const toggleMute = useCallback8(() => {
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    if (next) stopAudio();
+  }, [stopAudio]);
+  const transcribe = useCallback8(async (blob, turnId) => {
+    if (!sttEndpoint) return "";
+    const form = new FormData();
+    form.append("file", blob, "clip.webm");
+    const res = await fetch(sttEndpoint, { method: "POST", body: form });
+    if (!res.ok) throw new Error(`Transcription failed (${res.status}).`);
+    const data = await res.json();
+    const text2 = (data.text ?? "").trim();
+    patchTurn(turnId, { text: text2, pending: false });
+    return text2;
+  }, [patchTurn, sttEndpoint]);
+  const startRecording = useCallback8(async () => {
+    if (!activeRef.current || phaseRef.current !== "ready") return;
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError("Recording is not available in this browser.");
+      return;
+    }
+    stopAudio();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = recorderMime();
+      const rec2 = new MediaRecorder(stream, mime ? { mimeType: mime } : void 0);
+      const chunks = [];
+      recordStreamRef.current = stream;
+      rec2.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+      };
+      rec2.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        recordStreamRef.current = null;
+        const blob = new Blob(chunks, { type: rec2.mimeType || "audio/webm" });
+        turnSeq.current += 1;
+        const id = `caller-${turnSeq.current}`;
+        keepTurns([...turnsRef.current, {
+          id,
+          role: "caller",
+          text: sttEndpoint ? "Transcribing\u2026" : "Recorded turn",
+          at: (/* @__PURE__ */ new Date()).toISOString(),
+          source: "stt",
+          audioUrl: URL.createObjectURL(blob),
+          pending: Boolean(sttEndpoint)
+        }]);
+        setStage("thinking");
+        try {
+          const text2 = await transcribe(blob, id);
+          if (!text2) {
+            if (!sttEndpoint) {
+              patchTurn(id, { text: "", pending: false });
+              setError("No speech-to-text endpoint set \u2014 attach the clip, or type the line below.");
+            } else {
+              patchTurn(id, { text: "", pending: false });
+              setError("Nothing was heard in that clip \u2014 record again.");
+            }
+            if (activeRef.current) setStage("ready");
+            return;
+          }
+          const turn = turnsRef.current.find((t) => t.id === id);
+          await runTurnRef.current({ text: text2, source: "stt", audioUrl: turn?.audioUrl, turnId: id });
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Transcription failed.");
+          if (activeRef.current) setStage("ready");
+        }
+      };
+      recorderRef.current = rec2;
+      rec2.start();
+      setError(null);
+      setStage("recording");
+    } catch {
+      setError("Could not open the microphone. Check the browser permission for this site.");
+      setStage("ready");
+    }
+  }, [patchTurn, setStage, sttEndpoint, stopAudio, transcribe]);
+  const stopAndSubmit = useCallback8(() => {
+    if (phaseRef.current !== "recording") return;
+    setStage("thinking");
+    stopRecording(true);
+  }, [setStage, stopRecording]);
+  const submitTyped = useCallback8((event) => {
+    event.preventDefault();
+    const text2 = draft.trim();
+    if (!text2 || !activeRef.current) return;
+    setDraft("");
+    stopListening();
+    stopAudio();
+    setStage("thinking");
+    void runTurnRef.current({ text: text2, source: "typed" });
+  }, [draft, setStage, stopAudio, stopListening]);
+  const datasetRows = turns.reduce((rows, turn, index) => {
+    if (turn.role !== "caller" || !turn.text.trim() || turn.pending) return rows;
+    const reply = turns.slice(index + 1).find((t) => t.role === "agent" && t.source !== "greeting");
+    rows.push({
+      input: turn.text,
+      expected_output: reply?.text ?? "",
+      locale_profile_id: locale?.profileId ?? null,
+      locale_code: locale?.code ?? null,
+      captured_at: turn.at,
+      source: turn.source ?? "typed",
+      has_audio: Boolean(turn.audioUrl),
+      mode
+    });
+    return rows;
+  }, []);
+  const exportDataset = useCallback8(() => {
+    if (datasetRows.length === 0) return;
+    onDataset?.(datasetRows);
+    const stamp = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    download(datasetRows, `${datasetName || "voice-call"}-${stamp}.jsonl`);
+  }, [datasetName, datasetRows, onDataset]);
+  const status = phase === "listening" ? "Listening\u2026" : phase === "recording" ? "Recording \u2014 tap stop when done" : phase === "thinking" ? "Thinking\u2026" : phase === "speaking" ? "Speaking\u2026" : active ? "Line open" : "Ready for a call";
+  return /* @__PURE__ */ jsx26("div", { className: `lgk lgk-phone ${className}`.trim(), "data-mode": mode, "data-live": active, children: /* @__PURE__ */ jsxs24("div", { className: "lgk-phone-body", children: [
+    /* @__PURE__ */ jsxs24("header", { className: "lgk-phone-head", children: [
+      /* @__PURE__ */ jsxs24("div", { className: "lgk-phone-avatar", "aria-hidden": "true", children: [
+        /* @__PURE__ */ jsx26("span", { children: agentName.slice(0, 1) }),
+        /* @__PURE__ */ jsx26("i", { className: "lgk-phone-ring" })
+      ] }),
+      /* @__PURE__ */ jsxs24("div", { className: "lgk-phone-meta", children: [
+        /* @__PURE__ */ jsx26("strong", { children: agentName }),
+        /* @__PURE__ */ jsxs24("span", { className: "lgk-phone-sub", children: [
+          locale?.name ?? "Voice line",
+          locale?.code ? ` \xB7 ${locale.code}` : ""
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxs24("div", { className: "lgk-phone-status", role: "status", "aria-live": "polite", children: [
+        /* @__PURE__ */ jsx26("span", { className: "lgk-phone-dot", "data-on": active ? "true" : "false" }),
+        active ? clock(elapsed) : mode === "studio" ? "Turn-by-turn" : "Live voice"
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxs24("div", { className: "lgk-phone-stage", children: [
+      active && /* @__PURE__ */ jsx26("div", { className: "lgk-phone-wave", "data-busy": phase !== "ready", "aria-hidden": "true", children: [0, 1, 2, 3, 4, 5, 6].map((i) => /* @__PURE__ */ jsx26("i", { style: { animationDelay: `${i * 90}ms` } }, i)) }),
+      /* @__PURE__ */ jsxs24("ul", { className: "lgk-phone-transcript", children: [
+        turns.length === 0 && !partial && /* @__PURE__ */ jsx26("li", { className: "lgk-phone-empty", children: mode === "studio" ? "Press record to leave a clip for the language lab, or type what the caller says." : "Start the call \u2014 the agent picks up and greets the caller in the local language." }),
+        turns.map((turn) => /* @__PURE__ */ jsxs24("li", { className: "lgk-phone-turn", "data-role": turn.role, children: [
+          /* @__PURE__ */ jsx26("span", { className: "lgk-phone-who", children: turn.role === "agent" ? agentName : "Caller" }),
+          /* @__PURE__ */ jsx26("p", { className: turn.pending ? "lgk-muted" : void 0, children: turn.text }),
+          turn.audioUrl && /* @__PURE__ */ jsx26("audio", { className: "lgk-phone-clip", controls: true, src: turn.audioUrl, preload: "none" })
+        ] }, turn.id)),
+        partial && /* @__PURE__ */ jsxs24("li", { className: "lgk-phone-turn", "data-role": "agent", children: [
+          /* @__PURE__ */ jsx26("span", { className: "lgk-phone-who", children: agentName }),
+          /* @__PURE__ */ jsxs24("p", { children: [
+            partial,
+            /* @__PURE__ */ jsx26("span", { className: "lgk-phone-caret", "aria-hidden": "true" })
+          ] })
+        ] }),
+        liveText && /* @__PURE__ */ jsx26("li", { className: "lgk-phone-heard", children: liveText })
+      ] })
+    ] }),
+    error && /* @__PURE__ */ jsx26("p", { className: "lgk-phone-error", role: "alert", children: error }),
+    !micSupported && !error && active && mode === "live" && /* @__PURE__ */ jsx26("p", { className: "lgk-phone-hint", children: "This browser has no speech recognition \u2014 type the caller's line below." }),
+    /* @__PURE__ */ jsx26("footer", { className: "lgk-phone-controls", children: !active ? /* @__PURE__ */ jsx26("button", { type: "button", className: "lgk-phone-call", onClick: () => {
+      void startCall();
+    }, children: mode === "studio" ? "Start recording session" : "Call the agent" }) : /* @__PURE__ */ jsxs24(Fragment10, { children: [
+      mode === "studio" ? /* @__PURE__ */ jsx26(
+        "button",
+        {
+          type: "button",
+          className: "lgk-phone-mic",
+          "data-state": phase,
+          onClick: () => {
+            if (phase === "recording") stopAndSubmit();
+            else void startRecording();
+          },
+          disabled: phase === "thinking" || phase === "speaking",
+          children: phase === "recording" ? "Stop" : "Record"
+        }
+      ) : micSupported ? /* @__PURE__ */ jsx26(
+        "button",
+        {
+          type: "button",
+          className: "lgk-phone-mic",
+          "data-state": phase,
+          onClick: () => {
+            if (phase === "listening") {
+              stopListening();
+              setStage("ready");
+            } else {
+              stopAudio();
+              listen();
+            }
+          },
+          disabled: phase === "thinking" || phase === "speaking",
+          children: phase === "listening" ? "Listening" : "Talk"
+        }
+      ) : null,
+      /* @__PURE__ */ jsx26("button", { type: "button", className: "lgk-phone-icon", onClick: toggleMute, "aria-pressed": muted, title: muted ? "Unmute agent" : "Mute agent", children: muted ? "Unmute" : "Mute" }),
+      mode === "studio" && /* @__PURE__ */ jsxs24("label", { className: "lgk-phone-toggle", children: [
+        /* @__PURE__ */ jsx26("input", { type: "checkbox", checked: speakReplies, onChange: (e) => setSpeakReplies(e.target.checked) }),
+        "Speak replies"
+      ] }),
+      /* @__PURE__ */ jsx26("button", { type: "button", className: "lgk-phone-hangup", onClick: endCall, children: "End call" })
+    ] }) }),
+    active && /* @__PURE__ */ jsxs24("form", { className: "lgk-phone-type", onSubmit: submitTyped, children: [
+      /* @__PURE__ */ jsx26(
+        "input",
+        {
+          value: draft,
+          onChange: (e) => setDraft(e.target.value),
+          placeholder: mode === "studio" ? "Type the caller's line (if no audio)\u2026" : "Type instead of speaking\u2026",
+          "aria-label": "Caller message"
+        }
+      ),
+      /* @__PURE__ */ jsx26("button", { type: "submit", disabled: !draft.trim() || phase === "thinking", children: "Send" })
+    ] }),
+    /* @__PURE__ */ jsxs24("p", { className: "lgk-phone-foot", children: [
+      status,
+      mode === "studio" && turns.some((t) => t.role === "caller" && !t.pending) && /* @__PURE__ */ jsxs24(Fragment10, { children: [
+        " \xB7 ",
+        /* @__PURE__ */ jsxs24("button", { type: "button", className: "lgk-phone-link", onClick: exportDataset, children: [
+          "Download dataset (",
+          datasetRows.length,
+          ")"
+        ] })
+      ] })
+    ] })
+  ] }) });
+}
 export {
+  ArrowIcon,
   AssistantMessage,
   Chat,
   ChatPopup,
   ChatSidebar,
+  CheckIcon,
   Composer,
   ConnectionForm,
   DO_NOT_RENDER_ID_PREFIX,
+  DocIcon,
   ExpandableText,
   GatewayTransport,
   GenUi,
@@ -3205,14 +4101,18 @@ export {
   KeyValueTable,
   LangGraphKitProvider,
   Markdown,
+  PhoneCall,
+  PhoneIcon,
   Playground,
   ThreadHistory,
   ToolCallCard,
   ToolOutput,
+  UiStyles,
   ensureToolCallsHaveResponses,
   gatewayToken,
   handoffSnapshot,
   isHitlRequest,
+  listGatewayAgents,
   messageReasoning,
   messageText,
   messageToolCalls,

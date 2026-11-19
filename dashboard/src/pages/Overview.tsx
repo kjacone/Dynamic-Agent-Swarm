@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/common/StatCard";
 import { StatusBadge, Chip } from "@/components/common/StatusBadge";
 import { UpgradeDialog } from "@/components/common/UpgradeDialog";
+import { WiringMap } from "@/components/overview/WiringMap";
+import type { TabId } from "@/components/layout/nav";
 import { cn } from "@/lib/utils";
 
 const STATE_TONE: Record<string, "green" | "amber" | "red" | "blue" | "gray"> = {
@@ -23,7 +25,12 @@ const COUNTS: Array<{ key: string; label: string; icon: typeof Bot; tone: "sky" 
   { key: "datasets", label: "Eval datasets", icon: Database, tone: "slate" },
 ];
 
-export function Overview({ tenant, onManageLicence }: { tenant: string; onManageLicence?: () => void }) {
+export function Overview({ tenant, onManageLicence, onOpenTab, onOpenAgent }: {
+  tenant: string;
+  onManageLicence?: () => void;
+  onOpenTab?: (tab: TabId) => void;
+  onOpenAgent?: (agentId: string) => void;
+}) {
   const [data, setData] = useState<SystemStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -155,6 +162,8 @@ export function Overview({ tenant, onManageLicence }: { tenant: string; onManage
           onDone={() => { setUpgrade(false); api.licencePlan().then(setLicence).catch(() => {}); }}
         />
       )}
+
+      <WiringMap tenant={tenant} onOpenTab={onOpenTab} onOpenAgent={onOpenAgent} />
 
       <section className="mb-8">
         <div className="mb-3 flex items-center gap-2">

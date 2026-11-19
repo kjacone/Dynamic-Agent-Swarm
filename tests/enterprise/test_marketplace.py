@@ -15,6 +15,7 @@ async def client(db, monkeypatch, tmp_path):
 
     from nmb_marketplace_agent.api.deps import get_db
     from nmb_marketplace_agent.enterprise import api as eapi
+    from nmb_marketplace_agent.enterprise import api_common
     from nmb_marketplace_agent.enterprise.solutions import loader
     from nmb_marketplace_agent.enterprise.workflows import Runtime
 
@@ -36,7 +37,7 @@ async def client(db, monkeypatch, tmp_path):
         async def nosleep(_):
             return None
         return Runtime(agent_runner=agent, sleep=nosleep)
-    monkeypatch.setattr(eapi, "build_runtime", fake_runtime)
+    monkeypatch.setattr(api_common, "build_runtime", fake_runtime)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         yield c
 
@@ -71,11 +72,11 @@ async def test_catalog_lists_packs_with_license_and_counts(client):
 
 
 async def test_catalog_respects_license_entitlements(client, monkeypatch):
-    from nmb_marketplace_agent.enterprise import api as eapi
+    from nmb_marketplace_agent.enterprise import solutions_api
 
     limited = License(customer="bank", edition="professional", modules={"solutions"},
                       solutions={"gov-document-workflows"}, state="valid")
-    monkeypatch.setattr(eapi, "current_license", lambda *a, **k: limited)
+    monkeypatch.setattr(solutions_api, "current_license", lambda *a, **k: limited)
     body = (await client.get("/enterprise/marketplace", headers=tok("v", "viewer"))).json()
     ent = {p["id"]: p["entitled"] for p in body["packs"]}
     assert ent["gov-document-workflows"] is True and ent["telco-service-ops"] is False

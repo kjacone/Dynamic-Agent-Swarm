@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from nmb_marketplace_agent.enterprise.expr import ExprError, safe_eval
 
+
 # ── PII / secret detection ────────────────────────────────────────────
 def _luhn(s: str) -> bool:
     d = [int(c) for c in s if c.isdigit()]

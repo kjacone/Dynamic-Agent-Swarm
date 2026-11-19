@@ -47,19 +47,74 @@ def compile_rules(profile, examples: list[Any] | None = None) -> str:
     languages = [str(x) for x in (_g(profile, "languages", []) or []) if str(x).strip()]
     default = _g(profile, "default_language") or (languages[0] if languages else "")
 
+    understanding = _g(profile, "understanding", {}) or {}
+    if not isinstance(understanding, dict):
+        understanding = {}
+    output = _g(profile, "output", {}) or {}
+    if not isinstance(output, dict):
+        output = {}
+
     lines = [f"LOCALE PROFILE — {name}" + (f" ({code})" if code else "") + "."]
     lines.append("Apply this profile to every user-visible sentence, including tool explanations.")
-    if default:
+    if default and not output:
         lines.append(f"Write replies in {default}.")
     if languages:
         lines.append("The user may write in any of: " + ", ".join(languages) + ".")
+
+    # Understanding localised input.
+    input_langs = [str(x) for x in (understanding.get("languages") or []) if str(x).strip()] or languages
+    if understanding.get("auto_detect"):
+        hint = f" ({', '.join(input_langs)})" if input_langs else ""
+        lines.append(
+            f"Localised input: detect which language each message is written in{hint}, "
+            "including messages that mix languages or use local spelling. Answer the request as written."
+        )
+        lines.append("If the customer switches language mid-conversation, follow the new language.")
+    translate_to = str(understanding.get("translate_to") or "").strip()
+    if translate_to:
+        lines.append(
+            f"Understand localised input by reading it as {translate_to} internally; "
+            "never mention translating or repeat the interpretation."
+        )
+    input_notes = str(understanding.get("notes") or "").strip()
+    if input_notes:
+        lines.append("Input notes: " + input_notes[:400])
+
+    # Localised output.
+    if output:
+        mode = str(output.get("mode") or "mirror").lower()
+        lang = str(output.get("language") or "").strip() or default
+        if mode == "fixed" and lang:
+            lines.append(
+                f"Reply language: always write the final answer in {lang}, "
+                "even when the customer writes in another language."
+            )
+        elif mode == "bilingual" and lang:
+            second = str(output.get("second_language") or "").strip()
+            if not second:
+                others = [x for x in languages if x.lower() != lang.lower()]
+                second = others[0] if others else ("English" if lang.lower() != "english" else "")
+            lines.append(
+                f"Reply language: write the answer in {lang}"
+                + (f", then repeat the same answer briefly in {second}." if second else ".")
+            )
+        else:
+            lines.append("Reply language: mirror the language and mix of the customer's latest message.")
+        if output.get("localise_tools"):
+            lines.append(
+                "Localise tool results the customer sees (names, statuses, categories) while keeping "
+                "identifiers, amounts and codes exactly as returned."
+            )
+
     policy = (_g(profile, "code_switch_policy") or "allowed").lower()
-    if policy == "off":
-        lines.append("Do not mix languages; keep the reply entirely in the primary language.")
-    elif policy == "encouraged":
-        lines.append("Natural code-switching is welcome where the audience uses it; keep it consistent.")
-    else:
-        lines.append("Mirror the user's language mix; do not switch languages on your own.")
+    fixed_output = str(output.get("mode") or "").lower() == "fixed"
+    if not fixed_output:  # with a fixed reply language, the directive above governs
+        if policy == "off":
+            lines.append("Do not mix languages; keep the reply entirely in the primary language.")
+        elif policy == "encouraged":
+            lines.append("Natural code-switching is welcome where the audience uses it; keep it consistent.")
+        else:
+            lines.append("Mirror the user's language mix; do not switch languages on your own.")
     formality = (_g(profile, "register_style") or "formal").lower()
     lines.append({
         "casual": "Tone: casual and friendly.",
@@ -97,6 +152,15 @@ def compile_rules(profile, examples: list[Any] | None = None) -> str:
     banned = [str(x) for x in (_g(profile, "banned_phrases", []) or []) if str(x).strip()]
     if banned:
         lines.append("Never use: " + "; ".join(banned[:20]) + ".")
+
+    speech = _g(profile, "speech", {}) or {}
+    if isinstance(speech, dict):
+        delivery = str(speech.get("delivery") or "").strip()
+        if delivery:
+            lines.append(f"Spoken delivery (phone and voice channels): {delivery[:400]}")
+        greeting = str(speech.get("greeting") or "").strip()
+        if greeting:
+            lines.append(f"Open a voice call with: {greeting[:300]}")
 
     notes = _g(profile, "notes").strip()
     if notes:

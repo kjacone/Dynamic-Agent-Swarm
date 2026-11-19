@@ -3,7 +3,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
-from sqlmodel import select
 
 from nmb_marketplace_agent.config.models import (
     Citation,
@@ -12,8 +11,8 @@ from nmb_marketplace_agent.config.models import (
     HandoffMessage,
     ThreadOwner,
 )
-from nmb_marketplace_agent.enterprise import api as eapi
 from nmb_marketplace_agent.enterprise import privacy
+from nmb_marketplace_agent.enterprise import privacy_api as eapi
 from nmb_marketplace_agent.enterprise.models import LegalHold, PrivacyRequest
 from nmb_marketplace_agent.enterprise.rbac import Principal
 

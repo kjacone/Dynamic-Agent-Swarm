@@ -19,4 +19,5 @@ import pytest
 def _isolate_connections(tmp_path, monkeypatch):
     # Never read the developer's data/connections.json during tests.
     monkeypatch.setenv("CONNECTIONS_FILE", str(tmp_path / "connections.json"))
+    monkeypatch.setenv("PROVIDER_KEYS_FILE", str(tmp_path / "provider_keys.json"))
     yield

@@ -2,7 +2,6 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
-from sqlmodel import select
 
 from nmb_marketplace_agent.config.models import (
     AgentConfig,
@@ -18,7 +17,7 @@ async def test_eval_gate_blocks_when_no_run(db):
     agent_id = str(uuid.uuid4())
     db.add(AgentConfig(id=agent_id, name="sup", tenant_id="t1"))
     db.add(InstalledSolution(
-        id=f"t1:banking-kyc", tenant_id="t1", solution_id="banking-kyc",
+        id="t1:banking-kyc", tenant_id="t1", solution_id="banking-kyc",
         parameters={"publish_gate_min_pass_rate": 0.8},
         created={"supervisor": agent_id, "agents": {}},
     ))

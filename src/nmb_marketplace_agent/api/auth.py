@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from nmb_marketplace_agent.api.deps import get_db
-from nmb_marketplace_agent.config.models import ApiKey
+from nmb_marketplace_agent.config.models import AgentVersion, ApiKey
 from nmb_marketplace_agent.enterprise.rbac import principal_from_token
 from nmb_marketplace_agent.enterprise.sessions import decode_session, is_session_token
 
@@ -125,6 +125,21 @@ async def _authenticate(request: Request, authorization: str, x_api_key: str, db
     return key  # <- was missing: every API-key request crashed without it
 
 
+async def agent_ids_for_key(db: AsyncSession, key: ApiKey) -> set[str]:
+    """Agents a gateway key may reach: its own, plus the tenant's published agents.
+
+    The wrapper lists these so customers can pick a conversation; anything else
+    is rejected by `/v1/session` and `/v1/chat`.
+    """
+    published = (await db.execute(
+        select(AgentVersion.agent_id).where(
+            AgentVersion.tenant_id == key.tenant_id,
+            AgentVersion.published == True,  # noqa: E712
+        )
+    )).scalars().all()
+    return {key.agent_id, *published}
+
+
 @dataclass
 class ChatPrincipal:
     """The identity behind one public chat request.
@@ -162,13 +177,17 @@ async def _session_principal(raw: str, request: Request, db: AsyncSession) -> Ch
     key = await db.get(ApiKey, claims.get("kid", ""))
     if not key or key.revoked:
         raise HTTPException(401, "Session key is no longer valid")
-    if key.tenant_id != claims.get("tenant_id") or key.agent_id != claims.get("agent_id"):
+    if key.tenant_id != claims.get("tenant_id"):
+        raise HTTPException(401, "Session no longer matches its API key")
+    agent_id = str(claims.get("agent_id") or "")
+    # A session may name any agent its key is allowed to reach (see agent_ids_for_key).
+    if agent_id != key.agent_id and agent_id not in await agent_ids_for_key(db, key):
         raise HTTPException(401, "Session no longer matches its API key")
     _check_origin(key, request)
     sub = str(claims.get("sub"))
     return ChatPrincipal(
         tenant_id=key.tenant_id,
-        agent_id=key.agent_id,
+        agent_id=agent_id,
         user_id=sub,
         customer_id=claims.get("customer_id"),
         auth="session",

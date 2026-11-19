@@ -6,14 +6,17 @@ import csv
 import email
 import imaplib
 import io
-import os
 import shutil
 import uuid
 from email.header import decode_header
 from pathlib import Path
 from typing import Any
 
-from nmb_marketplace_agent.enterprise.connectors.base import Connector, ConnectorError, resolve_secret
+from nmb_marketplace_agent.enterprise.connectors.base import (
+    Connector,
+    ConnectorError,
+    resolve_secret,
+)
 
 
 def _safe(root: Path, name: str) -> Path:

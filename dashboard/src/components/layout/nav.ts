@@ -24,11 +24,13 @@ import {
   ShieldCheck,
   Sparkles,
   Users,
+  Wand2,
   Workflow,
 } from "lucide-react";
 
 /** section "platform" = builder tools (admin-token / platform_admin); "enterprise" = governed operations (RBAC per `perm`). */
 export const NAV = [
+  { id: "studio", label: "Agent Studio", icon: Wand2, section: "create" },
   { id: "overview", label: "Overview", icon: Gauge, section: "products" , perm: "overview:read"},
   { id: "solutions", label: "Solutions", icon: Package, section: "products", perm: "solutions:read" },
   { id: "agents", label: "Agents", icon: Bot, section: "platform" },

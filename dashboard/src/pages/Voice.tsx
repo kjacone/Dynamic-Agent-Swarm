@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AudioLines,
+  GraduationCap,
   Languages,
   Mic,
   PhoneCall,
@@ -9,10 +11,15 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { api, can, type Agent, type Guardrail, type Me, type PolicyDecision } from "@/lib/api";
+import {
+  API_BASE, api, can, type Agent, type Guardrail, type LocaleProfile, type Me,
+  type PolicyDecision, type VoiceStatus,
+} from "@/lib/api";
 import { PageHeader } from "@/components/common/PageHeader";
+import { ProviderKeys } from "@/components/common/ProviderKeys";
 import { PhoneFrame } from "@/components/demo/PhoneFrame";
 import { Chip, StatusBadge } from "@/components/common/StatusBadge";
+import { VoiceStudio } from "@/components/voice/VoiceStudio";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -70,8 +77,8 @@ const STATUS: Record<Phase, string> = {
 
 let turnSeq = 0;
 
-function greetingTurn(locale: VoiceLocale): VoiceTurn {
-  return { id: ++turnSeq, role: "agent", text: VOICE_GREETING[locale] };
+function greetingTurn(locale: VoiceLocale, override?: string): VoiceTurn {
+  return { id: ++turnSeq, role: "agent", text: override?.trim() || VOICE_GREETING[locale] };
 }
 
 function pick(locale: VoiceLocale, en: string, sw: string) {
@@ -166,11 +173,13 @@ export function Voice({
   tenant,
   onOpenGuardrails,
   onOpenSolutions,
+  onOpenLocale,
 }: {
   me: Me | null;
   tenant: string;
   onOpenGuardrails?: () => void;
   onOpenSolutions?: () => void;
+  onOpenLocale?: () => void;
 }) {
   const policyAccess = can(me, "policies:read");
 
@@ -189,6 +198,10 @@ export function Voice({
   const [mode, setMode] = useState<Mode>("agent");
   const [micSupported] = useState(() => Boolean(recognitionCtor()));
   const [ttsSupported] = useState(() => typeof window !== "undefined" && "speechSynthesis" in window);
+  const [dialects, setDialects] = useState<LocaleProfile[] | null>(null);
+  const [dialectId, setDialectId] = useState<string | null>(null);
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
+  const [streamVoice, setStreamVoice] = useState(true);
 
   const contextRef = useRef<VoiceContext>({ pendingBundle: null });
   const callActiveRef = useRef(false);
@@ -201,12 +214,31 @@ export function Voice({
   const modeRef = useRef<Mode>("agent");
   const callRef = useRef<VoiceCall | null>(null);
   const keyRef = useRef<{ id: string; key: string } | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const streamRef = useRef(true);
+
+  const dialect = useMemo(
+    () => (dialects ?? []).find((d) => d.id === dialectId) ?? null,
+    [dialects, dialectId],
+  );
+  const dialectRef = useRef<LocaleProfile | null>(null);
+  const elevenVoice = Boolean(dialect?.speech?.voice_id) || Boolean(voiceStatus?.configured);
+  const greetingText = dialect?.speech?.greeting?.trim() || VOICE_GREETING[locale];
 
   const busy = phase === "thinking" || phase === "speaking";
 
   useEffect(() => {
+    dialectRef.current = dialect;
+  }, [dialect]);
+
+  useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    streamRef.current = streamVoice;
+  }, [streamVoice]);
 
   useEffect(() => {
     let live = true;
@@ -231,6 +263,31 @@ export function Voice({
     return () => { live = false; };
   }, [tenant]);
 
+  useEffect(() => {
+    let live = true;
+    api.listLocaleProfiles(tenant)
+      .then((rows) => { if (live) setDialects(rows); })
+      .catch(() => { if (live) setDialects([]); });
+    api.voiceStatus()
+      .then((s) => { if (live) setVoiceStatus(s); })
+      .catch(() => { /* the browser voice still works */ });
+    return () => { live = false; };
+  }, [tenant]);
+
+  // Prefer the dialect attached to the care agent, else one matching the call language.
+  useEffect(() => {
+    if (!dialects) return;
+    setDialectId((current) => {
+      if (current && dialects.some((d) => d.id === current)) return current;
+      const attached = agent?.locale_profile_id
+        ? dialects.find((d) => d.id === agent.locale_profile_id)
+        : undefined;
+      if (attached) return attached.id;
+      const tag = locale === "sw" ? "sw" : "en";
+      const matching = dialects.find((d) => (d.locale_code || "").toLowerCase().startsWith(tag));
+      return matching?.id ?? dialects[0]?.id ?? null;
+    });
+  }, [dialects, agent, locale]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -249,6 +306,7 @@ export function Voice({
     return () => {
       epochRef.current += 1;
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      stopSpokenAudio();
       const stored = keyRef.current;
       keyRef.current = null;
       callRef.current = null;
@@ -256,8 +314,83 @@ export function Voice({
     };
   }, []);
 
-  function speak(text: string, language: VoiceLocale, done: () => void) {
-    if (!speakRef.current || !("speechSynthesis" in window)) {
+  function stopSpokenAudio() {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  }
+
+  /** Play an element, resolving once sound starts. A stalled stream gives up so the caller can fall back. */
+  async function playSpoken(audio: HTMLAudioElement, objectUrl: string | null, done: () => void): Promise<boolean> {
+    stopSpokenAudio();
+    audioRef.current = audio;
+    audioUrlRef.current = objectUrl;
+    const release = () => {
+      if (audioRef.current === audio) audioRef.current = null;
+      if (objectUrl && audioUrlRef.current === objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        audioUrlRef.current = null;
+      }
+    };
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      release();
+      done();
+    };
+    audio.onended = finish;
+    audio.onerror = finish;
+    const started = await Promise.race([
+      audio.play().then(() => true).catch(() => false),
+      new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 15000)),
+    ]);
+    if (!started) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      release();
+    }
+    return started;
+  }
+
+  async function speak(text: string, language: VoiceLocale, done: () => void) {
+    if (!speakRef.current) {
+      done();
+      return;
+    }
+    // The dialect's ElevenLabs voice first; the browser voice is the fallback.
+    if (voiceStatus?.configured && text.trim()) {
+      const speech = dialectRef.current?.speech ?? {};
+      const body = {
+        text, profile_id: dialectRef.current?.id, voice_id: speech.voice_id,
+        model_id: speech.model_id, stability: speech.stability,
+        similarity: speech.similarity, style: speech.style, speed: speech.speed,
+      };
+      if (streamRef.current) {
+        // Streaming: audio starts on the first chunks instead of after the whole file.
+        try {
+          const ticket = await api.voiceTtsTicket(body);
+          if (await playSpoken(new Audio(`${API_BASE}${ticket.url}`), null, done)) return;
+        } catch {
+          // Fall through to whole-file synthesis.
+        }
+      }
+      try {
+        const blob = await api.voiceTts(body);
+        const url = URL.createObjectURL(blob);
+        if (await playSpoken(new Audio(url), url, done)) return;
+      } catch {
+        stopSpokenAudio();
+        // fall through to the browser voice
+      }
+    }
+    if (!("speechSynthesis" in window)) {
       done();
       return;
     }
@@ -378,6 +511,7 @@ export function Voice({
         // Already stopped.
       }
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      stopSpokenAudio();
       setNotice(null);
       setInterim("");
       setTurns((current) => [...current, { id: ++turnSeq, role: "customer", text }]);
@@ -453,6 +587,14 @@ export function Voice({
       if (epoch !== epochRef.current) return;
 
       setTurns((current) => [...current, { id: ++turnSeq, role: "agent", text: replyText, card }]);
+      // Training capture: a real agent turn is a candidate correction for the dialect.
+      const activeDialect = dialectRef.current;
+      if (activeDialect?.training?.capture && modeRef.current === "agent") {
+        api.createLocaleExample(activeDialect.id, {
+          input: text, corrected_output: replyText, source: "conversation",
+          note: "Captured from the voice line",
+        }).catch(() => { /* capture must never break the call */ });
+      }
       setPhase("speaking");
       speak(replyText, locale, () => {
         busyRef.current = false;
@@ -525,7 +667,7 @@ export function Voice({
       });
     }
     setPhase("speaking");
-    speak(VOICE_GREETING[locale], locale, () => {
+    speak(greetingText, locale, () => {
       setPhase("idle");
       if (callActiveRef.current) startListening();
     });
@@ -542,6 +684,7 @@ export function Voice({
       // Not running.
     }
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    stopSpokenAudio();
   }
 
   function resetConversation(nextLocale: VoiceLocale = locale) {
@@ -550,7 +693,7 @@ export function Voice({
     endCall();
     callRef.current = null;
     contextRef.current = { pendingBundle: null };
-    setTurns([greetingTurn(nextLocale)]);
+    setTurns([greetingTurn(nextLocale, dialectRef.current?.speech?.greeting)]);
     setDraft("");
     setNotice(null);
   }
@@ -563,10 +706,44 @@ export function Voice({
     resetConversation();
   }
 
+  function selectDialect(id: string) {
+    const next = (dialects ?? []).find((d) => d.id === id) ?? null;
+    setDialectId(id);
+    dialectRef.current = next;
+    epochRef.current += 1;
+    busyRef.current = false;
+    endCall();
+    callRef.current = null;
+    contextRef.current = { pendingBundle: null };
+    setTurns([greetingTurn(locale, next?.speech?.greeting)]);
+    setDraft("");
+    setNotice(null);
+  }
+
   function switchLocale(next: VoiceLocale) {
     if (next === locale) return;
     setLocale(next);
+    const tag = next === "sw" ? "sw" : "en";
+    const match = (dialects ?? []).find((d) => (d.locale_code || "").toLowerCase().startsWith(tag));
+    if (match) setDialectId(match.id);
     resetConversation(next);
+  }
+
+  function refreshVoice() {
+    api.voiceStatus().then(setVoiceStatus).catch(() => { /* keep the last state */ });
+    api.listLocaleProfiles(tenant).then(setDialects).catch(() => { /* keep the last state */ });
+  }
+
+  /** Point the selected dialect (and so every new call) at a library or cloned voice. */
+  async function useVoiceForDialect(voice: { voice_id: string; name: string }) {
+    const current = dialectRef.current;
+    if (!current) {
+      throw new Error("Create a dialect in the language lab first — the voice needs a profile to speak for.");
+    }
+    const speech = { ...(current.speech ?? {}), provider: "elevenlabs" as const, voice_id: voice.voice_id };
+    const updated = await api.patchLocaleProfile(current.id, { speech });
+    setDialects((rows) => rows?.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)) ?? rows);
+    dialectRef.current = updated;
   }
 
   function toggleSpeak() {
@@ -575,6 +752,7 @@ export function Voice({
     setSpeakReplies(next);
     if (!next) {
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      stopSpokenAudio();
       if (phase === "speaking") {
         busyRef.current = false;
         setPhase("idle");
@@ -596,7 +774,10 @@ export function Voice({
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={micSupported ? "pass" : "warn"} label={micSupported ? "Microphone" : "Type to talk"} />
-            <StatusBadge value={ttsSupported ? "pass" : "warn"} label={ttsSupported ? "Spoken replies" : "Captions only"} />
+            <StatusBadge
+              value={elevenVoice || ttsSupported ? "pass" : "warn"}
+              label={elevenVoice ? `Voice · ${dialect?.name ?? "ElevenLabs"}` : ttsSupported ? "Browser voice" : "Captions only"}
+            />
             <StatusBadge
               value={agent && !agentError ? "pass" : "warn"}
               label={agent ? (agentError ? "Agent retry" : "Care agent") : "Rehearsal"}
@@ -609,6 +790,16 @@ export function Voice({
             )}
           </div>
         }
+      />
+
+      <VoiceStudio
+        status={voiceStatus}
+        dialect={dialect}
+        greeting={greetingText}
+        language={locale}
+        stream={streamVoice}
+        onStreamChange={setStreamVoice}
+        onUseVoice={useVoiceForDialect}
       />
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
@@ -647,7 +838,11 @@ export function Voice({
             {interim ? <p className="truncate text-[11px] italic text-slate-400">“{interim}”</p> : null}
             <span className="ml-auto flex items-center gap-2">
               <Waveform active={active} />
-              <span className="font-mono text-[10px] text-slate-500">voice · {VOICE_LANG_TAG[locale]}</span>
+              <span className="font-mono text-[10px] text-slate-500">
+                {dialect?.locale_code || VOICE_LANG_TAG[locale]} · {elevenVoice
+                  ? `ElevenLabs${voiceStatus?.configured && streamVoice ? " · streaming" : ""}`
+                  : "browser voice"}
+              </span>
             </span>
           </div>
 
@@ -812,14 +1007,66 @@ export function Voice({
             </form>
 
             <p className="mt-3 flex items-center gap-1.5 text-[10px] leading-relaxed text-slate-500">
-              <Mic className="h-3 w-3" /> Speech stays in the browser. The text of each turn is policy-screened, then
-              sent to this tenant's care agent; audio is never stored.
+              <Mic className="h-3 w-3" />
+              {elevenVoice
+                ? "Speech recognition stays in the browser; replies are spoken by ElevenLabs. Audio is never stored. "
+                : "Speech stays in the browser. "}
+              Each turn's text is policy-screened, then sent to this tenant's care agent.
+              {dialect?.training?.capture ? " Captured turns are saved to the dialect as training candidates." : ""}
             </p>
           </div>
         </section>
         </PhoneFrame>
 
         <aside className="space-y-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center justify-between text-sm">
+                Dialect and voice
+                {dialect && <Chip>{dialect.locale_code || dialect.name}</Chip>}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-xs leading-relaxed text-muted-foreground">
+              {dialects === null ? (
+                <div className="h-9 animate-pulse rounded-lg bg-muted/60" />
+              ) : dialects.length === 0 ? (
+                <p>No dialect yet. Create one in the language lab to give this line its own words and voice.</p>
+              ) : (
+                <select
+                  aria-label="Dialect"
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm"
+                  value={dialectId ?? ""}
+                  onChange={(e) => selectDialect(e.target.value)}
+                >
+                  {dialects.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}{d.speech?.voice_id ? " · voiced" : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="flex gap-2 rounded-lg bg-muted/40 p-2 text-foreground">
+                <AudioLines className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-500" />
+                <span dir="auto">“{greetingText}”</span>
+              </p>
+              <p>
+                {elevenVoice
+                  ? <>Spoken by <b>ElevenLabs</b>{voiceStatus?.subscription?.characters_left != null
+                    ? ` · ${voiceStatus.subscription.characters_left.toLocaleString()} characters left` : ""}.</>
+                  : "Using the browser voice. Add an ElevenLabs key in the language lab for a local accent."}
+              </p>
+              <p className={cn("flex items-center gap-1.5", dialect?.training?.capture ? "text-emerald-600 dark:text-emerald-400" : "")}>
+                <GraduationCap className="h-3 w-3" />
+                {dialect?.training?.capture ? "Call turns are captured for training." : "Training capture is off for this dialect."}
+              </p>
+              {onOpenLocale && (
+                <Button variant="outline" size="sm" className="w-full" onClick={onOpenLocale}>
+                  Open language lab
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm">Care agent</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-xs leading-relaxed text-muted-foreground">
@@ -908,7 +1155,7 @@ export function Voice({
               </p>
               <p className="flex gap-2">
                 <Languages className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
-                English and Kiswahili packs, with spoken replies in the browser's matching voice.
+                English and Kiswahili packs; replies speak in the selected dialect's voice when ElevenLabs is connected.
               </p>
               <p className="flex gap-2">
                 <PhoneCall className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -926,6 +1173,8 @@ export function Voice({
               <p>· New call starts a fresh agent thread and clears the pending bundle.</p>
             </CardContent>
           </Card>
+
+          <ProviderKeys page="voice" title="ElevenLabs key" onSaved={refreshVoice} />
         </aside>
       </div>
     </div>

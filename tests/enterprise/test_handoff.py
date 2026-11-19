@@ -17,8 +17,8 @@ from nmb_marketplace_agent.config.models import (
     ThreadOwner,
 )
 from nmb_marketplace_agent.enterprise import handoff as hs
-from nmb_marketplace_agent.enterprise import api as enterprise_api
-from nmb_marketplace_agent.enterprise.api import (
+from nmb_marketplace_agent.enterprise import handoffs_api as enterprise_api
+from nmb_marketplace_agent.enterprise.handoffs_api import (
     HandoffForwardIn,
     HandoffReplyIn,
     HandoffResolveIn,

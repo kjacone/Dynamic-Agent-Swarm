@@ -2,7 +2,6 @@ import hashlib
 import hmac
 import json
 
-import pytest
 from sqlmodel import select
 
 from nmb_marketplace_agent.enterprise import notifications

@@ -12,6 +12,8 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { EmptyState } from "@/components/common/AsyncState";
 import { AsyncButton } from "@/components/common/AsyncButton";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { KnowledgeGuide } from "@/components/knowledge/KnowledgeGuide";
+import { ProviderKeys } from "@/components/common/ProviderKeys";
 import { StatCard } from "@/components/common/StatCard";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { useToast } from "@/components/ui/toast";
@@ -47,14 +49,24 @@ export function Knowledge({ tenant }: { tenant: string }) {
   return (
     <div>
       <PageHeader icon={BookOpen} title="Knowledge"
-        description="Retrieval collections backed by FAISS, with per-tenant embeddings."
+        description="Upload documents once; agents retrieve the closest passages and cite them instead of guessing."
         actions={<Button onClick={() => setCreating(true)}>New collection</Button>} />
+
+      <KnowledgeGuide
+        rows={rows}
+        onNewCollection={() => setCreating(true)}
+        onTryRetrieval={(r) => setQueryFor(r)}
+      />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Layers} label="Collections" value={rows?.length ?? "—"} tone="violet" />
         <StatCard icon={BookOpen} label="Ready" value={rows ? counts.ready : "—"} tone="emerald" hint="Available to agents" />
         <StatCard icon={Loader2} label="Ingesting" value={rows ? counts.ingesting : "—"} tone="amber" hint="Processing uploads" />
         <StatCard icon={Layers} label="Failed" value={rows ? counts.failed : "—"} tone={counts.failed ? "red" : "slate"} hint="Needs attention" />
+      </div>
+
+      <div className="mb-4">
+        <ProviderKeys page="knowledge" title="Embedding provider keys" />
       </div>
 
       {rows === null ? (
@@ -137,9 +149,17 @@ function UploadButton({ rag, onDone }: { rag: Rag; onDone: () => void }) {
   );
 }
 
+const EMBEDDING_CHOICES = [
+  { value: "openai:text-embedding-3-small", label: "text-embedding-3-small · OpenAI, low cost" },
+  { value: "ollama:nomic-embed-text", label: "nomic-embed-text · local Ollama, free" },
+  { value: "ollama:bge-m3", label: "bge-m3 · local Ollama, free, multilingual" },
+  { value: "openai:text-embedding-3-large", label: "text-embedding-3-large · OpenAI, low cost" },
+];
+
 function CreateCollection({ tenant, onClose }: { tenant: string; onClose: () => void }) {
   const [name, setName] = useState("");
   const [embedding, setEmbedding] = useState("openai:text-embedding-3-small");
+  const [customEmb, setCustomEmb] = useState(false);
   const [topK, setTopK] = useState(4);
   const toast = useToast();
 
@@ -160,12 +180,31 @@ function CreateCollection({ tenant, onClose }: { tenant: string; onClose: () => 
           <div className="space-y-1.5"><Label>Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. policy-handbook" /></div>
           <div className="space-y-1.5"><Label>Embedding model</Label>
-            <Input className="font-mono text-xs" value={embedding} onChange={(e) => setEmbedding(e.target.value)} />
-            <div className="text-xs text-muted-foreground">Provider:model — e.g. ollama:nomic-embed-text</div>
+            <select
+              className="h-9 w-full rounded-lg border bg-background px-2 text-sm"
+              value={customEmb ? "__custom" : embedding}
+              onChange={(e) => {
+                if (e.target.value === "__custom") { setCustomEmb(true); return; }
+                setCustomEmb(false);
+                setEmbedding(e.target.value);
+              }}
+            >
+              {EMBEDDING_CHOICES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+              <option value="__custom">Custom provider:model…</option>
+            </select>
+            {customEmb && (
+              <Input className="font-mono text-xs" value={embedding} onChange={(e) => setEmbedding(e.target.value)}
+                placeholder="e.g. ollama:bge-m3" />
+            )}
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              Local Ollama is free and keeps documents on your machine; OpenAI is billed per token and uses the
+              key saved under Embedding provider keys above (or OPENAI_API_KEY in the server environment).
+              Uploads and queries must use the same model, so pick one per collection.
+            </div>
           </div>
           <div className="space-y-1.5"><Label>Top K</Label>
             <Input type="number" min={1} value={topK} onChange={(e) => setTopK(Number(e.target.value) || 4)} />
-            <div className="text-xs text-muted-foreground">How many chunks to retrieve per query.</div>
+            <div className="text-xs text-muted-foreground">Passages retrieved per query. 3–5 suits most Q&A; more adds context but slows the model.</div>
           </div>
         </div>
         <DialogFooter>

@@ -14,3 +14,4 @@ docs/*
 .ruff_cache/
 *.egg-info/
 node_modules/
+data/provider_keys.json

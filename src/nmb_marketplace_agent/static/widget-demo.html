@@ -112,12 +112,14 @@
   data-key="pk_…"
   data-title="NMB Service Assistant"
   data-color="#0f766e"
-  data-greeting="Hi! How can I help?"&gt;&lt;/script&gt;</pre>
+  data-greeting="Hi! How can I help?"
+  data-suggestions='["Why is my bill higher?","Check my ticket"]'
+  data-config='{"USER_REF":"AMINA-0421"}'&gt;&lt;/script&gt;</pre>
       <div class="copy">
         <button class="btn btn-ghost" id="copy">Copy snippet</button>
         <span class="ok" id="copied" hidden>Copied</span>
       </div>
-      <div class="hint">Add <code>data-api</code> when the gateway runs on another host.</div>
+      <div class="hint">Add <code>data-api</code> when the gateway runs on another host. Both keys are optional: <code>data-suggestions</code> (or the agent's saved starting prompts) shows chips, and <code>data-config</code> or <code>NMB.config("KEY", value)</code> sends page values such as a signed-in customer's token to the agent's tools — never stored or shown in the chat.</div>
     </div>
 
     <div class="card" style="margin-top:14px">
@@ -161,7 +163,8 @@
         '  data-api="' + api + '"\n' +
         '  data-title="' + title + '"\n' +
         '  data-color="' + color + '"\n' +
-        '  data-greeting="' + greeting + '"><\/script>';
+        '  data-greeting="' + greeting + '"\n' +
+        '  data-suggestions=\'["Why is my bill higher this month?","Check my ticket"]\'><\/script>';
     }
 
     document.getElementById("copy").addEventListener("click", function () {

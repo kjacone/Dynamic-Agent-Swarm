@@ -1,7 +1,5 @@
 import uuid
 
-import pytest
-
 from nmb_marketplace_agent.config.models import AgentConfig
 
 

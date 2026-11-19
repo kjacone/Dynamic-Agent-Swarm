@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, can, CostPerCase, type Me, type PolicyDecision, type Readiness, type UsageView } from "@/lib/api";
+import {
+  api, can, CostPerCase, type Agent, type Me, type PolicyDecision, type Readiness, type UsageView, type WfSpec,
+} from "@/lib/api";
+import type { TabId } from "@/components/layout/nav";
+import { ScopeBar } from "@/components/common/ScopeBar";
+import { agentRole, flattenSteps } from "@/lib/workflows";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -18,7 +23,7 @@ import { FilterTabs } from "@/components/common/FilterTabs";
 import { EmptyState, LoadingBlock } from "@/components/common/AsyncState";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, CheckCircle2, Download, ShieldCheck, Sparkles, XCircle } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Download, ShieldCheck, Sparkles, XCircle } from "lucide-react";
 
 import { type WfSummary, type WorkflowRule } from "@/lib/api";
 
@@ -31,7 +36,12 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-export function Governance({ me }: { me: Me | null }) {
+export function Governance({ me, tenant, onOpenTab, onOpenAgent }: {
+  me: Me | null;
+  tenant: string;
+  onOpenTab?: (tab: TabId) => void;
+  onOpenAgent?: (agentId: string) => void;
+}) {
   const [tab, setTab] = useState<Tab>("compliance");
   const toast = useToast();
   return (
@@ -44,12 +54,18 @@ export function Governance({ me }: { me: Me | null }) {
           Object.assign(document.createElement("a"), { href: url, download: "evidence-bundle.json" }).click(); URL.revokeObjectURL(url);
           toast.push("Evidence bundle exported (logged in audit trail)", "success");
         }}><Download className="h-4 w-4" /> Export evidence bundle</AsyncButton> : undefined} />
+      <ScopeBar
+        tenant={tenant}
+        onOpenTab={onOpenTab}
+        title="Posture across the fleet"
+        note="Compliance checks, workflow rules and usage reports cover these agents and the workflows that orchestrate them."
+      />
       <FilterTabs className="mb-4" value={tab} onChange={setTab}
         options={TABS.map(([id, label]) => ({ id, label }))} />
 
       <div className="space-y-4">
         {tab === "compliance" && <><Compliance /><CostPerCaseCard /><ShadowMatrixCard /></>}
-        {tab === "rules" && <WorkflowRules me={me} />}
+        {tab === "rules" && <WorkflowRules me={me} tenant={tenant} onOpenAgent={onOpenAgent} />}
         {tab === "license" && <LicenseUsage />}
         {tab === "policy" && <PolicyTester />}
         {tab === "caps" && <Capabilities />}
@@ -427,9 +443,15 @@ function MatrixTable({ matrix }: { matrix: Record<string, Record<string, number>
   );
 }
 
-function WorkflowRules({ me }: { me: Me | null }) {
+function WorkflowRules({ me, tenant, onOpenAgent }: {
+  me: Me | null;
+  tenant: string;
+  onOpenAgent?: (agentId: string) => void;
+}) {
   const [workflows, setWorkflows] = useState<WfSummary[] | null>(null);
   const [rules, setRules] = useState<Record<string, WorkflowRule[]>>({});
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [specs, setSpecs] = useState<Record<string, WfSpec>>({});
   const [creating, setCreating] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<{ key: string; rule: WorkflowRule } | null>(null);
   const toast = useToast();
@@ -437,14 +459,32 @@ function WorkflowRules({ me }: { me: Me | null }) {
 
   async function load() {
     try {
-      const wfs = await api.listWorkflows();
+      const [wfs, ag] = await Promise.all([
+        api.listWorkflows(),
+        api.listAgents(tenant).catch(() => [] as Agent[]),
+      ]);
       setWorkflows(wfs);
+      setAgents(ag);
+      const full = await Promise.all(wfs.map((w) => api.getWorkflow(w.key).catch(() => null)));
+      setSpecs(Object.fromEntries(full.filter((s): s is WfSpec => !!s).map((s) => [s.key, s])));
       const byKey: Record<string, WorkflowRule[]> = {};
       await Promise.all(wfs.map(async (w) => { byKey[w.key] = await api.listWorkflowRules(w.key); }));
       setRules(byKey);
     } catch (e: any) { toast.push(e.message, "error"); }
   }
   useEffect(() => { load(); }, []);
+
+  const agentsIn = (key: string) => {
+    const spec = specs[key];
+    if (!spec) return [];
+    return [...new Set(
+      flattenSteps(spec.steps || []).filter((s) => s.type === "agent" && s.agent).map((s) => s.agent as string),
+    )];
+  };
+  const agentName = (id: string) => {
+    const a = agents.find((x) => x.id === id);
+    return a ? agentRole(a.name) : id.slice(0, 8);
+  };
 
   async function toggle(key: string, r: WorkflowRule) {
     try {
@@ -469,6 +509,7 @@ function WorkflowRules({ me }: { me: Me | null }) {
         <div className="space-y-4">
           {workflows.map((w) => {
             const rs = rules[w.key] || [];
+            const agentIds = agentsIn(w.key);
             return (
               <Card key={w.key}>
                 <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -478,6 +519,22 @@ function WorkflowRules({ me }: { me: Me | null }) {
                   </CardTitle>
                   {writer && <Button size="sm" variant="outline" onClick={() => setCreating(w.key)}>New rule</Button>}
                 </CardHeader>
+                {agentIds.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 border-t border-border/60 px-4 py-2 text-[11px] text-muted-foreground">
+                    <Bot className="h-3 w-3" /> Rules gate
+                    {agentIds.map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        title="Open this agent's wiring"
+                        onClick={() => onOpenAgent?.(id)}
+                        className="rounded-full border px-1.5 py-0.5 transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
+                      >
+                        {agentName(id)}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <CardContent className="p-0">
                   {rs.length === 0 ? (
                     <div className="px-4 pb-4 text-sm text-muted-foreground">

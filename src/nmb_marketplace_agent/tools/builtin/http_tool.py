@@ -1,10 +1,14 @@
 import ipaddress
 import os
+import re
 import socket
 from urllib.parse import urlparse
 
 import httpx
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+
+HOST_REF = re.compile(r"\{host\.([A-Za-z][A-Za-z0-9_.-]{0,63})\}")
 
 
 def check_endpoint(endpoint: str) -> None:
@@ -27,15 +31,38 @@ def check_endpoint(endpoint: str) -> None:
             raise ValueError("Private/internal addresses are blocked (set HTTP_TOOL_ALLOW_PRIVATE=1 to allow)")
 
 
-def make_http_tool(name: str, endpoint: str, description: str = ""):
+def _resolve(value: str, host: dict, missing: list[str]) -> str:
+    def sub(m: re.Match) -> str:
+        key = m.group(1)
+        if key not in host:
+            missing.append(key)
+            return ""
+        return str(host[key])
+    return HOST_REF.sub(sub, value)
+
+
+def make_http_tool(name: str, endpoint: str, description: str = "",
+                   headers: dict | None = None):
+    """POST {query} to a fixed endpoint.
+
+    Header values may reference wrapper config with ``{host.KEY}``, so a page can
+    pass an end-user token per request instead of baking credentials into the tool.
+    """
     check_endpoint(endpoint)
+    templates = {str(k): str(v) for k, v in (headers or {}).items()}
 
     @tool(name)
-    def http_tool(query: str) -> str:
+    def http_tool(query: str, config: RunnableConfig) -> str:
         """Call a remote HTTP endpoint."""
         try:
             check_endpoint(endpoint)  # re-check at call time
-            resp = httpx.post(endpoint, json={"query": query}, timeout=30, follow_redirects=False)
+            host = ((config or {}).get("configurable") or {}).get("host_config") or {}
+            missing: list[str] = []
+            send_headers = {k: _resolve(v, host, missing) for k, v in templates.items()}
+            if missing:
+                return f"HTTP tool error: missing wrapper config {', '.join(sorted(set(missing)))}"
+            resp = httpx.post(endpoint, json={"query": query}, headers=send_headers,
+                              timeout=30, follow_redirects=False)
             resp.raise_for_status()
             return resp.text[:20000]
         except Exception as e:
